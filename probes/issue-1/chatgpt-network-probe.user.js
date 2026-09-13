@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Rally Issue #1 — ChatGPT Network Passive Probe
 // @namespace    https://github.com/carllx/browser-ide-rally
-// @version      0.1.0
+// @version      0.1.1
 // @description  Minimal passive observer for ChatGPT conversation identity, transport, and turn completion signals.
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -30,7 +30,7 @@
       relMs: Date.now() - startTime,
       cat,
       type,
-      path: location.pathname,
+      pagePath: location.pathname,
       ...detail,
     };
     events.push(entry);
@@ -87,11 +87,65 @@
     return respPromise;
   };
 
+  function isAnswerContainer(m) {
+    if (!m || !m.author || m.author.role !== 'assistant') return false;
+    if (m.weight === 0) return false;
+    if (m.metadata && m.metadata.is_visually_hidden_from_conversation === true) return false;
+    if (m.channel != null && m.channel !== 'final') return false;
+    const ct = m.content && m.content.content_type;
+    return !ct || ct === 'text';
+  }
+
   async function inspectStream(clonedResp, urlPath) {
     const reader = clonedResp.body?.getReader();
     if (!reader) return;
     const decoder = new TextDecoder();
-    let buf = '', hadHandoff = false, terminal = null;
+    let buf = '', hadHandoff = false, streamDone = false;
+    let activeAnswerId = null, curMessageIsAnswer = false, streamConvId = null;
+    let curOp = '', curPath = '';
+
+    function noteCompletion(path, val, source) {
+      if (!curMessageIsAnswer) return;
+      let sig = null;
+      if (typeof path === 'string') {
+        if (/(^|\/)status$/.test(path) && val === 'finished_successfully') sig = 'status:finished_successfully';
+        else if (/(^|\/)end_turn$/.test(path) && val === true) sig = 'end_turn:true';
+      }
+      if (val && typeof val === 'object' && !Array.isArray(val)) {
+        if (val.status === 'finished_successfully') sig = 'status:finished_successfully';
+        else if (val.end_turn === true) sig = 'end_turn:true';
+        else if (val.is_complete === true) sig = 'is_complete:true';
+      }
+      if (sig) record('stream', 'semantic_terminal', { urlPath, source, signal: sig, activeAnswerId, streamConvId });
+    }
+
+    function applyOp(op, path, val) {
+      if (Array.isArray(val)) {
+        for (const sub of val) {
+          if (sub && typeof sub === 'object') {
+            applyOp('o' in sub ? sub.o : 'append', 'p' in sub ? sub.p : path, sub.v);
+          }
+        }
+        return;
+      }
+      noteCompletion(path, val, 'delta_patch');
+      if (val && typeof val === 'object' && val.message) {
+        const m = val.message;
+        if (typeof val.conversation_id === 'string') streamConvId = val.conversation_id;
+        const answer = isAnswerContainer(m);
+        curMessageIsAnswer = answer;
+        if (answer) {
+          if (m.id) activeAnswerId = m.id;
+          record('stream', 'active_answer_start', { urlPath, activeAnswerId, streamConvId, model: m.metadata?.resolved_model_slug || null });
+          if (m.status === 'finished_successfully' || m.end_turn === true || m.metadata?.is_complete === true) {
+            record('stream', 'semantic_terminal', { urlPath, source: 'snapshot_inline', activeAnswerId, streamConvId });
+          }
+        }
+        return;
+      }
+      if (val && typeof val === 'object' && typeof val.conversation_id === 'string') streamConvId = val.conversation_id;
+      if (typeof val === 'string' && typeof path === 'string' && /conversation_id$/.test(path)) streamConvId = val;
+    }
 
     try {
       while (true) {
@@ -106,37 +160,42 @@
           if (!t.startsWith('data:')) continue;
           const payload = t.slice(5).trim();
           if (payload === '[DONE]') {
-            terminal = '[DONE]';
-            record('stream', 'terminal_done', { urlPath });
+            streamDone = true;
+            record('stream', 'transport_done', { urlPath, activeAnswerId, streamConvId });
             continue;
           }
-          const d = parseJson(payload);
-          if (!d || typeof d !== 'object') continue;
+          const ev = parseJson(payload);
+          if (!ev || typeof ev !== 'object' || Array.isArray(ev)) continue;
+          if (typeof ev.conversation_id === 'string') streamConvId = ev.conversation_id;
 
-          if ((d.stream_handoff || d.v?.stream_handoff) && !hadHandoff) {
+          if (ev.type === 'stream_handoff' || ev.stream_handoff || ev.v?.stream_handoff) {
             hadHandoff = true;
-            const h = d.stream_handoff || d.v?.stream_handoff;
-            record('stream', 'stream_handoff', { urlPath, turnExchangeId: h?.turn_exchange_id || null });
+            const h = ev.stream_handoff || ev.v?.stream_handoff || ev;
+            record('stream', 'stream_handoff', {
+              urlPath,
+              turnExchangeId: h.turn_exchange_id || h.topic_id || null,
+              streamConvId,
+            });
           }
 
-          const convId = d.conversation_id || d.v?.conversation_id;
-          const msg = d.message || d.v?.message;
-          const st = msg?.status;
-          const endTurn = msg?.end_turn || d.v?.end_turn;
+          if (ev.type === 'message_stream_complete') {
+            const evMsgId = ev.message_id || ev.id || null;
+            if (evMsgId ? evMsgId === activeAnswerId : curMessageIsAnswer) {
+              record('stream', 'semantic_terminal', { urlPath, source: 'message_stream_complete', activeAnswerId, streamConvId });
+            }
+          }
 
-          if (convId && !terminal) {
-            record('stream', 'identity', { urlPath, streamConvId: convId, msgId: msg?.id || null });
-          }
-          if (st === 'finished_successfully' || endTurn === true) {
-            terminal = st || 'end_turn';
-            record('stream', 'terminal_signal', { urlPath, signal: terminal, msgId: msg?.id || null });
-          }
+          const op = 'o' in ev ? ev.o : curOp;
+          const path = 'p' in ev ? ev.p : curPath;
+          curOp = op;
+          curPath = path;
+          if ('v' in ev) applyOp(op, path, ev.v);
         }
       }
     } catch (err) {
       record('stream', 'error', { urlPath, err: err?.name });
     } finally {
-      record('stream', 'closed', { urlPath, hadHandoff, terminal });
+      record('stream', 'closed', { urlPath, hadHandoff, streamDone, activeAnswerId, streamConvId });
       reader.cancel().catch(() => {});
     }
   }
@@ -148,11 +207,17 @@
     try {
       const u = new URL(String(url || ''), location.href);
       if (u.hostname === 'ws.chatgpt.com' || u.hostname.endsWith('.chatgpt.com')) {
-        record('ws', 'connect', { host: u.hostname, path: u.pathname });
+        record('ws', 'connect', { wsHost: u.hostname, wsPath: u.pathname });
         ws.addEventListener('message', (ev) => {
-          if (typeof ev.data !== 'string') return;
+          if (typeof ev.data !== 'string') {
+            record('ws', 'unparsed_frame_shape', { reason: 'non_string_data', dataType: Object.prototype.toString.call(ev.data) });
+            return;
+          }
           const j = parseJson(ev.data);
-          if (!j) return;
+          if (!j) {
+            record('ws', 'unparsed_frame_shape', { reason: 'invalid_json', rawPreview: ev.data.slice(0, 80) });
+            return;
+          }
           const items = Array.isArray(j) ? j : [j];
           for (const it of items) {
             const topic = it?.topic_id || it?.topic || null;
@@ -160,15 +225,15 @@
             const inner = it?.payload?.payload || it?.payload;
             const innerType = inner?.type || null;
             const isTerm = innerType === 'done' || pType === 'conversation-turn-complete' || inner?.status === 'finished_successfully';
-            if (topic || pType || inner?.turn_id || isTerm) {
-              record('ws', isTerm ? 'terminal' : 'frame', {
-                topic,
-                pType,
-                innerType,
-                turnId: inner?.turn_id || null,
-                convId: inner?.conversation_id || null,
-                isTerm,
-              });
+            const turnId = inner?.turn_id || null;
+            const convId = inner?.conversation_id || null;
+
+            if (inner?.encoded_item) {
+              record('ws', 'encoded_item_frame', { topic, pType, innerType, turnId, convId, isTerm });
+            } else if (topic || pType || turnId || isTerm) {
+              record('ws', isTerm ? 'terminal' : 'frame', { topic, pType, innerType, turnId, convId, isTerm });
+            } else {
+              record('ws', 'unparsed_frame_shape', { reason: 'unknown_envelope', keys: Object.keys(it || {}) });
             }
           }
         });
@@ -184,24 +249,29 @@
   window.WebSocket = PatchedWS;
 
   // --- Measurement-Only UI Completion Marker ---
-  let lastStop = false;
-  const mo = new MutationObserver(() => {
-    try {
-      const hasStop = Boolean(document.querySelector('button[data-testid="stop-button"], button[aria-label*="Stop"]'));
-      if (lastStop && !hasStop) record('ui', 'stop_disappeared', { routeConvId: getPathConvId() });
-      else if (!lastStop && hasStop) record('ui', 'stop_appeared', { routeConvId: getPathConvId() });
-      lastStop = hasStop;
-    } catch {}
-  });
-  mo.observe(document.documentElement, { childList: true, subtree: true });
+  function observeUiCompletion() {
+    if (!document.documentElement) return;
+    let lastStop = false;
+    const mo = new MutationObserver(() => {
+      try {
+        const hasStop = Boolean(document.querySelector('button[data-testid="stop-button"], button[aria-label*="Stop"]'));
+        if (lastStop && !hasStop) record('ui', 'stop_disappeared', { routeConvId: getPathConvId() });
+        else if (!lastStop && hasStop) record('ui', 'stop_appeared', { routeConvId: getPathConvId() });
+        lastStop = hasStop;
+      } catch {}
+    });
+    mo.observe(document.documentElement, { childList: true, subtree: true });
+  }
+
+  if (document.documentElement) observeUiCompletion();
+  else document.addEventListener('DOMContentLoaded', observeUiCompletion, { once: true });
 
   // --- Evidence Buffer API ---
   window.__RALLY_NETWORK_PROBE__ = Object.freeze({
-    version: '0.1.0',
+    version: '0.1.1',
     count: () => events.length,
     dump: () => JSON.parse(JSON.stringify(events)),
-    clear: () => { events.length = 0; },
   });
 
-  record('probe', 'init', { version: '0.1.0', routeConvId: getPathConvId() });
+  record('probe', 'init', { version: '0.1.1', routeConvId: getPathConvId() });
 })();
