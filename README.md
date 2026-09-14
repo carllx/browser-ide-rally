@@ -53,12 +53,13 @@ Phase 1 严格限定为 1:1 单向对等绑定拓扑：
 
 ## 演进路线 (Development Progression)
 
-演进遵循递进式落地原则：
+演进遵循递进式落地原则，严格区分**机械中继确认 (Mechanical Relay Confirmation)** 与 **人类决策边界 (Human Decision Boundary)**：
 
 ```text
 Identity / binding
 → state visibility
-→ user-confirmed relay
+→ mechanical relay confirmation (typed envelope & delivery verification)
+→ Human Decision Boundary (explicit human gate & approval)
 → bidirectional relay
 → semi-automatic turn taking
 → gate-aware automation
@@ -66,24 +67,24 @@ Identity / binding
 
 严禁跨越阶段直接构建通用 Agent 调度器（Generic Agent Scheduler）或无边界的无限自动循环。
 
-## 当前技术假设 (Current Technology Hypotheses)
+## 当前技术架构 (Current Technology Architecture)
 
-以下仅作为初始阶段待验证的原型假设：
-
-```text
-Tampermonkey userscript
-→ localhost companion
-→ Antigravity CLI
-```
-
-仅当原型验证证明其核心价值且 Tampermonkey/localhost 出现确切的技术瓶颈时，才会进一步评估：
+基于 Gate B/C/D 验证通过并已产品化的轻量中继架构：
 
 ```text
-Chrome Extension
-→ Native Messaging
+Browser Assistant (ChatGPT Web)
+       ↕ [Typed <RALLY_HANDOFF> Envelope]
+Thin Browser Adapter (Chrome AppleScript Automation)
+       ↕
+Rally Controller (Single in-flight Exchange & Status View)
+       ↕
+IDE Adapter (agentapi CLI / Exact Identity & Controlled Artifacts)
+       ↕
+Bound Target IDE Agent (Antigravity Conversation)
 ```
 
-在取得确切证据前，严禁提前进行架构迁移。
+历史探索中的重型双探测器（Tampermonkey 双流/私有 SSE 监听）已冻结；生产链路采用窄化 DOM 依赖与确定性 New-Turn 边界。
+
 
 ## 安全边界 (Security Boundary)
 

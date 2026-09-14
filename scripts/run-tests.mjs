@@ -11,13 +11,21 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
 
-const testFiles = [
-  path.join(rootDir, 'tests/build-verification.test.js'),
-  path.join(rootDir, 'tests/unit/classifier.test.js'),
-  path.join(rootDir, 'tests/unit/generation-store.test.js'),
-  path.join(rootDir, 'tests/unit/dom-detector.test.js'),
-  path.join(rootDir, 'tests/unit/resolver.test.js')
-];
+function findTestFiles(dir) {
+  let results = [];
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      results = results.concat(findTestFiles(fullPath));
+    } else if (entry.name.endsWith('.test.js')) {
+      results.push(fullPath);
+    }
+  }
+  return results;
+}
+
+const testFiles = findTestFiles(path.join(rootDir, 'tests'));
 
 const testStream = run({ files: testFiles });
 testStream.compose(spec).pipe(process.stdout);
@@ -25,3 +33,4 @@ testStream.compose(spec).pipe(process.stdout);
 testStream.on('test:fail', () => {
   process.exitCode = 1;
 });
+

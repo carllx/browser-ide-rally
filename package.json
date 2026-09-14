@@ -1,11 +1,12 @@
 {
   "name": "browser-ide-rally",
   "version": "0.3.0",
-  "description": "ChatGPT Web runtime dual-detector lifecycle prototype for Rally",
+  "description": "Productionized minimal relay slice connecting Browser Assistant and IDE Agents via typed handoffs",
   "type": "module",
   "scripts": {
     "build": "node scripts/build-userscript.mjs",
     "test": "node scripts/run-tests.mjs",
+    "relay": "node scripts/run-mvp-relay.mjs",
     "version:patch": "npm version patch --no-git-tag-version && npm run build",
     "version:minor": "npm version minor --no-git-tag-version && npm run build"
   },

@@ -6,16 +6,19 @@ import { GenerationStore } from '../../src/tampermonkey/generation-store.js';
 import { MetricsCollector } from '../../src/tampermonkey/metrics.js';
 import { EVENTS, CONFIDENCE } from '../../src/tampermonkey/constants.js';
 
-function setup() {
+function setup(t) {
   const eventBus = new EventBus('test_tab');
   const store = new GenerationStore();
   const metrics = new MetricsCollector();
   const resolver = new CompletionResolver(eventBus, store, metrics);
+  if (t && typeof t.after === 'function') {
+    t.after(() => eventBus.destroy());
+  }
   return { eventBus, store, metrics, resolver };
 }
 
-test('Resolver: DONE + DOM -> confirmed exactly once', () => {
-  const { eventBus, store, resolver } = setup();
+test('Resolver: DONE + DOM -> confirmed exactly once', (t) => {
+  const { eventBus, store, resolver } = setup(t);
   const session = store.createSession('conv-1');
 
   resolver.onNetworkStarted(session);
@@ -37,8 +40,8 @@ test('Resolver: DONE + DOM -> confirmed exactly once', () => {
   assert.deepEqual(completedEvents[0].sources, ['network', 'dom']);
 });
 
-test('Resolver: DONE + no DOM after grace -> network_only exactly once', async () => {
-  const { eventBus, store, resolver } = setup();
+test('Resolver: DONE + no DOM after grace -> network_only exactly once', async (t) => {
+  const { eventBus, store, resolver } = setup(t);
   const session = store.createSession('conv-1');
 
   resolver.onNetworkStarted(session);
@@ -53,8 +56,8 @@ test('Resolver: DONE + no DOM after grace -> network_only exactly once', async (
   assert.equal(completedEvents[0].dom_confirmation_missing, true);
 });
 
-test('Resolver: late DOM upgrades evidence but emits no second completed', async () => {
-  const { eventBus, store, resolver } = setup();
+test('Resolver: late DOM upgrades evidence but emits no second completed', async (t) => {
+  const { eventBus, store, resolver } = setup(t);
   const session = store.createSession('conv-1');
 
   resolver.onNetworkStarted(session);
@@ -77,8 +80,8 @@ test('Resolver: late DOM upgrades evidence but emits no second completed', async
   assert.equal(session.evidenceConfidence, CONFIDENCE.CONFIRMED);
 });
 
-test('Resolver: Stop click alone does not emit stopped_by_user', () => {
-  const { eventBus, store } = setup();
+test('Resolver: Stop click alone does not emit stopped_by_user', (t) => {
+  const { eventBus, store } = setup(t);
   const session = store.createSession('conv-1');
 
   // 用户点击 Stop 按钮
@@ -92,8 +95,8 @@ test('Resolver: Stop click alone does not emit stopped_by_user', () => {
   assert.equal(session.terminalEmitted, false);
 });
 
-test('Resolver: Stop + stream termination without DONE -> stopped_by_user', () => {
-  const { eventBus, store, resolver } = setup();
+test('Resolver: Stop + stream termination without DONE -> stopped_by_user', (t) => {
+  const { eventBus, store, resolver } = setup(t);
   const session = store.createSession('conv-1');
 
   resolver.onNetworkStarted(session);
@@ -109,8 +112,8 @@ test('Resolver: Stop + stream termination without DONE -> stopped_by_user', () =
   assert.equal(session.terminalEmitted, true);
 });
 
-test('Resolver: Stop + later normal DONE -> completed wins', () => {
-  const { eventBus, store, resolver } = setup();
+test('Resolver: Stop + later normal DONE -> completed wins', (t) => {
+  const { eventBus, store, resolver } = setup(t);
   const session = store.createSession('conv-1');
 
   resolver.onNetworkStarted(session);
@@ -125,3 +128,4 @@ test('Resolver: Stop + later normal DONE -> completed wins', () => {
   assert.equal(completedEv.confidence, CONFIDENCE.CONFIRMED);
   assert.equal(eventBus.getPublicEvents().find(e => e.event === EVENTS.STOPPED_BY_USER), undefined);
 });
+

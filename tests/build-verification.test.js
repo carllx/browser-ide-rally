@@ -42,15 +42,31 @@ test('Build Verification: generated bundle exists and is valid', () => {
 });
 
 test('Size rule: all handwritten source modules are under 600 lines', () => {
-  const srcDir = path.join(rootDir, 'src/tampermonkey');
-  const files = fs.readdirSync(srcDir).filter(f => f.endsWith('.js'));
+  function getJsFilesRecursively(dir) {
+    let results = [];
+    const list = fs.readdirSync(dir);
+    for (const item of list) {
+      const p = path.join(dir, item);
+      const stat = fs.statSync(p);
+      if (stat.isDirectory()) {
+        results = results.concat(getJsFilesRecursively(p));
+      } else if (item.endsWith('.js')) {
+        results.push(p);
+      }
+    }
+    return results;
+  }
 
-  for (const f of files) {
-    const filePath = path.join(srcDir, f);
+  const srcDir = path.join(rootDir, 'src');
+  const files = getJsFilesRecursively(srcDir);
+
+  for (const filePath of files) {
+    const rel = path.relative(rootDir, filePath);
     const lines = fs.readFileSync(filePath, 'utf8').split('\n').length;
     assert.ok(
       lines < 600,
-      `Handwritten file ${f} has ${lines} lines, exceeding the 600-line hard ceiling!`
+      `Handwritten file ${rel} has ${lines} lines, exceeding the 600-line hard ceiling!`
     );
   }
 });
+

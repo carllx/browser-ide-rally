@@ -87,4 +87,14 @@ export class EventBus {
     this.publicEvents.length = 0;
     this.receivedEvents.length = 0;
   }
+
+  destroy() {
+    if (this.bc) {
+      try {
+        this.bc.close();
+      } catch (e) {}
+      this.bc = null;
+    }
+    this.listeners.clear();
+  }
 }
