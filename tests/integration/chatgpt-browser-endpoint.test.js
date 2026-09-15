@@ -497,7 +497,8 @@ describe('Browser Endpoint Result 集成测试矩阵 (#15)', () => {
     assert.equal(obsGen.continuity_lost, false);
     assert.equal(obsGen.latest_completed_cursor, undefined);
 
-    // 验证：瞬态生成绝不抹除或篡改已有的 NEW 规范结果
+    // 验证：将生成中观察录入 Core 后，绝不抹除或篡改已有的 NEW 规范结果
+    core.recordEndpointObservation('browser', obsGen);
     assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NEW');
     assert.equal(core.getSnapshot().endpoints.browser.latest_completed_cursor, `chatgpt_msg_${turn1MsgId}`);
 
@@ -505,14 +506,16 @@ describe('Browser Endpoint Result 集成测试矩阵 (#15)', () => {
     core.markEndpointHandled('browser', { expected_cursor: `chatgpt_msg_${turn1MsgId}` });
     assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NO_NEW_RESULT');
 
-    // 4. 再次观察到生成中：依然严格保持 NO_NEW_RESULT，绝不退化为 UNKNOWN
+    // 4. 再次观察到生成中并录入 Core：依然严格保持 NO_NEW_RESULT，绝不退化为 UNKNOWN
     const obsGen2 = generatingAdapter.observeBrowserEndpoint({
       conversationId: targetConvId,
       bindingRevision: 1
     });
     assert.equal(obsGen2.is_generating, true);
     assert.equal(obsGen2.continuity_lost, false);
+    core.recordEndpointObservation('browser', obsGen2);
     assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NO_NEW_RESULT');
+    assert.equal(core.getSnapshot().endpoints.browser.latest_completed_cursor, `chatgpt_msg_${turn1MsgId}`);
 
     // 5. 对比：若发生真正的归属失配/DOM 漂移，必须严格 fail-closed 到 UNKNOWN
     const driftExecutor = () => 'ERROR:ZERO_MATCHES';

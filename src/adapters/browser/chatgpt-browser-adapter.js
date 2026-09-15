@@ -34,7 +34,7 @@ export function defaultAppleScriptExecutor(script) {
  */
 export function getConversationUrlPattern(conversationId) {
   const escaped = conversationId.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return `(^|https?:\\/\\/[^\\/]+)?\\/(?:g\\/[^\\/]+\\/)?c\\/${escaped}(?:[?#\\/]|$)`;
+  return `^(?:https?:\\/\\/(?:chatgpt\\.com|chat\\.openai\\.com))?\\/(?:g\\/[^\\/]+\\/)?c\\/${escaped}(?:[?#\\/]|$)`;
 }
 
 /**
@@ -250,80 +250,6 @@ export class ChatGPTBrowserAdapter {
   }
 
   /**
-   * 执行原子化标签页查找与 DOM 探测
-   * 在单次 AppleScript 调用中完成精准归属匹配并在该标签页执行探针，
-   * 同时探针闭包内重新验证当前 location.href，彻底消除 TOCTOU 竞态。
-   * 
-   * @param {string} conversationId
-   * @returns {object} 解析后的探针结果对象
-   */
-  runAtomicProbe(conversationId) {
-    const trimmedId = conversationId.trim();
-    const safeConvId = JSON.stringify(trimmedId);
-    const urlPattern = getConversationUrlPattern(trimmedId);
-    const safeUrlPattern = JSON.stringify(urlPattern);
-    const probeCode = this.buildProbeScript(trimmedId);
-    const safeProbeCode = JSON.stringify(probeCode);
-
-    const atomicScript = `
-    tell application "Google Chrome"
-      set matchCount to 0
-      set targetWin to 0
-      set targetTab to 0
-      set targetURL to ""
-      set convId to ${safeConvId}
-      set urlPat to ${safeUrlPattern}
-      set probeJS to ${safeProbeCode}
-      
-      set winList to every window
-      repeat with i from 1 to count of winList
-        set w to item i of winList
-        set tabList to every tab of w
-        repeat with j from 1 to count of tabList
-          set t to item j of tabList
-          set u to URL of t
-          if u contains convId then
-            set isValid to (execute t javascript "(function() { return new RegExp(" & urlPat & ").test(location.href); })()")
-            if isValid = true or isValid = "true" then
-              set matchCount to matchCount + 1
-              set targetWin to i
-              set targetTab to j
-              set targetURL to u
-            end if
-          end if
-        end repeat
-      end repeat
-      
-      if matchCount = 0 then
-        return "ERROR:ZERO_MATCHES"
-      else if matchCount > 1 then
-        return "ERROR:AMBIGUOUS_MATCHES:" & matchCount
-      else
-        tell tab targetTab of (item targetWin of winList)
-          set res to execute javascript probeJS
-          return "SUCCESS:" & res
-        end tell
-      end if
-    end tell
-    `;
-
-    const out = this._executor(atomicScript);
-    if (out.startsWith('ERROR:ZERO_MATCHES')) {
-      throw new Error(`TARGET_LOOKUP_FAIL: No Chrome tab found matching conversation "${conversationId}"`);
-    }
-    if (out.startsWith('ERROR:AMBIGUOUS_MATCHES')) {
-      const count = out.split(':')[2] || 'multiple';
-      throw new Error(`TARGET_LOOKUP_FAIL: Ambiguous match: ${count} tabs match conversation "${conversationId}"`);
-    }
-    if (!out.startsWith('SUCCESS:')) {
-      throw new Error(`TARGET_LOOKUP_FAIL: Unexpected AppleScript output: ${out}`);
-    }
-
-    const jsonText = out.slice('SUCCESS:'.length);
-    return JSON.parse(jsonText);
-  }
-
-  /**
    * 观察底层目标标签页的 DOM 状态并返回规范化端点观察事实 (Normalized Observation)
    * 
    * 观察流程与不变式：
@@ -335,7 +261,7 @@ export class ChatGPTBrowserAdapter {
    *    - assistantTurnCount: assistant 消息元素总数；
    * 4. 正常 generation-in-progress（isGenerating === true）：
    *    - 属于运行时瞬态 (runtime pending activity)，绝非连续性丢失！
-   *    - 必须返回 is_generating: true, continuity_lost: false, trusted: false；
+   *    - 返回 is_generating: true, continuity_lost: false, trusted: true（连续性完好，无新完成游标）；
    *    - 使得已有的 NEW / NO_NEW_RESULT 规范事实保持不动，绝不冲刷为 UNKNOWN；
    * 5. 若无 assistant 消息：连续性受信任，游标为 null；
    * 6. 若最后一条 assistant 消息缺少合法的非空 ID，或属于 placeholder-* / request-placeholder-*：
@@ -395,10 +321,10 @@ export class ChatGPTBrowserAdapter {
       return baseObservation;
     }
 
-    // 3. 正常生成中检查 (Gate 3: generation-in-progress is NOT continuity loss)
+    // 4. 正常生成中检查 (Gate 3: generation-in-progress is NOT continuity loss)
     if (probeResult.isGenerating) {
       baseObservation.is_generating = true;
-      baseObservation.trusted = false;
+      baseObservation.trusted = true; // 连续性完好，无新完成游标，不冲刷已有端点事实
       baseObservation.continuity_lost = false;
       baseObservation.reason = 'generation_in_progress: ChatGPT is currently generating response';
       return baseObservation;

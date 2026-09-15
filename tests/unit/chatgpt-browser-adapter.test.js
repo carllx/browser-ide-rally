@@ -64,17 +64,18 @@ describe('ChatGPTBrowserAdapter 单元与契约测试', () => {
   });
 
   it('5. 纯函数 isExactConversationUrl 正确区分标准/GPT 路径与子串假阳性', () => {
-    // 合法路径
+    // 合法路径（限定官方域名）
     assert.equal(isExactConversationUrl(`https://chatgpt.com/c/${targetConvId}`, targetConvId), true);
     assert.equal(isExactConversationUrl(`https://chatgpt.com/g/g-p-123/c/${targetConvId}`, targetConvId), true);
+    assert.equal(isExactConversationUrl(`https://chat.openai.com/c/${targetConvId}`, targetConvId), true);
     assert.equal(isExactConversationUrl(`https://chatgpt.com/c/${targetConvId}?param=1`, targetConvId), true);
     assert.equal(isExactConversationUrl(`https://chatgpt.com/c/${targetConvId}#bottom`, targetConvId), true);
 
-    // 假阳性 / 子串 / 参数伪造
+    // 假阳性 / 子串 / 参数伪造 / 非官方域名
     assert.equal(isExactConversationUrl(`https://chatgpt.com/c/${targetConvId}-extra`, targetConvId), false);
     assert.equal(isExactConversationUrl(`https://chatgpt.com/c/prefix-${targetConvId}`, targetConvId), false);
     assert.equal(isExactConversationUrl(`https://chatgpt.com/search?q=${targetConvId}`, targetConvId), false);
-    assert.equal(isExactConversationUrl(`https://other.com/c/${targetConvId}`, targetConvId), true); // 路径匹配
+    assert.equal(isExactConversationUrl(`https://other.com/c/${targetConvId}`, targetConvId), false); // 非官方域名严格拒绝
     assert.equal(isExactConversationUrl('', targetConvId), false);
     assert.equal(isExactConversationUrl(null, targetConvId), false);
   });
@@ -164,7 +165,7 @@ describe('ChatGPTBrowserAdapter 单元与契约测试', () => {
       bindingRevision: 1
     });
 
-    assert.equal(obs.trusted, false);
+    assert.equal(obs.trusted, true); // 连续性完好
     assert.equal(obs.is_generating, true);
     assert.equal(obs.continuity_lost, false); // 核心：绝非 continuity loss！
     assert.equal(obs.latest_completed_cursor, undefined);
