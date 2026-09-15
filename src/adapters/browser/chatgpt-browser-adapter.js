@@ -260,9 +260,9 @@ export class ChatGPTBrowserAdapter {
    *    - final non-placeholder Assistant message-id；
    *    - assistantTurnCount: assistant 消息元素总数；
    * 4. 正常 generation-in-progress（isGenerating === true）：
-   *    - 属于运行时瞬态 (runtime pending activity)，绝非连续性丢失！
-   *    - 返回 is_generating: true, continuity_lost: false, trusted: true（连续性完好，无新完成游标）；
-   *    - 使得已有的 NEW / NO_NEW_RESULT 规范事实保持不动，绝不冲刷为 UNKNOWN；
+   *    - 属于运行时瞬态 (runtime-only activity)，绝非连续性丢失；
+   *    - 返回 is_generating: true, should_record: false, continuity_lost: false, trusted: false；
+   *    - 绝不因为正在生成而将 UNKNOWN 升级成 trusted，亦不推进或冲刷已有完成事实；
    * 5. 若无 assistant 消息：连续性受信任，游标为 null；
    * 6. 若最后一条 assistant 消息缺少合法的非空 ID，或属于 placeholder-* / request-placeholder-*：
    *    - fail-closed 返回 continuity_lost: true，拒绝将占位状态提交为完成游标；
@@ -283,6 +283,7 @@ export class ChatGPTBrowserAdapter {
       trusted: false,
       continuity_lost: false,
       is_generating: false,
+      should_record: true,
       reason: null
     };
 
@@ -321,11 +322,12 @@ export class ChatGPTBrowserAdapter {
       return baseObservation;
     }
 
-    // 4. 正常生成中检查 (Gate 3: generation-in-progress is NOT continuity loss)
+    // 4. 正常生成中检查 (Gate 3: generation-in-progress is non-mutating runtime activity)
     if (probeResult.isGenerating) {
       baseObservation.is_generating = true;
-      baseObservation.trusted = true; // 连续性完好，无新完成游标，不冲刷已有端点事实
-      baseObservation.continuity_lost = false;
+      baseObservation.should_record = false; // 核心：runtime-only 瞬态，不可录入 Core 改写规范端点结果
+      baseObservation.trusted = false; // 绝不因为正在生成而把 UNKNOWN 升级成 trusted
+      baseObservation.continuity_lost = false; // 正常生成绝非连续性断裂
       baseObservation.reason = 'generation_in_progress: ChatGPT is currently generating response';
       return baseObservation;
     }

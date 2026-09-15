@@ -350,6 +350,11 @@ export class ProjectStatusCore {
       throw new Error(`Invalid endpoint "${endpoint}". Must be 'browser' or 'ide'.`);
     }
 
+    // 0. generation-in-progress 或 should_record=false 属于运行时瞬态，对规范端点事实完全 non-mutating
+    if (observation.is_generating === true || observation.should_record === false) {
+      return;
+    }
+
     const current = this._endpoints[endpoint];
     const now = new Date().toISOString();
 

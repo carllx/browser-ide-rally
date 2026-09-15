@@ -165,8 +165,9 @@ describe('ChatGPTBrowserAdapter 单元与契约测试', () => {
       bindingRevision: 1
     });
 
-    assert.equal(obs.trusted, true); // 连续性完好
     assert.equal(obs.is_generating, true);
+    assert.equal(obs.should_record, false); // 核心：runtime-only，不可录入 Core
+    assert.equal(obs.trusted, false); // 绝不升级 trusted
     assert.equal(obs.continuity_lost, false); // 核心：绝非 continuity loss！
     assert.equal(obs.latest_completed_cursor, undefined);
     assert.match(obs.reason, /generation_in_progress/);

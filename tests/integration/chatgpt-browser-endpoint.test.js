@@ -34,6 +34,15 @@ describe('Browser Endpoint Result 集成测试矩阵 (#15)', () => {
   const targetConvId = '6aa8de2c-24c8-83ea-a807-4d7780add444';
   const dummyIdeConvId = 'ide-antigravity-conv-001';
 
+  function createMockExecutor({ url = `https://chatgpt.com/c/${targetConvId}`, result = {} } = {}) {
+    return (script) => {
+      if (script.includes('set matchCount to 0')) {
+        return `SUCCESS:1:2:${url}`;
+      }
+      return JSON.stringify(result);
+    };
+  }
+
   const baseBinding = createBinding({
     binding_id: 'rally-project-alpha',
     binding_revision: 1,
@@ -50,13 +59,11 @@ describe('Browser Endpoint Result 集成测试矩阵 (#15)', () => {
 
   it('1. 精确绑定的 ChatGPT 会话唯一定位成功；0 匹配或多匹配 fail-closed 为 UNKNOWN', () => {
     // A. 唯一匹配
-    const uniqueExecutor = (script) => {
-      if (script.includes('set matchCount to 0')) {
-        return `SUCCESS:1:2:https://chatgpt.com/g/g-p-123/c/${targetConvId}`;
-      }
-      return JSON.stringify({ isGenerating: false, assistantCount: 0, lastMessageId: null, hasValidLastMessage: false });
-    };
-    const adapterA = new ChatGPTBrowserAdapter({ executor: uniqueExecutor });
+    const executorA = createMockExecutor({
+      url: `https://chatgpt.com/g/g-p-123/c/${targetConvId}`,
+      result: { isGenerating: false, assistantCount: 0, lastMessageId: null, hasValidLastMessage: false }
+    });
+    const adapterA = new ChatGPTBrowserAdapter({ executor: executorA });
     const registry = createProjectRegistry();
     const core = registry.registerProject({ binding: baseBinding });
 
@@ -68,8 +75,7 @@ describe('Browser Endpoint Result 集成测试矩阵 (#15)', () => {
     assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NO_NEW_RESULT');
 
     // B. 0 匹配：fail-closed 到 UNKNOWN
-    const zeroMatchExecutor = () => 'ERROR:ZERO_MATCHES';
-    const adapterB = new ChatGPTBrowserAdapter({ executor: zeroMatchExecutor });
+    const adapterB = new ChatGPTBrowserAdapter({ executor: () => 'ERROR:ZERO_MATCHES' });
     const obsB = adapterB.observeBrowserEndpoint({
       conversationId: baseBinding.browser.conversation_id,
       bindingRevision: baseBinding.binding_revision
@@ -80,8 +86,7 @@ describe('Browser Endpoint Result 集成测试矩阵 (#15)', () => {
     assert.match(snapB.unknown_reason, /No Chrome tab found/);
 
     // C. 多匹配（存在歧义）：fail-closed 到 UNKNOWN
-    const multiMatchExecutor = () => 'ERROR:AMBIGUOUS_MATCHES:3';
-    const adapterC = new ChatGPTBrowserAdapter({ executor: multiMatchExecutor });
+    const adapterC = new ChatGPTBrowserAdapter({ executor: () => 'ERROR:AMBIGUOUS_MATCHES:3' });
     const obsC = adapterC.observeBrowserEndpoint({
       conversationId: baseBinding.browser.conversation_id,
       bindingRevision: baseBinding.binding_revision
@@ -96,50 +101,28 @@ describe('Browser Endpoint Result 集成测试矩阵 (#15)', () => {
     const storagePath = createTempStorage();
     const registry = createProjectRegistry({ storagePath });
     const core = registry.registerProject({ binding: baseBinding });
-
-    // 初始状态为 UNKNOWN
     assert.equal(core.getSnapshot().endpoints.browser.result_state, 'UNKNOWN');
 
-    // A. 正在生成中 (button[data-testid="stop-button"]): 属于运行时活动，continuity_lost=false
-    const generatingExecutor = (script) => {
-      if (script.includes('set matchCount to 0')) {
-        return `SUCCESS:1:2:https://chatgpt.com/c/${targetConvId}`;
-      }
-      return JSON.stringify({
-        isGenerating: true,
-        assistantCount: 2,
-        lastMessageId: 'temp-streaming-id',
-        hasValidLastMessage: true,
-        isPlaceholder: false
-      });
-    };
-    const adapterGenerating = new ChatGPTBrowserAdapter({ executor: generatingExecutor });
-    const obsGen = adapterGenerating.observeBrowserEndpoint({
-      conversationId: targetConvId,
-      bindingRevision: 1
+    // A. 正在生成中：runtime-only，should_record=false，trusted=false
+    const adapterGenerating = new ChatGPTBrowserAdapter({
+      executor: createMockExecutor({
+        result: { isGenerating: true, assistantCount: 2, lastMessageId: 'temp-streaming-id', hasValidLastMessage: true, isPlaceholder: false }
+      })
     });
+    const obsGen = adapterGenerating.observeBrowserEndpoint({ conversationId: targetConvId, bindingRevision: 1 });
     assert.equal(obsGen.is_generating, true);
-    assert.equal(obsGen.continuity_lost, false); // 绝非 continuity loss
+    assert.equal(obsGen.should_record, false);
+    assert.equal(obsGen.trusted, false);
+    assert.equal(obsGen.continuity_lost, false);
     assert.equal(obsGen.latest_completed_cursor, undefined);
 
     // B. 实机 request-placeholder-* 占位轮次绝不推进完成，导致 fail-closed 到 UNKNOWN
-    const placeholderExecutor = (script) => {
-      if (script.includes('set matchCount to 0')) {
-        return `SUCCESS:1:2:https://chatgpt.com/c/${targetConvId}`;
-      }
-      return JSON.stringify({
-        isGenerating: false,
-        assistantCount: 2,
-        lastMessageId: 'request-placeholder-998877',
-        hasValidLastMessage: true,
-        isPlaceholder: true
-      });
-    };
-    const adapterPlaceholder = new ChatGPTBrowserAdapter({ executor: placeholderExecutor });
-    const obsPlaceholder = adapterPlaceholder.observeBrowserEndpoint({
-      conversationId: targetConvId,
-      bindingRevision: 1
+    const adapterPlaceholder = new ChatGPTBrowserAdapter({
+      executor: createMockExecutor({
+        result: { isGenerating: false, assistantCount: 2, lastMessageId: 'request-placeholder-998877', hasValidLastMessage: true, isPlaceholder: true }
+      })
     });
+    const obsPlaceholder = adapterPlaceholder.observeBrowserEndpoint({ conversationId: targetConvId, bindingRevision: 1 });
     assert.equal(obsPlaceholder.continuity_lost, true);
     assert.equal(obsPlaceholder.latest_completed_cursor, undefined);
     core.recordEndpointObservation('browser', obsPlaceholder);
@@ -162,46 +145,32 @@ describe('Browser Endpoint Result 集成测试矩阵 (#15)', () => {
     core.markEndpointHandled('ide', { expected_cursor: 'ide_turn_0' });
     assert.equal(core.getSnapshot().endpoints.ide.result_state, 'NO_NEW_RESULT');
 
-    const caughtUpBrowserExecutor = (script) => {
-      if (script.includes('set matchCount to 0')) {
-        return `SUCCESS:1:2:https://chatgpt.com/c/${targetConvId}`;
-      }
-      return JSON.stringify({ isGenerating: false, assistantCount: 0, lastMessageId: null, hasValidLastMessage: false });
-    };
-    const caughtUpAdapter = new ChatGPTBrowserAdapter({ executor: caughtUpBrowserExecutor });
+    const caughtUpAdapter = new ChatGPTBrowserAdapter({
+      executor: createMockExecutor({
+        result: { isGenerating: false, assistantCount: 0, lastMessageId: null, hasValidLastMessage: false }
+      })
+    });
     core.recordEndpointObservation('browser', caughtUpAdapter.observeBrowserEndpoint({
       conversationId: targetConvId,
       bindingRevision: 1
     }));
     assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NO_NEW_RESULT');
 
-    // 记录此时 IDE 的快照基线
     const ideSnapshotBefore = { ...core.getSnapshot().endpoints.ide };
 
     // 观察到 Browser 产生可靠的完成轮次
     const turn1MsgId = '9b42e774-8d48-43d9-a78c-02cf30a08e1a';
-    const completedExecutor = (script) => {
-      if (script.includes('set matchCount to 0')) {
-        return `SUCCESS:1:2:https://chatgpt.com/c/${targetConvId}`;
-      }
-      return JSON.stringify({
-        isGenerating: false,
-        assistantCount: 1,
-        lastMessageId: turn1MsgId,
-        hasValidLastMessage: true,
-        isPlaceholder: false
-      });
-    };
-    const completedAdapter = new ChatGPTBrowserAdapter({ executor: completedExecutor });
-    const completedObs = completedAdapter.observeBrowserEndpoint({
+    const completedAdapter = new ChatGPTBrowserAdapter({
+      executor: createMockExecutor({
+        result: { isGenerating: false, assistantCount: 1, lastMessageId: turn1MsgId, hasValidLastMessage: true, isPlaceholder: false }
+      })
+    });
+    core.recordEndpointObservation('browser', completedAdapter.observeBrowserEndpoint({
       conversationId: targetConvId,
       bindingRevision: 1
-    });
-
-    core.recordEndpointObservation('browser', completedObs);
+    }));
 
     const snapshotAfter = core.getSnapshot();
-    // Browser 变成 NEW
     assert.equal(snapshotAfter.endpoints.browser.result_state, 'NEW');
     assert.equal(snapshotAfter.endpoints.browser.latest_completed_cursor, `chatgpt_msg_${turn1MsgId}`);
     assert.equal(snapshotAfter.endpoints.browser.last_handled_cursor, null);
@@ -217,19 +186,11 @@ describe('Browser Endpoint Result 集成测试矩阵 (#15)', () => {
     const core = registry.registerProject({ binding: baseBinding });
     const turn1MsgId = '9b42e774-8d48-43d9-a78c-02cf30a08e1a';
 
-    const completedExecutor = (script) => {
-      if (script.includes('set matchCount to 0')) {
-        return `SUCCESS:1:2:https://chatgpt.com/c/${targetConvId}`;
-      }
-      return JSON.stringify({
-        isGenerating: false,
-        assistantCount: 1,
-        lastMessageId: turn1MsgId,
-        hasValidLastMessage: true,
-        isPlaceholder: false
-      });
-    };
-    const adapter = new ChatGPTBrowserAdapter({ executor: completedExecutor });
+    const adapter = new ChatGPTBrowserAdapter({
+      executor: createMockExecutor({
+        result: { isGenerating: false, assistantCount: 1, lastMessageId: turn1MsgId, hasValidLastMessage: true, isPlaceholder: false }
+      })
+    });
 
     // 第一次观察：变为 NEW
     core.recordEndpointObservation('browser', adapter.observeBrowserEndpoint({
@@ -264,18 +225,9 @@ describe('Browser Endpoint Result 集成测试矩阵 (#15)', () => {
     const turn1MsgId = '9b42e774-8d48-43d9-a78c-02cf30a08e1a';
 
     const adapter = new ChatGPTBrowserAdapter({
-      executor: (script) => {
-        if (script.includes('set matchCount to 0')) {
-          return `SUCCESS:1:2:https://chatgpt.com/c/${targetConvId}`;
-        }
-        return JSON.stringify({
-          isGenerating: false,
-          assistantCount: 1,
-          lastMessageId: turn1MsgId,
-          hasValidLastMessage: true,
-          isPlaceholder: false
-        });
-      }
+      executor: createMockExecutor({
+        result: { isGenerating: false, assistantCount: 1, lastMessageId: turn1MsgId, hasValidLastMessage: true, isPlaceholder: false }
+      })
     });
 
     core.recordEndpointObservation('browser', adapter.observeBrowserEndpoint({
@@ -302,18 +254,9 @@ describe('Browser Endpoint Result 集成测试矩阵 (#15)', () => {
       const core1 = registry1.registerProject({ binding: baseBinding });
 
       const adapter1 = new ChatGPTBrowserAdapter({
-        executor: (script) => {
-          if (script.includes('set matchCount to 0')) {
-            return `SUCCESS:1:2:https://chatgpt.com/c/${targetConvId}`;
-          }
-          return JSON.stringify({
-            isGenerating: false,
-            assistantCount: 1,
-            lastMessageId: turn1MsgId,
-            hasValidLastMessage: true,
-            isPlaceholder: false
-          });
-        }
+        executor: createMockExecutor({
+          result: { isGenerating: false, assistantCount: 1, lastMessageId: turn1MsgId, hasValidLastMessage: true, isPlaceholder: false }
+        })
       });
 
       core1.recordEndpointObservation('browser', adapter1.observeBrowserEndpoint({
@@ -341,18 +284,9 @@ describe('Browser Endpoint Result 集成测试矩阵 (#15)', () => {
 
       // 再次观察已由 adapter 返回的旧 turn 1：仍然保持 NO_NEW_RESULT
       const adapterOldTurn = new ChatGPTBrowserAdapter({
-        executor: (script) => {
-          if (script.includes('set matchCount to 0')) {
-            return `SUCCESS:1:2:https://chatgpt.com/c/${targetConvId}`;
-          }
-          return JSON.stringify({
-            isGenerating: false,
-            assistantCount: 1,
-            lastMessageId: turn1MsgId,
-            hasValidLastMessage: true,
-            isPlaceholder: false
-          });
-        }
+        executor: createMockExecutor({
+          result: { isGenerating: false, assistantCount: 1, lastMessageId: turn1MsgId, hasValidLastMessage: true, isPlaceholder: false }
+        })
       });
       core2.recordEndpointObservation('browser', adapterOldTurn.observeBrowserEndpoint({
         conversationId: targetConvId,
@@ -362,18 +296,9 @@ describe('Browser Endpoint Result 集成测试矩阵 (#15)', () => {
 
       // 7. 真实产生新轮次 turn 2：精确推进一次到 NEW
       const adapterNewTurn = new ChatGPTBrowserAdapter({
-        executor: (script) => {
-          if (script.includes('set matchCount to 0')) {
-            return `SUCCESS:1:2:https://chatgpt.com/c/${targetConvId}`;
-          }
-          return JSON.stringify({
-            isGenerating: false,
-            assistantCount: 2,
-            lastMessageId: turn2MsgId,
-            hasValidLastMessage: true,
-            isPlaceholder: false
-          });
-        }
+        executor: createMockExecutor({
+          result: { isGenerating: false, assistantCount: 2, lastMessageId: turn2MsgId, hasValidLastMessage: true, isPlaceholder: false }
+        })
       });
       core2.recordEndpointObservation('browser', adapterNewTurn.observeBrowserEndpoint({
         conversationId: targetConvId,
@@ -416,18 +341,9 @@ describe('Browser Endpoint Result 集成测试矩阵 (#15)', () => {
     const registry = createProjectRegistry();
     const core = registry.registerProject({ binding: baseBinding });
     const adapter = new ChatGPTBrowserAdapter({
-      executor: (script) => {
-        if (script.includes('set matchCount to 0')) {
-          return `SUCCESS:1:2:https://chatgpt.com/c/${targetConvId}`;
-        }
-        return JSON.stringify({
-          isGenerating: false,
-          assistantCount: 1,
-          lastMessageId: 'sec-msg-id-999',
-          hasValidLastMessage: true,
-          isPlaceholder: false
-        });
-      }
+      executor: createMockExecutor({
+        result: { isGenerating: false, assistantCount: 1, lastMessageId: 'sec-msg-id-999', hasValidLastMessage: true, isPlaceholder: false }
+      })
     });
 
     core.recordEndpointObservation('browser', adapter.observeBrowserEndpoint({
@@ -448,76 +364,80 @@ describe('Browser Endpoint Result 集成测试矩阵 (#15)', () => {
     assert.ok(state.endpoints.browser.latest_completed_cursor.startsWith('chatgpt_msg_'));
   });
 
-  it('10. 回归测试：Browser 已有受信结果时开始生成，规范 Endpoint Result 保持不变 (Gate 3)', () => {
+  it('10. 回归测试：generation-in-progress 对规范 Endpoint Result 完全 non-mutating (Gate 3)', () => {
     const registry = createProjectRegistry();
     const core = registry.registerProject({ binding: baseBinding });
     const turn1MsgId = '9b42e774-8d48-43d9-a78c-02cf30a08e1a';
 
-    // 1. 建立初始完成事实 -> 规范结果为 NEW
-    const completedExecutor = (script) => {
-      if (script.includes('set matchCount to 0')) {
-        return `SUCCESS:1:2:https://chatgpt.com/c/${targetConvId}`;
-      }
-      return JSON.stringify({
-        isGenerating: false,
-        assistantCount: 1,
-        lastMessageId: turn1MsgId,
-        hasValidLastMessage: true,
-        isPlaceholder: false
-      });
-    };
-    const completedAdapter = new ChatGPTBrowserAdapter({ executor: completedExecutor });
+    const generatingAdapter = new ChatGPTBrowserAdapter({
+      executor: createMockExecutor({
+        result: { isGenerating: true, assistantCount: 2, lastMessageId: 'streaming-temp-id', hasValidLastMessage: true, isPlaceholder: false }
+      })
+    });
+
+    // === 场景 1: initial / rebound UNKNOWN + generating => 仍然 UNKNOWN ===
+    assert.equal(core.getSnapshot().endpoints.browser.result_state, 'UNKNOWN');
+    assert.equal(core.getSnapshot().endpoints.browser.latest_completed_cursor, null);
+    assert.equal(core.getSnapshot().endpoints.browser.last_handled_cursor, null);
+
+    const obsGenUnknown = generatingAdapter.observeBrowserEndpoint({
+      conversationId: targetConvId,
+      bindingRevision: 1
+    });
+    // 验证契约：runtime-only，绝不升级 trusted，绝非 continuity loss
+    assert.equal(obsGenUnknown.is_generating, true);
+    assert.equal(obsGenUnknown.should_record, false);
+    assert.equal(obsGenUnknown.trusted, false);
+    assert.equal(obsGenUnknown.continuity_lost, false);
+
+    // 录入 Core：断言绝不将 UNKNOWN 升级成 trusted，绝不派生为 NO_NEW_RESULT
+    core.recordEndpointObservation('browser', obsGenUnknown);
+    const snapUnknown = core.getSnapshot().endpoints.browser;
+    assert.equal(snapUnknown.result_state, 'UNKNOWN');
+    assert.equal(snapUnknown.latest_completed_cursor, null);
+    assert.equal(snapUnknown.last_handled_cursor, null);
+
+    // === 场景 2: existing NEW + generating => 仍然 NEW ===
+    const completedAdapter = new ChatGPTBrowserAdapter({
+      executor: createMockExecutor({
+        result: { isGenerating: false, assistantCount: 1, lastMessageId: turn1MsgId, hasValidLastMessage: true, isPlaceholder: false }
+      })
+    });
     core.recordEndpointObservation('browser', completedAdapter.observeBrowserEndpoint({
       conversationId: targetConvId,
       bindingRevision: 1
     }));
     assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NEW');
+    assert.equal(core.getSnapshot().endpoints.browser.latest_completed_cursor, `chatgpt_msg_${turn1MsgId}`);
+    assert.equal(core.getSnapshot().endpoints.browser.last_handled_cursor, null);
 
-    // 2. ChatGPT 开始新一轮生成 (is_generating: true)
-    const generatingExecutor = (script) => {
-      if (script.includes('set matchCount to 0')) {
-        return `SUCCESS:1:2:https://chatgpt.com/c/${targetConvId}`;
-      }
-      return JSON.stringify({
-        isGenerating: true,
-        assistantCount: 2,
-        lastMessageId: 'streaming-temp-id',
-        hasValidLastMessage: true,
-        isPlaceholder: false
-      });
-    };
-    const generatingAdapter = new ChatGPTBrowserAdapter({ executor: generatingExecutor });
-    const obsGen = generatingAdapter.observeBrowserEndpoint({
+    // 观察到正在生成并录入 Core：NEW 保持不变，游标分毫不动
+    const obsGenNew = generatingAdapter.observeBrowserEndpoint({
       conversationId: targetConvId,
       bindingRevision: 1
     });
+    core.recordEndpointObservation('browser', obsGenNew);
+    const snapNew = core.getSnapshot().endpoints.browser;
+    assert.equal(snapNew.result_state, 'NEW');
+    assert.equal(snapNew.latest_completed_cursor, `chatgpt_msg_${turn1MsgId}`);
+    assert.equal(snapNew.last_handled_cursor, null);
 
-    // 验证观察事实：属于 pending 运行时活动，无连续性断裂
-    assert.equal(obsGen.is_generating, true);
-    assert.equal(obsGen.continuity_lost, false);
-    assert.equal(obsGen.latest_completed_cursor, undefined);
-
-    // 验证：将生成中观察录入 Core 后，绝不抹除或篡改已有的 NEW 规范结果
-    core.recordEndpointObservation('browser', obsGen);
-    assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NEW');
-    assert.equal(core.getSnapshot().endpoints.browser.latest_completed_cursor, `chatgpt_msg_${turn1MsgId}`);
-
-    // 3. Mark handled 推进至 NO_NEW_RESULT
+    // === 场景 3: existing NO_NEW_RESULT + generating => 仍然 NO_NEW_RESULT ===
     core.markEndpointHandled('browser', { expected_cursor: `chatgpt_msg_${turn1MsgId}` });
     assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NO_NEW_RESULT');
 
-    // 4. 再次观察到生成中并录入 Core：依然严格保持 NO_NEW_RESULT，绝不退化为 UNKNOWN
-    const obsGen2 = generatingAdapter.observeBrowserEndpoint({
+    // 再次观察到正在生成并录入 Core：NO_NEW_RESULT 保持不变，绝不退化为 UNKNOWN
+    const obsGenCaughtUp = generatingAdapter.observeBrowserEndpoint({
       conversationId: targetConvId,
       bindingRevision: 1
     });
-    assert.equal(obsGen2.is_generating, true);
-    assert.equal(obsGen2.continuity_lost, false);
-    core.recordEndpointObservation('browser', obsGen2);
-    assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NO_NEW_RESULT');
-    assert.equal(core.getSnapshot().endpoints.browser.latest_completed_cursor, `chatgpt_msg_${turn1MsgId}`);
+    core.recordEndpointObservation('browser', obsGenCaughtUp);
+    const snapCaughtUp = core.getSnapshot().endpoints.browser;
+    assert.equal(snapCaughtUp.result_state, 'NO_NEW_RESULT');
+    assert.equal(snapCaughtUp.latest_completed_cursor, `chatgpt_msg_${turn1MsgId}`);
+    assert.equal(snapCaughtUp.last_handled_cursor, `chatgpt_msg_${turn1MsgId}`);
 
-    // 5. 对比：若发生真正的归属失配/DOM 漂移，必须严格 fail-closed 到 UNKNOWN
+    // 对比：若发生真正的归属失配/DOM 漂移，必须严格 fail-closed 到 UNKNOWN
     const driftExecutor = () => 'ERROR:ZERO_MATCHES';
     const driftAdapter = new ChatGPTBrowserAdapter({ executor: driftExecutor });
     const obsDrift = driftAdapter.observeBrowserEndpoint({
