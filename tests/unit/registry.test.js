@@ -326,3 +326,119 @@ test('[Registry] 8. 专有受信 Hydration 缝隙证明：不调用 recordEndpoi
 
   assert.equal(core.getSnapshot().endpoints.browser.last_handled_cursor, 'turn-hydrated-88');
 });
+
+test('[Registry 回归] 9. 不完整的受信持久化端点绝不能派生为 NO_NEW_RESULT（fail closed 到 UNKNOWN）', () => {
+  const binding = makeSampleBinding('proj-incomplete-trusted');
+  // 构造恶意/缺失关键游标的持久化事实：声明 trusted: true，但未提供 latest_completed_cursor 与 last_handled_cursor
+  const incompleteTrustedEndpoints = {
+    browser: {
+      endpoint: 'browser',
+      // 故意缺失 latest_completed_cursor 与 last_handled_cursor 字段
+      continuity: { trusted: true, unknown_reason: null }
+    }
+  };
+
+  const reg = createProjectRegistry();
+  const core = reg.registerProject({
+    binding,
+    initial_endpoints: incompleteTrustedEndpoints
+  });
+
+  const snap = core.getSnapshot();
+  // 核心守卫：绝不能因为两游标补 null 相等而派生为 NO_NEW_RESULT！必须 fail closed 到 UNKNOWN！
+  assert.equal(snap.endpoints.browser.result_state, 'UNKNOWN');
+  assert.match(snap.endpoints.browser.unknown_reason, /incomplete_persisted_cursor_ledger/);
+  assert.equal(snap.endpoints.browser.continuity.trusted, false);
+});
+
+test('[Registry 回归] 10. 持久化端点 slot 不匹配时 fail closed 到 UNKNOWN', () => {
+  const binding = makeSampleBinding('proj-slot-mismatch');
+  // 放在 browser 槽位的端点事实声明自己是 ide
+  const mismatchedEndpoints = {
+    browser: {
+      endpoint: 'ide', // slot 不符
+      latest_completed_cursor: 'turn-1',
+      last_handled_cursor: 'turn-1',
+      continuity: { trusted: true }
+    }
+  };
+
+  const reg = createProjectRegistry();
+  const core = reg.registerProject({
+    binding,
+    initial_endpoints: mismatchedEndpoints
+  });
+
+  const snap = core.getSnapshot();
+  assert.equal(snap.endpoints.browser.result_state, 'UNKNOWN');
+  assert.match(snap.endpoints.browser.unknown_reason, /incomplete_persisted_cursor_ledger/);
+});
+
+test('[Registry 回归] 11. 外层 key 与内部 binding.binding_id 不一致或重复时被拦截拒载', () => {
+  const { file, cleanup } = createTempStoragePath();
+  try {
+    const reg = createProjectRegistry();
+    // 1. 测试外层 key 与内部 binding_id 不一致
+    const mismatchedPayload = {
+      schema_version: 1,
+      projects: {
+        'outer-key-foo': {
+          binding: makeSampleBinding('internal-id-bar')
+        }
+      }
+    };
+    fs.writeFileSync(file, JSON.stringify(mismatchedPayload, null, 2), 'utf-8');
+
+    assert.throws(() => {
+      reg.loadFromFile(file);
+    }, /Durable project key mismatch/);
+
+    // 2. 测试重复内部 binding_id
+    const duplicatePayload = {
+      schema_version: 1,
+      projects: {
+        'key-1': { binding: makeSampleBinding('same-id') },
+        'key-2': { binding: makeSampleBinding('same-id') }
+      }
+    };
+    fs.writeFileSync(file, JSON.stringify(duplicatePayload, null, 2), 'utf-8');
+
+    assert.throws(() => {
+      reg.loadFromFile(file);
+    }, /Durable project key mismatch|Duplicate internal binding_id/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('[Registry 回归] 12. 多项目加载失败时保持原子性 (All-or-Nothing)，已有内存注册表不被部分破坏', () => {
+  const { file, cleanup } = createTempStoragePath();
+  try {
+    const reg = createProjectRegistry();
+    // 预先注册一个合法的现有项目
+    reg.registerProject({ binding: makeSampleBinding('existing-live-proj') });
+    assert.equal(reg.hasProject('existing-live-proj'), true);
+
+    // 构造一个多项目文件：第一个合法，第二个损坏（缺失 binding）
+    const partiallyCorruptPayload = {
+      schema_version: 1,
+      projects: {
+        'good-proj-1': { binding: makeSampleBinding('good-proj-1') },
+        'bad-proj-2': { corrupt_data: true } // 损坏项目
+      }
+    };
+    fs.writeFileSync(file, JSON.stringify(partiallyCorruptPayload, null, 2), 'utf-8');
+
+    // 执行加载：必须失败
+    assert.throws(() => {
+      reg.loadFromFile(file);
+    }, /Corrupt project data/);
+
+    // 核心断言 (All-or-Nothing)：
+    // 加载失败后，已有的内存注册表绝不能被部分清空或替换！'existing-live-proj' 必须完好保留！
+    assert.equal(reg.hasProject('existing-live-proj'), true);
+    assert.equal(reg.hasProject('good-proj-1'), false);
+  } finally {
+    cleanup();
+  }
+});

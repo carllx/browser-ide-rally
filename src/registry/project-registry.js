@@ -183,11 +183,32 @@ export class ProjectRegistry {
       throw new Error('Invalid registry storage format: "projects" must be an object');
     }
 
-    // 3. 受信反序列化每个项目
-    this._projects.clear();
+    // 3. 受信反序列化每个项目（全量原子化：先构建到临时 Map，全部验证通过才替换）
+    const nextProjects = new Map();
+    const seenBindingIds = new Set();
+
     for (const [bindingId, projData] of Object.entries(parsed.projects)) {
       if (!projData || !projData.binding) {
         throw new Error(`Corrupt project data for binding_id "${bindingId}"`);
+      }
+
+      const internalId = projData.binding.binding_id;
+      // 强制校验外层 project key 必须精确等于内部 binding.binding_id
+      if (bindingId !== internalId) {
+        throw new Error(
+          `Durable project key mismatch: outer key "${bindingId}" does not match internal binding_id "${internalId}"`
+        );
+      }
+
+      // 强制校验内部 binding_id 唯一性，防止间接别名重复
+      if (seenBindingIds.has(internalId)) {
+        throw new Error(`Duplicate internal binding_id "${internalId}" detected in durable storage`);
+      }
+      seenBindingIds.add(internalId);
+
+      // 端点事实对象校验
+      if (projData.endpoints && typeof projData.endpoints !== 'object') {
+        throw new Error(`Corrupt endpoints ledger for binding_id "${bindingId}"`);
       }
 
       const core = createProjectStatusCore({
@@ -205,9 +226,11 @@ export class ProjectRegistry {
         }
       }
 
-      this._projects.set(bindingId, core);
+      nextProjects.set(bindingId, core);
     }
 
+    // 全部项目验证与实例化成功后，一次性原子替换已有状态
+    this._projects = nextProjects;
     this._storagePath = filePath;
   }
 }

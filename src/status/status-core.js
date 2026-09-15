@@ -132,15 +132,38 @@ export class ProjectStatusCore {
 
     for (const ep of ALLOWED_ENDPOINTS) {
       const fact = endpointsFactMap[ep];
-      if (fact) {
+      if (fact && typeof fact === 'object') {
+        const slotMatch = fact.endpoint === ep;
+        const hasLatest = 'latest_completed_cursor' in fact && fact.latest_completed_cursor !== undefined;
+        const hasHandled = 'last_handled_cursor' in fact && fact.last_handled_cursor !== undefined;
+        const isTrustedDeclared = Boolean(fact.continuity?.trusted);
+
+        let trusted = false;
+        let unknownReason = null;
+
+        // 若持久化数据声明受信任，必须完整具备 canonical cursor ledger 结构且 slot 匹配
+        if (isTrustedDeclared) {
+          if (!slotMatch || !hasLatest || !hasHandled) {
+            // 缺失规范字段或 slot 不匹配：绝不能被当成 NO_NEW_RESULT，fail-closed 到 UNKNOWN！
+            trusted = false;
+            unknownReason = 'incomplete_persisted_cursor_ledger: trusted endpoint requires explicit cursor fields and matching slot';
+          } else {
+            trusted = true;
+            unknownReason = null;
+          }
+        } else {
+          trusted = false;
+          unknownReason = fact.continuity?.unknown_reason || 'initial_unobserved';
+        }
+
         this._endpoints[ep] = {
           endpoint: ep,
-          latest_completed_cursor: fact.latest_completed_cursor ?? null,
-          last_handled_cursor: fact.last_handled_cursor ?? null,
+          latest_completed_cursor: trusted ? fact.latest_completed_cursor : null,
+          last_handled_cursor: trusted ? fact.last_handled_cursor : null,
           completed_at: fact.completed_at ?? null,
           continuity: {
-            trusted: Boolean(fact.continuity?.trusted),
-            unknown_reason: fact.continuity?.unknown_reason ?? null
+            trusted,
+            unknown_reason: unknownReason
           },
           updated_at: fact.updated_at || this._updatedAt
         };
