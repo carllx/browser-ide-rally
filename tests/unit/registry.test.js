@@ -1,10 +1,7 @@
 /**
  * Registry & Safe Rebind 验收与回归测试套件 (#14)
- *
- * 遵循最高测试缝隙（Highest test seam）原则：
- * durable registry/project facts in → restart/reload/rebind → externally visible Status Core snapshot/view out.
+ * 遵循最高测试缝隙原则：durable facts in → recovery/rebind → snapshot/view out.
  */
-
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -13,6 +10,7 @@ import os from 'node:os';
 
 import { createBinding } from '../../src/controller/binding.js';
 import { createProjectRegistry, CURRENT_SCHEMA_VERSION } from '../../src/registry/project-registry.js';
+import { deriveEndpointResult } from '../../src/status/status-core.js';
 
 function createTempStoragePath(prefix = 'rally-test-registry') {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -245,10 +243,11 @@ test('[Registry] 6. 过时版本观察在 Rebind 后失效隔离', () => {
   const registry = createProjectRegistry();
   const core = registry.registerProject({ binding: makeSampleBinding('proj-stale') });
 
-  // Rebind 推进至 rev 2
+  // Rebind 推进至 rev 2（显式确认替换处于初始 UNKNOWN 状态的端点）
   registry.rebindProjectEndpoint('proj-stale', {
     endpoint: 'browser',
-    identity: { conversation_id: 'conv-rebound' }
+    identity: { conversation_id: 'conv-rebound' },
+    confirm_replace_unknown: true
   });
   assert.equal(core.getSnapshot().binding.binding_revision, 2);
 
@@ -441,4 +440,154 @@ test('[Registry 回归] 12. 多项目加载失败时保持原子性 (All-or-Noth
   } finally {
     cleanup();
   }
+});
+
+test('[Registry 回归] 13. UNKNOWN 端点默认阻止 rebind，显式确认方可替换且绝不 mark handled', () => {
+  const registry = createProjectRegistry();
+  const core = registry.registerProject({ binding: makeSampleBinding('proj-unknown-guard') });
+
+  // 初始端点处于 UNKNOWN 状态
+  assert.equal(core.getSnapshot().endpoints.browser.result_state, 'UNKNOWN');
+
+  // 1. 默认尝试替换 UNKNOWN 端点：必须抛错阻止，防止静默丢失不确定证据
+  assert.throws(() => {
+    registry.rebindProjectEndpoint('proj-unknown-guard', {
+      endpoint: 'browser',
+      identity: { conversation_id: 'conv-new-unknown' }
+    });
+  }, /Cannot replace browser endpoint in UNKNOWN state without explicit confirmation/);
+
+  // 2. 显式确认后允许替换
+  const snapAfterConfirm = registry.rebindProjectEndpoint('proj-unknown-guard', {
+    endpoint: 'browser',
+    identity: { conversation_id: 'conv-new-unknown' },
+    confirm_replace_unknown: true
+  });
+
+  // 3. 验证关键不变性：新端点进入规范 UNKNOWN 状态，绝不伪造 mark handled
+  assert.equal(snapAfterConfirm.endpoints.browser.result_state, 'UNKNOWN');
+  assert.equal(snapAfterConfirm.endpoints.browser.unknown_reason, 'UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION');
+  assert.equal(snapAfterConfirm.endpoints.browser.last_handled_cursor, null);
+  assert.equal(snapAfterConfirm.endpoints.browser.latest_completed_cursor, null);
+  assert.equal(snapAfterConfirm.binding.binding_revision, 2);
+});
+
+test('[Registry 回归] 14. 字符串 "true"、对象等 truthy 值绝不能建立 trusted restore', () => {
+  const { file, cleanup } = createTempStoragePath();
+  try {
+    const reg = createProjectRegistry();
+    const malformedPayload = {
+      schema_version: 1,
+      saved_at: new Date().toISOString(),
+      projects: {
+        'proj-truthy-test': {
+          binding: makeSampleBinding('proj-truthy-test'),
+          endpoints: {
+            browser: {
+              endpoint: 'browser',
+              latest_completed_cursor: 'turn-1',
+              last_handled_cursor: 'turn-1',
+              continuity: { trusted: 'true' } // 字符串 "true" 伪造信任
+            },
+            ide: {
+              endpoint: 'ide',
+              latest_completed_cursor: 'turn-1',
+              last_handled_cursor: 'turn-1',
+              continuity: { trusted: { malicious: true } } // truthy 对象伪造信任
+            }
+          }
+        }
+      }
+    };
+    fs.writeFileSync(file, JSON.stringify(malformedPayload, null, 2), 'utf-8');
+
+    reg.loadFromFile(file);
+    const core = reg.getProject('proj-truthy-test');
+
+    // 核心守卫：非严格布尔值必须 fail-closed 为 UNKNOWN，绝不可派生为 NO_NEW_RESULT
+    assert.equal(core.getSnapshot().endpoints.browser.result_state, 'UNKNOWN');
+    assert.equal(core.getSnapshot().endpoints.ide.result_state, 'UNKNOWN');
+  } finally {
+    cleanup();
+  }
+});
+
+test('[Registry 回归] 15. 拒绝不可能的游标账本 (latest=null 且 handled!=null)', () => {
+  const { file, cleanup } = createTempStoragePath();
+  try {
+    const reg = createProjectRegistry();
+    const impossiblePayload = {
+      schema_version: 1,
+      saved_at: new Date().toISOString(),
+      projects: {
+        'proj-impossible-test': {
+          binding: makeSampleBinding('proj-impossible-test'),
+          endpoints: {
+            browser: {
+              endpoint: 'browser',
+              latest_completed_cursor: null,
+              last_handled_cursor: 'turn-handled-1',
+              continuity: { trusted: true } // 声明受信但游标不可能
+            },
+            ide: {
+              endpoint: 'ide',
+              latest_completed_cursor: null,
+              last_handled_cursor: null,
+              continuity: { trusted: true }
+            }
+          }
+        }
+      }
+    };
+    fs.writeFileSync(file, JSON.stringify(impossiblePayload, null, 2), 'utf-8');
+
+    reg.loadFromFile(file);
+    const core = reg.getProject('proj-impossible-test');
+
+    // 核心守卫：latest=null 且 handled!=null 必须 fail-closed 到 UNKNOWN，绝不可派生为 NO_NEW_RESULT
+    assert.equal(core.getSnapshot().endpoints.browser.result_state, 'UNKNOWN');
+    assert.match(core.getSnapshot().endpoints.browser.unknown_reason, /impossible_persisted_cursor_ledger/);
+
+    // ide 端点作为合法的 latest=null, handled=null 则正确派生为 NO_NEW_RESULT
+    assert.equal(core.getSnapshot().endpoints.ide.result_state, 'NO_NEW_RESULT');
+  } finally {
+    cleanup();
+  }
+});
+
+test('[Registry 回归] 16. 合法游标账本组合与纯函数派生覆盖', () => {
+  // 1. latest=null, handled=null => NO_NEW_RESULT (trusted caught-up / no known completion)
+  assert.equal(deriveEndpointResult({
+    continuity: { trusted: true },
+    latest_completed_cursor: null,
+    last_handled_cursor: null
+  }), 'NO_NEW_RESULT');
+
+  // 2. latest!=null, handled=null => NEW
+  assert.equal(deriveEndpointResult({
+    continuity: { trusted: true },
+    latest_completed_cursor: 'turn-1',
+    last_handled_cursor: null
+  }), 'NEW');
+
+  // 3. latest==handled => NO_NEW_RESULT
+  assert.equal(deriveEndpointResult({
+    continuity: { trusted: true },
+    latest_completed_cursor: 'turn-1',
+    last_handled_cursor: 'turn-1'
+  }), 'NO_NEW_RESULT');
+
+  // 4. latest!=handled => NEW
+  assert.equal(deriveEndpointResult({
+    continuity: { trusted: true },
+    latest_completed_cursor: 'turn-2',
+    last_handled_cursor: 'turn-1'
+  }), 'NEW');
+
+  // 5. impossible latest=null, handled!=null => UNKNOWN
+  assert.equal(deriveEndpointResult({
+    continuity: { trusted: true },
+    latest_completed_cursor: null,
+    last_handled_cursor: 'turn-1'
+  }), 'UNKNOWN');
 });

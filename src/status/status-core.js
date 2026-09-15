@@ -1,18 +1,8 @@
 /**
  * Status Core — 单个 Project Binding 的规范状态核心
- *
- * 核心设计原则 (Core Principles):
- * 1. 规范事实优先：Endpoint Result 必须从底层规范事实（latest completed cursor、last handled cursor、continuity/trust）确定性派生，绝不把 NEW / NO_NEW_RESULT 当作可写输入；
- * 2. 连续性信任显式化：连续性信任必须显式提供，无明确信任证据时 fail-closed 到 UNKNOWN，绝不因“无错误”默认信任；未受信观察绝不污染规范游标；
- * 3. 观察与处理严格分离：recordEndpointObservation 只能更新 completion/continuity 事实，绝不接受或推进 last_handled_cursor；
- * 4. 显式推进防静默抹除：last_handled_cursor 仅由显式 markEndpointHandled() 推进至可靠 latest completed cursor，且强制比对 expected_cursor，旧/不匹配/缺失 cursor 绝不能清除当前 NEW；
- * 5. 安全重绑与替换守卫 (#14)：通过 rebindEndpoint() 显式重绑，严格拦截未处理 NEW 结果的静默丢弃；新端点连续性重置为 UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION；未变端点事实完整保留；
- * 6. 受信任反序列化 (#14)：专有受信 hydration 缝隙，与 live observation 彻底解耦，安全恢复持久化 handled 游标；
- * 7. 宿主独立、Relay 可选：不依赖任何 Relay Exchange 即可独立运作；
- * 8. 端点独立：Browser 与 IDE 的 Endpoint Result 独立更新，支持 Dual NEW 共存；
- * 9. 确定性三态：Endpoint Result 确定性地仅推导为 NEW、NO_NEW_RESULT 或 UNKNOWN，严禁使用 IDLE；
- * 10. 事实解耦：Action 事实与 Human Intervention 事实与 Endpoint Result 独立并存，绝不相互篡改；
- * 11. 无唯一所有者：不持久化、不推断 Baton、owner 或“轮到谁”。
+ * 规范事实优先，确定性派生 NEW / NO_NEW_RESULT / UNKNOWN；
+ * 严格布尔受信与连续性 fail-closed；显式推进防静默抹除；
+ * 安全重绑守卫未处理 NEW 与不确定 UNKNOWN 状态；独立端点不依赖 Relay。
  */
 
 import { validateBinding, bumpRevision } from '../controller/binding.js';
@@ -34,13 +24,23 @@ export const ALLOWED_ACTION_STAGES = [
  * @returns {'NEW' | 'NO_NEW_RESULT' | 'UNKNOWN'}
  */
 export function deriveEndpointResult(endpointFact) {
-  if (!endpointFact || !endpointFact.continuity || !endpointFact.continuity.trusted) {
+  // 1. 严格 boolean 校验：只有 continuity.trusted === true 才是受信任状态，拒载 truthy 字符串或对象
+  if (!endpointFact || !endpointFact.continuity || endpointFact.continuity.trusted !== true) {
     return 'UNKNOWN';
   }
 
   const { latest_completed_cursor, last_handled_cursor } = endpointFact;
 
-  // 若存在可靠的最新完成游标，且未被 Rally 明确 handled，则确定性派生为 NEW
+  // 2. 拒绝不可能的游标账本 (impossible trusted ledger):
+  // latest 为 null 但 handled 不为 null，逻辑自相矛盾，必须 fail-closed 到 UNKNOWN
+  if (
+    (latest_completed_cursor === null || latest_completed_cursor === undefined) &&
+    (last_handled_cursor !== null && last_handled_cursor !== undefined)
+  ) {
+    return 'UNKNOWN';
+  }
+
+  // 3. 若存在可靠的最新完成游标，且未被 Rally 明确 handled，则确定性派生为 NEW
   if (
     latest_completed_cursor !== null &&
     latest_completed_cursor !== undefined &&
@@ -49,7 +49,7 @@ export function deriveEndpointResult(endpointFact) {
     return 'NEW';
   }
 
-  // 连续性受信且所有已知完成均已处理（或无未处理完成）时，派生为 NO_NEW_RESULT
+  // 4. 连续性受信且所有已知完成均已处理（latest === handled 或两者均为 null）时，派生为 NO_NEW_RESULT
   return 'NO_NEW_RESULT';
 }
 
@@ -136,24 +136,31 @@ export class ProjectStatusCore {
         const slotMatch = fact.endpoint === ep;
         const hasLatest = 'latest_completed_cursor' in fact && fact.latest_completed_cursor !== undefined;
         const hasHandled = 'last_handled_cursor' in fact && fact.last_handled_cursor !== undefined;
-        const isTrustedDeclared = Boolean(fact.continuity?.trusted);
+        // 严格布尔校验：只有严格等于 true 才视为受信任声明，严防 "true" 或对象等 truthy 误判
+        const isTrustedDeclared = fact.continuity?.trusted === true;
 
         let trusted = false;
         let unknownReason = null;
 
-        // 若持久化数据声明受信任，必须完整具备 canonical cursor ledger 结构且 slot 匹配
+        // 若持久化数据声明受信任，必须完整具备 canonical cursor ledger 结构且 slot 匹配且账本逻辑自洽
         if (isTrustedDeclared) {
-          if (!slotMatch || !hasLatest || !hasHandled) {
-            // 缺失规范字段或 slot 不匹配：绝不能被当成 NO_NEW_RESULT，fail-closed 到 UNKNOWN！
+          const isImpossibleLedger =
+            (fact.latest_completed_cursor === null || fact.latest_completed_cursor === undefined) &&
+            (fact.last_handled_cursor !== null && fact.last_handled_cursor !== undefined);
+
+          if (!slotMatch || !hasLatest || !hasHandled || isImpossibleLedger) {
+            // 缺失规范字段、slot 不匹配或不可能的游标账本：fail-closed 到 UNKNOWN，绝不自动派生 NO_NEW_RESULT
             trusted = false;
-            unknownReason = 'incomplete_persisted_cursor_ledger: trusted endpoint requires explicit cursor fields and matching slot';
+            unknownReason = isImpossibleLedger
+              ? 'impossible_persisted_cursor_ledger: handled cursor exists while latest completed cursor is null'
+              : 'incomplete_persisted_cursor_ledger: trusted endpoint requires explicit cursor fields and matching slot';
           } else {
             trusted = true;
             unknownReason = null;
           }
         } else {
           trusted = false;
-          unknownReason = fact.continuity?.unknown_reason || 'initial_unobserved';
+          unknownReason = fact.continuity?.unknown_reason || 'untrusted_or_malformed_persisted_continuity';
         }
 
         this._endpoints[ep] = {
@@ -238,21 +245,24 @@ export class ProjectStatusCore {
 
   /**
    * 安全端点重绑 (Safe Endpoint Rebind, #14)
-   *
-   * 规范契约 (Spec Invariants):
-   * 1. 保持 Project Binding 身份不变，版本号递增 (binding_revision += 1)；
-   * 2. 单次仅重绑一个端点（Browser 或 IDE），未替换端点的事实完全保持不变；
-   * 3. 未处理 NEW 替换守卫：若被替换端点当前存在未处理 NEW，默认拒绝替换；除非显式传 allow_discard_unhandled: true；
-   * 4. 显式丢弃未处理 NEW 时，绝不伪造 mark handled；
-   * 5. 新绑定的端点连续性事实尚未确立，初始进入 UNKNOWN 状态，原因明确为 UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION。
-   *
+   * 保持项目身份递增版本，单端重置连续性为 UNKNOWN，未变端点事实完整保留。
+   * 替换守卫：NEW 与 UNKNOWN 默认阻止替换，需显式确认；NO_NEW_RESULT 可直接重绑。
    * @param {object} params
-   * @param {'browser' | 'ide'} params.endpoint - 待重绑的端点
-   * @param {object} params.identity - 新端点身份信息
-   * @param {boolean} [params.allow_discard_unhandled=false] - 是否显式确认丢弃未处理 NEW
-   * @returns {object} 更新后的项目快照
+   * @param {'browser' | 'ide'} params.endpoint 待重绑端点
+   * @param {object} params.identity 新端点身份
+   * @param {boolean} [params.allow_discard_unhandled] 显式确认标志
+   * @param {boolean} [params.confirm_replace_unknown] UNKNOWN 确认标志
+   * @param {boolean} [params.confirm_replace] 通用确认标志
+   * @returns {object}
    */
-  rebindEndpoint({ endpoint, identity, allow_discard_unhandled = false }) {
+  rebindEndpoint({
+    endpoint,
+    identity,
+    allow_discard_unhandled = false,
+    confirm_replace_unhandled_new = false,
+    confirm_replace_unknown = false,
+    confirm_replace = false
+  }) {
     if (!ALLOWED_ENDPOINTS.includes(endpoint)) {
       throw new Error(`Invalid endpoint "${endpoint}". Must be 'browser' or 'ide'.`);
     }
@@ -261,14 +271,24 @@ export class ProjectStatusCore {
       throw new Error('New endpoint identity must be a valid object');
     }
 
-    // 1. 未处理 NEW 替换守卫 (Unhandled NEW Replacement Guard)
+    // 1. 替换守卫 (Replacement Guard for NEW and UNKNOWN)
     const currentTargetFact = this._endpoints[endpoint];
     const currentDerivedState = deriveEndpointResult(currentTargetFact);
 
-    if (currentDerivedState === 'NEW' && !allow_discard_unhandled) {
-      throw new Error(
-        `Cannot replace ${endpoint} endpoint with unhandled NEW result without explicit confirmation (allow_discard_unhandled: true).`
-      );
+    if (currentDerivedState === 'NEW') {
+      const confirmed = allow_discard_unhandled || confirm_replace_unhandled_new || confirm_replace;
+      if (!confirmed) {
+        throw new Error(
+          `Cannot replace ${endpoint} endpoint with unhandled NEW result without explicit confirmation (allow_discard_unhandled: true).`
+        );
+      }
+    } else if (currentDerivedState === 'UNKNOWN') {
+      const confirmed = allow_discard_unhandled || confirm_replace_unknown || confirm_replace;
+      if (!confirmed) {
+        throw new Error(
+          `Cannot replace ${endpoint} endpoint in UNKNOWN state without explicit confirmation (allow_discard_unhandled: true or confirm_replace_unknown: true).`
+        );
+      }
     }
 
     const now = new Date().toISOString();
@@ -320,16 +340,10 @@ export class ProjectStatusCore {
   }
 
   /**
-   * 记录端点底层规范事实（Opaque latest completed cursor、completed_at、continuity/trust）
-   *
-   * 规范约束 (Invariants):
-   * 1. 严格禁止传入 NEW / NO_NEW_RESULT 作为权威事实写入；
-   * 2. 连续性信任必须显式提供 (trusted: true 或 continuity: { trusted: true })，无显式信任证据时 fail-closed 为 UNKNOWN；
-   * 3. 绝不读取或修改 last_handled_cursor：live observation 只能更新 completion/continuity 事实，handled 只能由 markEndpointHandled() 推进；
-   * 4. 未受信观察绝不写入或污染 latest_completed_cursor。
-   *
-   * @param {string} endpoint - 'browser' | 'ide'
-   * @param {object} observation - 规范事实输入
+   * 记录端点规范事实（最新完成游标、完成时间、连续性与受信证据）
+   * 严格禁止传入 NEW/NO_NEW_RESULT；绝不接受或推进 last_handled_cursor。
+   * @param {'browser' | 'ide'} endpoint 端点
+   * @param {object} observation 规范事实输入
    */
   recordEndpointObservation(endpoint, observation = {}) {
     if (!ALLOWED_ENDPOINTS.includes(endpoint)) {

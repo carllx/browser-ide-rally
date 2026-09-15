@@ -95,16 +95,13 @@ export class ProjectRegistry {
 
   /**
    * 安全重绑指定项目的某个端点 (#14)
-   * @param {string} bindingId 
-   * @param {object} params
-   * @param {'browser' | 'ide'} params.endpoint 
-   * @param {object} params.identity 
-   * @param {boolean} [params.allow_discard_unhandled=false] 
+   * @param {string} bindingId 项目 ID
+   * @param {object} rebindOptions 重绑参数（含 endpoint, identity, 确认标志等）
    * @returns {object} 更新后的快照
    */
-  rebindProjectEndpoint(bindingId, { endpoint, identity, allow_discard_unhandled = false }) {
+  rebindProjectEndpoint(bindingId, rebindOptions) {
     const core = this.getProject(bindingId);
-    const snapshot = core.rebindEndpoint({ endpoint, identity, allow_discard_unhandled });
+    const snapshot = core.rebindEndpoint(rebindOptions);
     if (this._storagePath) {
       this.saveToFile(this._storagePath);
     }
