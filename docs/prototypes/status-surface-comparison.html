@@ -1059,6 +1059,9 @@
         } else if (isBlocked) {
           batonBadge = `<span class="badge badge-blocked">&#x26D4; BATON: INTERLOCK BLOCKED</span>`;
           batonDesc = 'Target 歧义或 revision 失效，禁用自动化传递。';
+        } else if (p.browser.status === "UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION" || p.ide.status === "UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION") {
+          batonBadge = `<span class="badge badge-unknown">&#x26A0; BATON: UNCERTAIN (FAIL-CLOSED)</span>`;
+          batonDesc = '一端连续性未知，严禁猜测主权归属。';
         } else if (p.browser.status === "NEW" && p.ide.status === "NEW") {
           batonBadge = `<span class="badge badge-new" style="background:rgba(88,166,255,0.2);color:#58a6ff;border-color:#58a6ff;">&#x21C6; DUAL BATON (CONCURRENT NEW)</span>`;
           batonDesc = '两端同时产生新结果！两端均保有独立交接权，不得推断单一持有者。';
@@ -1068,9 +1071,6 @@
         } else if (p.ide.status === "NEW") {
           batonBadge = `<span class="badge badge-new">&#x2192; BATON: IDE LEADING</span>`;
           batonDesc = 'IDE 具有最新未同步结果，等待流转至 Browser。';
-        } else if (p.browser.status === "UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION" || p.ide.status === "UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION") {
-          batonBadge = `<span class="badge badge-unknown">&#x26A0; BATON: UNCERTAIN (FAIL-CLOSED)</span>`;
-          batonDesc = '一端连续性未知，严禁猜测主权归属。';
         } else {
           batonBadge = `<span class="badge badge-idle">&#x2714; BATON: QUIESCENT / IDLE</span>`;
           batonDesc = '两端均处于已同步或空闲状态。';
