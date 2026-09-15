@@ -4,7 +4,7 @@
  * 
  * 包含对 ChatGPT Chrome 与 Antigravity IDE 的实机探针测试用例：
  * 1. Browser 刷新后 turn identity (data-message-id) 稳定性
- * 2. Browser 思考型/工具型回答的完成信号与占位符过滤
+ * 2. Browser 思考型/占位符与真实工具调用 (Web Search) 完成信号与过滤
  * 3. Browser 模拟 last_processed_turn 的重启去重
  * 4. Browser 双会话归属隔离
  * 5. Antigravity AgentAPI 元数据验证
@@ -66,7 +66,29 @@ export class ProbeRunner {
     return { pass: allMatch, beforeCount: before.length, afterCount: after.length };
   }
 
-  // 2. 验证 Antigravity transcript 游标在重启后的去重
+  // 2. 验证 Browser 真实工具调用 (Web Search) 完成与 Citation 采样
+  probeBrowserToolTurnCompletion(convId) {
+    const tab = this.adapter.locateExactConversationTab(convId);
+    const raw = this.adapter.runTabJS(tab.windowIndex, tab.tabIndex, `(() => {
+      const msgs = Array.from(document.querySelectorAll("[data-message-author-role='assistant']"));
+      const last = msgs[msgs.length - 1];
+      const links = Array.from(last ? last.querySelectorAll("a[href]") : []).map(a => a.href);
+      const citations = Array.from(last ? last.querySelectorAll("[data-testid*='citation'], [class*='citation']") : []).map(c => c.innerText);
+      const stopBtn = document.querySelector("button[data-testid='stop-button'], button[aria-label='Stop answering']");
+      return JSON.stringify({
+        hasStopBtn: !!stopBtn,
+        turnId: last ? last.getAttribute("data-message-id") : null,
+        linksCount: links.length,
+        citationsCount: citations.length,
+        textLen: last ? (last.innerText || "").length : 0
+      });
+    })()`);
+    const res = JSON.parse(raw);
+    const pass = !res.hasStopBtn && res.linksCount > 0 && !res.turnId.includes('placeholder');
+    return { pass, ...res };
+  }
+
+  // 3. 验证 Antigravity transcript 游标在重启后的去重
   probeAntigravityCursorReplaySafety(convId, transcriptPath) {
     const parseTurns = () => {
       const lines = fs.readFileSync(transcriptPath, 'utf8').trim().split('\n').filter(Boolean);
