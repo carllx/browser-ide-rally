@@ -15,12 +15,12 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 
+/**
+ * 经过当前环境实测验证的终态完成原因 (#16 Review Gate)
+ * 严格限制为已建立确凿证据的理由，不得比现有证据更宽
+ */
 export const FINAL_TERMINATION_REASONS = [
-  'NO_TOOL_CALL',
-  'model_stop',
-  'max_steps_exceeded',
-  'error',
-  'user_cancelled'
+  'NO_TOOL_CALL'
 ];
 
 /**
@@ -61,35 +61,54 @@ export function matchesWorkspace(actualWorkspaces, expectedWorkspace) {
  * @param {string} expectedRepository 
  * @returns {boolean}
  */
+export function parseCanonicalRepositoryIdentity(rawUrl) {
+  if (typeof rawUrl !== 'string' || !rawUrl.trim()) return null;
+  const cleaned = rawUrl.trim();
+
+  // 匹配 SSH: git@github.com:owner/repo.git 或 ssh://git@github.com/owner/repo.git
+  // 匹配 HTTPS/HTTP/GIT: https://github.com/owner/repo.git
+  const match = cleaned.match(/^(?:(?:https?|git|ssh):\/\/(?:[^@\/]+@)?[^\/]+\/|(?:[^@\/]+@)?[^:]+:)([^\/\s]+)\/([^\/\s#?]+?)(?:\.git)?$/i);
+  if (!match) return null;
+
+  const owner = match[1].trim();
+  const repo = match[2].trim();
+  if (!owner || !repo) return null;
+  return `${owner}/${repo}`.toLowerCase();
+}
+
 export function matchesRepository(workspacePath, expectedRepository) {
   if (!expectedRepository || typeof expectedRepository !== 'string') return false;
-  const exp = expectedRepository.trim().toLowerCase();
+  const expCanonical = expectedRepository.trim().toLowerCase();
+  if (!expCanonical.includes('/') || expCanonical.split('/').length !== 2) {
+    return false;
+  }
+
   const normWs = normalizePath(workspacePath);
   if (!normWs || !fs.existsSync(normWs)) {
     return false;
   }
 
-  // 1. 若工作区目录内包含 .git，通过 git remote 探测权威远程仓库标识
   const gitDir = path.join(normWs, '.git');
-  if (fs.existsSync(gitDir)) {
-    try {
-      const remoteUrl = execFileSync('git', ['remote', 'get-url', 'origin'], {
-        cwd: normWs,
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'ignore']
-      }).trim().toLowerCase();
-
-      if (remoteUrl.includes(exp)) {
-        return true;
-      }
-    } catch {
-      // 若没有 git origin remote，降级核验目录后缀
-    }
+  if (!fs.existsSync(gitDir)) {
+    return false;
   }
 
-  // 2. 目录名或路径后缀核验
-  const repoName = exp.split('/').pop();
-  return normWs.toLowerCase().endsWith(exp) || normWs.toLowerCase().endsWith(repoName);
+  try {
+    const remoteUrl = execFileSync('git', ['remote', 'get-url', 'origin'], {
+      cwd: normWs,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).trim();
+
+    const actualCanonical = parseCanonicalRepositoryIdentity(remoteUrl);
+    if (!actualCanonical) {
+      return false;
+    }
+
+    return actualCanonical === expCanonical;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -196,6 +215,7 @@ export class AntigravityIdeAdapter {
   _failClosedToUnknown(reason = 'UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION') {
     this._statusCore.recordEndpointObservation('ide', {
       conversation_id: this._binding.ide?.conversation_id,
+      binding_revision: this._binding.binding_revision,
       continuity_lost: true,
       reason
     });
@@ -263,8 +283,9 @@ export class AntigravityIdeAdapter {
       };
     }
 
-    // 5. final terminationReason 核验
+    // 5. final terminationReason 核验：未验证的原因或 Hook 漂移必须 fail closed 到 UNKNOWN
     if (!terminationReason || !FINAL_TERMINATION_REASONS.includes(terminationReason)) {
+      this._failClosedToUnknown(`non_final_termination_reason: got ${terminationReason}`);
       return {
         accepted: false,
         reason: `non_final_termination_reason: got ${terminationReason}`

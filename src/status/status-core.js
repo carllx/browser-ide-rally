@@ -372,22 +372,22 @@ export class ProjectStatusCore {
       trusted = false;
       unknownReason = 'disallowed_idle_state: IDLE is not canonical Endpoint Result truth';
     }
-    // 2. 连续性校验：若显式报告连续性断裂或错误，fail-closed 为 UNKNOWN
+    // 2. 版本校验：若提供 binding_revision，必须与当前 binding_revision 一致（防范过时 adapter 污染当前 revision，含 revision 0）
+    else if (observation.binding_revision !== undefined && observation.binding_revision !== this._binding.binding_revision) {
+      trusted = false;
+      unknownReason = `stale_revision: expected rev ${this._binding.binding_revision}, got rev ${observation.binding_revision}`;
+    }
+    // 3. 连续性校验：若显式报告连续性断裂或错误，fail-closed 为 UNKNOWN
     else if (observation.continuity_lost || observation.error) {
       trusted = false;
       unknownReason = observation.reason || observation.error || 'continuity_lost';
     }
-    // 3. 归属校验：若提供 conversation_id，必须与当前 binding 严格匹配；缺失时不可建立信任
+    // 4. 归属校验：若提供 conversation_id，必须与当前 binding 严格匹配；缺失时不可建立信任
     else if (!observation.conversation_id || observation.conversation_id !== expectedConversationId) {
       trusted = false;
       unknownReason = observation.conversation_id
         ? `attribution_mismatch: expected ${expectedConversationId}, got ${observation.conversation_id}`
         : 'missing_conversation_identity: explicit conversation_id matching binding is required';
-    }
-    // 4. 版本校验：若提供 binding_revision，必须与当前 binding_revision 一致
-    else if (observation.binding_revision !== undefined && observation.binding_revision !== this._binding.binding_revision) {
-      trusted = false;
-      unknownReason = `stale_revision: expected rev ${this._binding.binding_revision}, got rev ${observation.binding_revision}`;
     }
     // 5. 显式信任要求：无显式信任证据时绝不自动受信
     else if (!isExplicitlyTrusted) {
