@@ -30,7 +30,7 @@ export const FINAL_TERMINATION_REASONS = [
  */
 export function normalizePath(p) {
   if (typeof p !== 'string') return '';
-  let norm = p.trim().replace(/\+/g, '/').replace(/\/+$/, '');
+  let norm = p.trim().replace(/\\/g, '/').replace(/\/+$/, '');
   if (norm.startsWith('file://')) {
     norm = norm.slice(7);
   }
