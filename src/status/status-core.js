@@ -3,14 +3,15 @@
  *
  * 核心设计原则 (Core Principles):
  * 1. 规范事实优先：Endpoint Result 必须从底层规范事实（latest completed cursor、last handled cursor、continuity/trust）确定性派生，绝不把 NEW / NO_NEW_RESULT 当作可写输入；
- * 2. 宿主独立、Relay 可选：不依赖任何 Relay Exchange 即可独立运作；
- * 3. 端点独立：Browser 与 IDE 的 Endpoint Result 独立更新，支持 Dual NEW 共存；
- * 4. 确定性三态：Endpoint Result 确定性地仅推导为 NEW、NO_NEW_RESULT 或 UNKNOWN，严禁使用 IDLE；
- * 5. Fail-closed 优先：连续性中断或归属异常时 UNKNOWN 优先，绝不退化为便利性所有权猜测；
- * 6. 防静默抹除：Mark handled 只能推进到当前可靠的 latest completed cursor，旧/不匹配 cursor 绝不能清除当前 NEW；
- * 7. 身份守卫：禁止跨会话不安全 rebind，防止旧会话事实被带入新会话（真正的 reconciliation rebind 归属 #14）；
- * 8. 事实解耦：Action 事实与 Human Intervention 事实与 Endpoint Result 独立并存，绝不相互篡改；
- * 9. 无唯一所有者：不持久化、不推断 Baton、owner 或“轮到谁”。
+ * 2. 连续性信任显式化：连续性信任必须显式提供，无明确信任证据时 fail-closed 到 UNKNOWN，绝不因“无错误”默认信任；
+ * 3. 观察与处理严格分离：recordEndpointObservation 只能更新 completion/continuity 事实，绝不接受或推进 last_handled_cursor；
+ * 4. 显式推进防静默抹除：last_handled_cursor 仅由显式 markEndpointHandled() 推进至可靠 latest completed cursor，旧/不匹配 cursor 绝不能清除当前 NEW；
+ * 5. 身份守卫：禁止跨会话不安全 rebind，防止旧会话事实被带入新会话（真正的 reconciliation rebind 归属 #14）；
+ * 6. 宿主独立、Relay 可选：不依赖任何 Relay Exchange 即可独立运作；
+ * 7. 端点独立：Browser 与 IDE 的 Endpoint Result 独立更新，支持 Dual NEW 共存；
+ * 8. 确定性三态：Endpoint Result 确定性地仅推导为 NEW、NO_NEW_RESULT 或 UNKNOWN，严禁使用 IDLE；
+ * 9. 事实解耦：Action 事实与 Human Intervention 事实与 Endpoint Result 独立并存，绝不相互篡改；
+ * 10. 无唯一所有者：不持久化、不推断 Baton、owner 或“轮到谁”。
  */
 
 import { validateBinding } from '../controller/binding.js';
@@ -150,8 +151,13 @@ export class ProjectStatusCore {
   }
 
   /**
-   * 记录端点底层规范事实（Opaque latest completed cursor、last handled cursor、continuity/trust）
-   * 严格禁止传入 NEW / NO_NEW_RESULT 作为权威事实写入
+   * 记录端点底层规范事实（Opaque latest completed cursor、completed_at、continuity/trust）
+   *
+   * 规范约束 (Invariants):
+   * 1. 严格禁止传入 NEW / NO_NEW_RESULT 作为权威事实写入；
+   * 2. 连续性信任必须显式提供 (trusted: true 或 continuity: { trusted: true })，无显式信任证据时 fail-closed 为 UNKNOWN；
+   * 3. 绝不读取或修改 last_handled_cursor：live observation 只能更新 completion/continuity 事实，handled 只能由 markEndpointHandled() 推进。
+   *
    * @param {string} endpoint - 'browser' | 'ide'
    * @param {object} observation - 规范事实输入
    */
@@ -163,6 +169,12 @@ export class ProjectStatusCore {
     const current = this._endpoints[endpoint];
     const now = new Date().toISOString();
 
+    const expectedConversationId = endpoint === 'browser'
+      ? this._binding.browser?.conversation_id
+      : this._binding.ide?.conversation_id;
+
+    const isExplicitlyTrusted = observation.trusted === true || observation.continuity?.trusted === true;
+
     let trusted = false;
     let unknownReason = null;
 
@@ -171,41 +183,47 @@ export class ProjectStatusCore {
       trusted = false;
       unknownReason = 'disallowed_idle_state: IDLE is not canonical Endpoint Result truth';
     }
-    // 2. 归属校验：若提供 conversation_id，必须与当前 binding 严格匹配
-    else if (
-      observation.conversation_id &&
-      observation.conversation_id !== (endpoint === 'browser' ? this._binding.browser.conversation_id : this._binding.ide.conversation_id)
-    ) {
-      trusted = false;
-      unknownReason = `attribution_mismatch: expected ${
-        endpoint === 'browser' ? this._binding.browser.conversation_id : this._binding.ide.conversation_id
-      }, got ${observation.conversation_id}`;
-    }
-    // 3. 版本校验：若提供 binding_revision，必须与当前 binding_revision 一致
-    else if (observation.binding_revision && observation.binding_revision !== this._binding.binding_revision) {
-      trusted = false;
-      unknownReason = `stale_revision: expected rev ${this._binding.binding_revision}, got rev ${observation.binding_revision}`;
-    }
-    // 4. 连续性校验：若显式报告连续性断裂或错误，fail-closed 为 UNKNOWN
+    // 2. 连续性校验：若显式报告连续性断裂或错误，fail-closed 为 UNKNOWN
     else if (observation.continuity_lost || observation.error) {
       trusted = false;
       unknownReason = observation.reason || observation.error || 'continuity_lost';
     }
-    // 5. 校验通过，连续性受信
+    // 3. 归属校验：若提供 conversation_id，必须与当前 binding 严格匹配；缺失时不可建立信任
+    else if (!observation.conversation_id || observation.conversation_id !== expectedConversationId) {
+      trusted = false;
+      unknownReason = observation.conversation_id
+        ? `attribution_mismatch: expected ${expectedConversationId}, got ${observation.conversation_id}`
+        : 'missing_conversation_identity: explicit conversation_id matching binding is required';
+    }
+    // 4. 版本校验：若提供 binding_revision，必须与当前 binding_revision 一致
+    else if (observation.binding_revision && observation.binding_revision !== this._binding.binding_revision) {
+      trusted = false;
+      unknownReason = `stale_revision: expected rev ${this._binding.binding_revision}, got rev ${observation.binding_revision}`;
+    }
+    // 5. 显式信任要求：无显式信任证据时绝不自动受信
+    else if (!isExplicitlyTrusted) {
+      trusted = false;
+      unknownReason = 'unverified_continuity: explicit trust fact required';
+    }
+    // 6. 所有信任与归属检查均通过，连续性受信
     else {
       trusted = true;
       unknownReason = null;
     }
 
-    // 提取游标事实（支持 latest_completed_cursor 或别名 turn_id / cursor）
-    const latestCursor = observation.latest_completed_cursor ?? observation.turn_id ?? observation.cursor ?? current.latest_completed_cursor;
-    const handledCursor = observation.last_handled_cursor ?? current.last_handled_cursor;
+    // 提取完成游标事实（支持 latest_completed_cursor 或别名 turn_id / cursor）
+    // 注意：若传入了 null 或新的有效游标则更新；未指定则保留当前游标
+    const latestCursor = observation.latest_completed_cursor !== undefined
+      ? observation.latest_completed_cursor
+      : (observation.turn_id ?? observation.cursor ?? current.latest_completed_cursor);
+
     const completedAt = observation.completed_at ?? current.completed_at;
 
+    // 注意：绝不更新 last_handled_cursor，严格保持 current.last_handled_cursor！
     this._endpoints[endpoint] = {
       endpoint,
       latest_completed_cursor: latestCursor,
-      last_handled_cursor: handledCursor,
+      last_handled_cursor: current.last_handled_cursor,
       completed_at: completedAt,
       continuity: {
         trusted,

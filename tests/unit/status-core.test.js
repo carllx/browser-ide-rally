@@ -3,7 +3,7 @@
  *
  * 遵循最高测试缝隙（Highest test seam）原则：
  * canonical project facts in → externally visible Status Core snapshot/view out.
- * 验证所有领域不变式、验收条件以及 Browser Review 指出的 3 个核心回归守卫。
+ * 验证所有领域不变式、验收条件以及 Browser Re-review (second pass) 指出的核心回归守卫。
  */
 
 import test from 'node:test';
@@ -51,16 +51,18 @@ test('[Status Core] 2. Dual NEW: Browser=NEW 与 IDE=NEW 能够独立共存，�
   const binding = createSampleBinding();
   const core = createProjectStatusCore({ binding });
 
-  // 记录 Browser 的底层规范事实（最新完成游标 turn-browser-101）
+  // 记录 Browser 的显式受信任底层规范事实（最新完成游标 turn-browser-101）
   core.recordEndpointObservation('browser', {
     conversation_id: 'conv-browser-alpha',
+    trusted: true,
     latest_completed_cursor: 'turn-browser-101',
     completed_at: '2026-09-15T10:00:00.000Z'
   });
 
-  // 记录 IDE 的底层规范事实（最新完成游标 turn-ide-201）
+  // 记录 IDE 的显式受信任底层规范事实（最新完成游标 turn-ide-201）
   core.recordEndpointObservation('ide', {
     conversation_id: 'conv-ide-alpha',
+    trusted: true,
     latest_completed_cursor: 'turn-ide-201',
     completed_at: '2026-09-15T10:01:00.000Z'
   });
@@ -86,12 +88,14 @@ test('[Status Core] 3. NEW + UNKNOWN: Fail-closed 优先，独立可见', () => 
   // Browser 处于正常的未处理完成态 (NEW)
   core.recordEndpointObservation('browser', {
     conversation_id: 'conv-browser-alpha',
+    trusted: true,
     latest_completed_cursor: 'turn-browser-102'
   });
 
   // IDE 发生连续性断裂或归属不符，产生 UNKNOWN
   core.recordEndpointObservation('ide', {
     conversation_id: 'conv-ide-wrong-id', // 不匹配的对话 ID
+    trusted: true,
     latest_completed_cursor: 'turn-ide-301'
   });
 
@@ -105,21 +109,32 @@ test('[Status Core] 3. NEW + UNKNOWN: Fail-closed 优先，独立可见', () => 
   assert.match(compact, /IDE: UNKNOWN/);
 });
 
-test('[Status Core] 4. Both caught up: 两端均处于 NO_NEW_RESULT', () => {
+test('[Status Core] 4. Both caught up: 通过显式 Mark handled 推进达成两端 NO_NEW_RESULT', () => {
   const binding = createSampleBinding();
   const core = createProjectStatusCore({ binding });
 
-  // 两端最新完成均与 last_handled_cursor 一致（已全部处理）
+  // 两端先接收到可靠的完成
   core.recordEndpointObservation('browser', {
     conversation_id: 'conv-browser-alpha',
-    latest_completed_cursor: 'turn-browser-50',
-    last_handled_cursor: 'turn-browser-50'
+    trusted: true,
+    latest_completed_cursor: 'turn-browser-50'
   });
   core.recordEndpointObservation('ide', {
     conversation_id: 'conv-ide-alpha',
-    latest_completed_cursor: 'turn-ide-60',
-    last_handled_cursor: 'turn-ide-60'
+    trusted: true,
+    latest_completed_cursor: 'turn-ide-60'
   });
+
+  // 确认两端处于 NEW
+  assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NEW');
+  assert.equal(core.getSnapshot().endpoints.ide.result_state, 'NEW');
+
+  // 通过显式 markEndpointHandled 推进
+  const bResult = core.markEndpointHandled('browser', { expected_cursor: 'turn-browser-50' });
+  const iResult = core.markEndpointHandled('ide', { expected_cursor: 'turn-ide-60' });
+
+  assert.equal(bResult.success, true);
+  assert.equal(iResult.success, true);
 
   const snapshot = core.getSnapshot();
   assert.equal(snapshot.endpoints.browser.result_state, 'NO_NEW_RESULT');
@@ -137,6 +152,7 @@ test('[Status Core] 5. UNKNOWN 优先级高于便利推断，严禁 IDLE', () =>
   // 尝试传入 IDLE 观察，必须 fail-closed 为 UNKNOWN
   core.recordEndpointObservation('browser', {
     conversation_id: 'conv-browser-alpha',
+    trusted: true,
     result_state: 'IDLE'
   });
 
@@ -157,6 +173,7 @@ test('[Status Core] 6. Human Intervention 独立共存且清除时不篡改 Endp
   // Browser 处于 NEW
   core.recordEndpointObservation('browser', {
     conversation_id: 'conv-browser-alpha',
+    trusted: true,
     latest_completed_cursor: 'b-999'
   });
 
@@ -192,6 +209,7 @@ test('[Status Core] 7. Action 事实独立演进，不改写 Endpoint Result', (
 
   core.recordEndpointObservation('browser', {
     conversation_id: 'conv-browser-alpha',
+    trusted: true,
     latest_completed_cursor: 'b-1'
   });
 
@@ -243,13 +261,15 @@ test('[Status Core] 8. 机器可读快照与紧凑视图同源且不包含 Baton
 
   core.recordEndpointObservation('browser', {
     conversation_id: 'conv-browser-alpha',
+    trusted: true,
     latest_completed_cursor: 'b-turn-1'
   });
   core.recordEndpointObservation('ide', {
     conversation_id: 'conv-ide-alpha',
-    latest_completed_cursor: 'ide-turn-1',
-    last_handled_cursor: 'ide-turn-1'
+    trusted: true,
+    latest_completed_cursor: 'ide-turn-1'
   });
+  core.markEndpointHandled('ide', { expected_cursor: 'ide-turn-1' });
 
   const snapshot = core.getSnapshot();
   const compact = core.toCompactView();
@@ -268,7 +288,6 @@ test('[Status Core] 8. 机器可读快照与紧凑视图同源且不包含 Baton
 
 test('[Status Core] 9. 完全无需 Relay Exchange 即可运作', () => {
   const binding = createSampleBinding();
-  // 没有任何 Exchange 导入或引用，纯粹基于 Binding 和 StatusCore
   const core = createProjectStatusCore({ binding });
 
   assert.ok(core);
@@ -288,6 +307,7 @@ test('[Status Core] 10. 过期的 binding_revision 观察导致 UNKNOWN', () => 
   // 传入错误的 revision
   core.recordEndpointObservation('browser', {
     conversation_id: 'conv-browser-alpha',
+    trusted: true,
     binding_revision: 99, // 当前为 1
     latest_completed_cursor: 'turn-999'
   });
@@ -298,11 +318,10 @@ test('[Status Core] 10. 过期的 binding_revision 观察导致 UNKNOWN', () => 
 });
 
 /* =========================================================================
- * 针对 Browser Review 提出的 3 个核心回归守卫 (Regression Guard Tests)
+ * 核心回归守卫测试 (Regression Guard Tests - Passes 1 & 2)
  * ========================================================================= */
 
 test('[Regression 1] Endpoint Result 纯粹从底层规范事实确定性派生，不可写入伪造', () => {
-  // 直接验证纯函数推导逻辑
   assert.equal(
     deriveEndpointResult({ continuity: { trusted: false } }),
     'UNKNOWN'
@@ -324,15 +343,14 @@ test('[Regression 1] Endpoint Result 纯粹从底层规范事实确定性派生�
     'NO_NEW_RESULT'
   );
 
-  // 在 Core 中验证：无法通过传入 result_state: 'NO_NEW_RESULT' 来改写尚未 handled 的 cursor
   const binding = createSampleBinding();
   const core = createProjectStatusCore({ binding });
 
   core.recordEndpointObservation('browser', {
     conversation_id: 'conv-browser-alpha',
+    trusted: true,
     latest_completed_cursor: 'cursor-alpha-100',
-    last_handled_cursor: null,
-    result_state: 'NO_NEW_RESULT' // 尝试传入伪造的状态
+    result_state: 'NO_NEW_RESULT' // 尝试伪造状态
   });
 
   // 派生状态依然忠实基于 cursor 事实推导出 NEW！
@@ -343,11 +361,10 @@ test('[Regression 2] 旧的或不匹配的 cursor 调用 markEndpointHandled 绝
   const binding = createSampleBinding();
   const core = createProjectStatusCore({ binding });
 
-  // 当前已产生最新的完成 turn-2，上次处理的是 turn-1
   core.recordEndpointObservation('browser', {
     conversation_id: 'conv-browser-alpha',
-    latest_completed_cursor: 'turn-2',
-    last_handled_cursor: 'turn-1'
+    trusted: true,
+    latest_completed_cursor: 'turn-2'
   });
 
   assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NEW');
@@ -356,7 +373,6 @@ test('[Regression 2] 旧的或不匹配的 cursor 调用 markEndpointHandled 绝
   const oldResult = core.markEndpointHandled('browser', { expected_cursor: 'turn-1' });
   assert.equal(oldResult.success, false);
   assert.equal(oldResult.reason, 'cursor_mismatch');
-  // 核心守卫：当前的 NEW 完好无损，绝对不会被静默抹除！
   assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NEW');
 
   // 2. 尝试使用完全不匹配的伪造游标 turn-unknown 进行推进
@@ -376,19 +392,18 @@ test('[Regression 3] updateBinding 禁止跨 conversation 改变 endpoint identi
   const binding = createSampleBinding();
   const core = createProjectStatusCore({ binding });
 
-  // Browser 处于 NEW
   core.recordEndpointObservation('browser', {
     conversation_id: 'conv-browser-alpha',
+    trusted: true,
     latest_completed_cursor: 'b-turn-1'
   });
   assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NEW');
 
-  // 尝试将 Browser 对话改为新会话 conv-browser-beta（不安全 rebind）
   const dangerousRebind = {
     ...binding,
     browser: {
       provider: 'chatgpt',
-      conversation_id: 'conv-browser-beta' // 变更了会话身份
+      conversation_id: 'conv-browser-beta'
     }
   };
 
@@ -396,7 +411,86 @@ test('[Regression 3] updateBinding 禁止跨 conversation 改变 endpoint identi
     core.updateBinding(dangerousRebind);
   }, /Identity-changing rebind is prohibited in Status Core/);
 
-  // 证明：旧 conversation 的状态绝对没有被挂接到新 conversation 上
   assert.equal(core.getSnapshot().binding.browser.conversation_id, 'conv-browser-alpha');
   assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NEW');
+});
+
+test('[Regression 4] observation 无法写入/修改 last_handled_cursor 或静默清掉 NEW', () => {
+  const binding = createSampleBinding();
+  const core = createProjectStatusCore({ binding });
+
+  // 建立 NEW 状态
+  core.recordEndpointObservation('browser', {
+    conversation_id: 'conv-browser-alpha',
+    trusted: true,
+    latest_completed_cursor: 'cursor-123'
+  });
+  assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NEW');
+  assert.equal(core.getSnapshot().endpoints.browser.last_handled_cursor, null);
+
+  // 尝试在 observation 中注入 last_handled_cursor
+  core.recordEndpointObservation('browser', {
+    conversation_id: 'conv-browser-alpha',
+    trusted: true,
+    last_handled_cursor: 'cursor-123'
+  });
+
+  // 核心守卫：last_handled_cursor 绝不被 observation 写入，NEW 依然完好无损！
+  assert.equal(core.getSnapshot().endpoints.browser.last_handled_cursor, null);
+  assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NEW');
+});
+
+test('[Regression 5] 空或不充分 observation 不能把初始 UNKNOWN 变成 NO_NEW_RESULT', () => {
+  const binding = createSampleBinding();
+  const core = createProjectStatusCore({ binding });
+
+  assert.equal(core.getSnapshot().endpoints.browser.result_state, 'UNKNOWN');
+
+  // 传入完全空的 observation
+  core.recordEndpointObservation('browser', {});
+  assert.equal(core.getSnapshot().endpoints.browser.result_state, 'UNKNOWN');
+
+  // 传入仅含 conversation_id 但缺少显式 trusted 证据的 observation
+  core.recordEndpointObservation('browser', {
+    conversation_id: 'conv-browser-alpha'
+  });
+  assert.equal(core.getSnapshot().endpoints.browser.result_state, 'UNKNOWN');
+  assert.match(core.getSnapshot().endpoints.browser.unknown_reason, /unverified_continuity/);
+});
+
+test('[Regression 6] 伪造的 convenience result_state 无法建立 trust 或达成 caught-up 状态', () => {
+  const binding = createSampleBinding();
+  const core = createProjectStatusCore({ binding });
+
+  // 仅传入 result_state: 'NO_NEW_RESULT'，未提供显式 trust
+  core.recordEndpointObservation('browser', {
+    result_state: 'NO_NEW_RESULT'
+  });
+
+  assert.equal(core.getSnapshot().endpoints.browser.result_state, 'UNKNOWN');
+
+  // 传入 conversation_id + result_state: 'NO_NEW_RESULT'，但依然没有 trusted 证据
+  core.recordEndpointObservation('browser', {
+    conversation_id: 'conv-browser-alpha',
+    result_state: 'NO_NEW_RESULT'
+  });
+
+  assert.equal(core.getSnapshot().endpoints.browser.result_state, 'UNKNOWN');
+});
+
+test('[Regression 7] 显式 trusted 且确实无未处理完成时正确派生 NO_NEW_RESULT', () => {
+  const binding = createSampleBinding();
+  const core = createProjectStatusCore({ binding });
+
+  // 明确提供 trusted: true，且无完成游标（无未处理完成）
+  core.recordEndpointObservation('browser', {
+    conversation_id: 'conv-browser-alpha',
+    trusted: true,
+    latest_completed_cursor: null
+  });
+
+  const snapshot = core.getSnapshot();
+  assert.equal(snapshot.endpoints.browser.result_state, 'NO_NEW_RESULT');
+  assert.equal(snapshot.endpoints.browser.continuity.trusted, true);
+  assert.equal(snapshot.endpoints.browser.unknown_reason, null);
 });
