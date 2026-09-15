@@ -1,0 +1,1219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PROTOTYPE — Comparative Status Surface (#10)</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --panel-border: #30363d;
+      --text: #c9d1d9;
+      --text-muted: #8b949e;
+      --text-heading: #f0f6fc;
+      --accent: #58a6ff;
+      --accent-badge: rgba(56, 139, 253, 0.15);
+      --new-badge: #238636;
+      --new-bg: rgba(46, 160, 67, 0.15);
+      --unknown-badge: #d29922;
+      --unknown-bg: rgba(210, 153, 34, 0.15);
+      --danger-badge: #f85149;
+      --danger-bg: rgba(248, 81, 73, 0.15);
+      --human-badge: #a371f7;
+      --human-bg: rgba(163, 113, 247, 0.15);
+      --btn-bg: #21262d;
+      --btn-border: #363b42;
+      --btn-hover: #30363d;
+      --disabled-bg: #161b22;
+      --disabled-border: #21262d;
+      --disabled-text: #484f58;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      padding-bottom: 90px;
+    }
+
+    header {
+      background: var(--panel);
+      border-bottom: 1px solid var(--panel-border);
+      padding: 14px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .proto-tag {
+      background: #da3633;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 12px;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      display: inline-block;
+      margin-right: 8px;
+    }
+
+    h1 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: var(--text-heading);
+      display: flex;
+      align-items: center;
+    }
+
+    .subtitle {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    .header-links {
+      font-size: 0.8rem;
+      display: flex;
+      gap: 16px;
+    }
+    .header-links a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    .header-links a:hover { text-decoration: underline; }
+
+    main {
+      max-width: 1300px;
+      margin: 20px auto;
+      padding: 0 20px;
+    }
+
+    /* Model Intro Banner */
+    .model-banner {
+      background: #1c2128;
+      border: 1px solid #444c56;
+      border-left: 4px solid var(--accent);
+      padding: 12px 18px;
+      border-radius: 6px;
+      margin-bottom: 20px;
+    }
+    .model-banner h2 {
+      font-size: 0.95rem;
+      color: var(--text-heading);
+      margin-bottom: 4px;
+    }
+    .model-banner p {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    /* Shared Mock Notification Toast */
+    #toast {
+      position: fixed;
+      top: 16px;
+      right: 20px;
+      background: #1f242c;
+      border: 1px solid var(--accent);
+      color: var(--text-heading);
+      padding: 10px 16px;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s, transform 0.2s;
+      transform: translateY(-8px);
+      z-index: 999;
+      max-width: 420px;
+    }
+    #toast.visible {
+      opacity: 1;
+      transform: translateY(0);
+      pointer-events: auto;
+    }
+
+    /* Badges */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 7px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      border-radius: 4px;
+      white-space: nowrap;
+    }
+    .badge-new { background: var(--new-bg); color: #3fb950; border: 1px solid rgba(63, 185, 80, 0.4); }
+    .badge-idle { background: #21262d; color: var(--text-muted); border: 1px solid var(--panel-border); }
+    .badge-unknown { background: var(--unknown-bg); color: #e3b341; border: 1px solid rgba(227, 179, 65, 0.4); }
+    .badge-blocked { background: var(--danger-bg); color: #f85149; border: 1px solid rgba(248, 81, 73, 0.4); }
+    .badge-human { background: var(--human-bg); color: #bc8cff; border: 1px solid rgba(188, 140, 255, 0.4); }
+    .badge-cursor { background: #161b22; color: #8b949e; font-family: monospace; font-size: 0.7rem; }
+
+    .btn {
+      background: var(--btn-bg);
+      border: 1px solid var(--btn-border);
+      color: var(--text);
+      padding: 4px 10px;
+      border-radius: 5px;
+      font-size: 0.75rem;
+      cursor: pointer;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .btn:hover:not(:disabled) {
+      background: var(--btn-hover);
+      border-color: #8b949e;
+      color: #fff;
+    }
+    .btn:disabled {
+      background: var(--disabled-bg);
+      border-color: var(--disabled-border);
+      color: var(--disabled-text);
+      cursor: not-allowed;
+    }
+    .btn-action {
+      background: #1f6feb;
+      border-color: #388bfd;
+      color: #fff;
+    }
+    .btn-action:hover:not(:disabled) {
+      background: #388bfd;
+    }
+
+    /* Common Card Styles */
+    .project-header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 6px;
+    }
+    .project-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text-heading);
+    }
+    .project-id {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      font-family: monospace;
+      margin-left: 8px;
+    }
+    .revision-tag {
+      font-size: 0.7rem;
+      color: #8b949e;
+      background: #21262d;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+    }
+
+    /* =========================================================
+       VARIANT A: Per-Endpoint Surface (Project-first Table/Grid)
+       ========================================================= */
+    .variant-a-table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .variant-a-table th {
+      background: #1c2128;
+      padding: 10px 14px;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--panel-border);
+      text-align: left;
+    }
+    .variant-a-table td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--panel-border);
+      vertical-align: top;
+      font-size: 0.82rem;
+    }
+    .variant-a-table tr:last-child td { border-bottom: none; }
+    .col-project { width: 24%; }
+    .col-endpoint { width: 32%; border-left: 1px solid rgba(48, 54, 61, 0.5); }
+    .col-actions { width: 12%; border-left: 1px solid rgba(48, 54, 61, 0.5); text-align: right; }
+
+    .ep-card {
+      background: #0d1117;
+      border: 1px solid var(--panel-border);
+      border-radius: 5px;
+      padding: 8px 10px;
+    }
+    .ep-card-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+    .ep-name { font-size: 0.78rem; font-weight: 600; color: #58a6ff; }
+    .ep-summary { font-size: 0.78rem; margin: 4px 0; color: var(--text); }
+    .ep-meta { font-size: 0.7rem; color: var(--text-muted); display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+    .blocked-reason {
+      font-size: 0.72rem;
+      color: #f85149;
+      background: rgba(248, 81, 73, 0.1);
+      padding: 3px 6px;
+      border-radius: 4px;
+      margin-top: 6px;
+      border: 1px solid rgba(248, 81, 73, 0.25);
+    }
+    .human-box {
+      font-size: 0.75rem;
+      color: #bc8cff;
+      background: rgba(163, 113, 247, 0.1);
+      padding: 6px 8px;
+      border-radius: 4px;
+      margin-top: 6px;
+      border: 1px solid rgba(163, 113, 247, 0.3);
+    }
+
+    /* =========================================================
+       VARIANT B: Explicit Handoff Tray (Queue-First + Source Truth)
+       ========================================================= */
+    .variant-b-container {
+      display: grid;
+      grid-template-columns: 360px 1fr;
+      gap: 20px;
+    }
+    @media (max-width: 960px) {
+      .variant-b-container { grid-template-columns: 1fr; }
+    }
+    .tray-panel {
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 6px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .tray-title {
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--text-heading);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--panel-border);
+      padding-bottom: 8px;
+    }
+    .tray-item {
+      background: #0d1117;
+      border: 1px solid var(--panel-border);
+      border-radius: 5px;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      position: relative;
+    }
+    .tray-item.has-attention {
+      border-left: 3px solid #3fb950;
+    }
+    .tray-item.has-human {
+      border-left: 3px solid #a371f7;
+    }
+    .tray-item.has-blocked {
+      border-left: 3px solid #f85149;
+    }
+    .tray-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+    .tray-body {
+      font-size: 0.78rem;
+      color: var(--text);
+    }
+    .tray-source-meta {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      border-top: 1px dashed var(--panel-border);
+      padding-top: 4px;
+      margin-top: 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .tray-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 4px;
+      justify-content: flex-end;
+    }
+
+    .b-projects-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .b-project-card {
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 6px;
+      padding: 14px 16px;
+    }
+    .b-project-endpoints {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 10px;
+    }
+    @media (max-width: 700px) {
+      .b-project-endpoints { grid-template-columns: 1fr; }
+    }
+
+    /* =========================================================
+       VARIANT C: Derived Baton (Card-First with Baton Hint)
+       ========================================================= */
+    .variant-c-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(560px, 1fr));
+      gap: 16px;
+    }
+    @media (max-width: 600px) {
+      .variant-c-grid { grid-template-columns: 1fr; }
+    }
+    .c-card {
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 6px;
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .c-baton-bar {
+      background: #1c2128;
+      border: 1px solid var(--panel-border);
+      border-radius: 4px;
+      padding: 8px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .c-baton-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .c-baton-value {
+      font-size: 0.8rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .c-endpoints-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .c-card-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-top: 1px solid var(--panel-border);
+      padding-top: 10px;
+      margin-top: 4px;
+    }
+
+    /* Fixed Floating Switcher at Bottom */
+    #switcher {
+      position: fixed;
+      bottom: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #161b22;
+      border: 1px solid #58a6ff;
+      border-radius: 30px;
+      padding: 6px 14px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+      z-index: 1000;
+    }
+    .switcher-btn {
+      background: #21262d;
+      border: 1px solid #30363d;
+      color: #c9d1d9;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 0.8rem;
+      transition: background 0.15s, color 0.15s;
+    }
+    .switcher-btn:hover {
+      background: #30363d;
+      color: #fff;
+    }
+    .switcher-current {
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: #f0f6fc;
+      white-space: nowrap;
+    }
+    .switcher-hint {
+      font-size: 0.68rem;
+      color: #8b949e;
+      border-left: 1px solid #30363d;
+      padding-left: 10px;
+    }
+
+    /* Evaluation criteria callout */
+    .eval-box {
+      margin-top: 24px;
+      background: #161b22;
+      border: 1px dashed #30363d;
+      border-radius: 6px;
+      padding: 12px 16px;
+      font-size: 0.78rem;
+      color: #8b949e;
+    }
+    .eval-box summary {
+      cursor: pointer;
+      font-weight: 600;
+      color: var(--text-heading);
+    }
+    .eval-box ul {
+      margin: 8px 0 0 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div>
+      <h1>
+        <span class="proto-tag">PROTOTYPE — NOT PRODUCTION</span>
+        Browser-IDE-Rally Status Surface Comparison (#10)
+      </h1>
+      <div class="subtitle">
+        One underlying shared truth snapshot &middot; #8 Safety Invariants Contract Verified
+      </div>
+    </div>
+    <div class="header-links">
+      <a href="https://github.com/carllx/browser-ide-rally/issues/10" target="_blank">Issue #10</a>
+      <a href="https://github.com/carllx/browser-ide-rally/issues/8" target="_blank">Issue #8 Contract</a>
+    </div>
+  </header>
+
+  <main>
+    <!-- Dynamic Model Description Banner -->
+    <div id="model-banner" class="model-banner"></div>
+
+    <!-- Variant Mount Point -->
+    <div id="app"></div>
+
+    <!-- Evaluation checklist dropdown for test-driving -->
+    <details class="eval-box">
+      <summary>🔍 Verification & Usability Criteria Checklist (Issue #10)</summary>
+      <ul>
+        <li><strong>Dual-new-result</strong>: Browser 与 IDE 同时有未处理新结果，绝不因单端覆盖而丢失。</li>
+        <li><strong>Unknown/unresolved</strong>: 连续性断裂/未知状态诚实显示为 UNKNOWN，不猜 Baton/Owner。</li>
+        <li><strong>Stale/Rebind Ambiguity</strong>: revision 冲突或 target 歧义时，明确禁用并展示 block 原因。</li>
+        <li><strong>Human Intervention</strong>: 用户决策门禁与一般完成结果在视觉上显著区分。</li>
+        <li><strong>Action Separation</strong>: 动作发起不等于送达，更不等于 target completed。</li>
+      </ul>
+    </details>
+  </main>
+
+  <!-- Notification Toast -->
+  <div id="toast"></div>
+
+  <!-- Fixed Floating Switcher -->
+  <div id="switcher">
+    <button class="switcher-btn" id="btn-prev" title="Previous variant (←)">&#9664;</button>
+    <div class="switcher-current" id="switcher-label">Variant A — Per-Endpoint Surface</div>
+    <button class="switcher-btn" id="btn-next" title="Next variant (→)">&#9654;</button>
+    <div class="switcher-hint">Use &larr; &rarr; keys</div>
+  </div>
+
+  <script>
+    /**
+     * Shared Canonical Truth Snapshot (Issue #8 Invariants)
+     * All 3 variants render EXACTLY this snapshot data to guarantee fair comparison.
+     */
+    const SNAPSHOT_DATA = [
+      {
+        id: "proj-sync-alpha",
+        name: "Sync Engine Alpha",
+        bindingRevision: 4,
+        scenario: "Dual-new-result",
+        scenarioDesc: "Browser 与 IDE 两端各自产生最新可靠完成结果，且均未被对端标记为 processed/relayed。",
+        humanGate: null,
+        targetResolution: { safe: true },
+        browser: {
+          endpointId: "browser-chatgpt-sess-901",
+          name: "Browser (ChatGPT Web)",
+          latestCompleted: "turn-bg-402",
+          lastProcessed: "turn-bg-401",
+          status: "NEW", // has new unprocessed result
+          summary: "分析并输出了双向状态机死锁解决方案草案 (turn #402)",
+          timestamp: "11:38:04",
+          adapterType: "chatgpt-web",
+          targetScope: "tab:session-901"
+        },
+        ide: {
+          endpointId: "ide-antigravity-conv-114",
+          name: "IDE (Antigravity)",
+          latestCompleted: "step-18",
+          lastProcessed: "step-17",
+          status: "NEW", // has new unprocessed result
+          summary: "单元测试套件全部执行通过，生成 coverage report (step #18)",
+          timestamp: "11:39:12",
+          adapterType: "antigravity-cli",
+          targetScope: "repo:browser-ide-rally/workspace"
+        }
+      },
+      {
+        id: "proj-auth-beacon",
+        name: "Auth Beacon Service",
+        bindingRevision: 2,
+        scenario: "Unknown/unresolved",
+        scenarioDesc: "Browser 端存在可靠新完成；IDE 端历史连续性无法验证，fail-closed 降级为 UNKNOWN，严禁伪造确定性。",
+        humanGate: null,
+        targetResolution: { safe: true },
+        browser: {
+          endpointId: "browser-claude-sess-205",
+          name: "Browser (Claude Web)",
+          latestCompleted: "turn-cw-88",
+          lastProcessed: "turn-cw-87",
+          status: "NEW",
+          summary: "完成 OAuth2 token 刷新边缘案例评估 (turn #88)",
+          timestamp: "11:35:10",
+          adapterType: "claude-web",
+          targetScope: "tab:session-205"
+        },
+        ide: {
+          endpointId: "ide-antigravity-conv-092",
+          name: "IDE (Antigravity)",
+          latestCompleted: null,
+          lastProcessed: "step-4",
+          status: "UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION",
+          summary: "连续性断开：IDE 进程重启后无法比对 cursor，等待下一次可观测完成",
+          timestamp: "—",
+          adapterType: "antigravity-cli",
+          targetScope: "repo:browser-ide-rally/auth"
+        }
+      },
+      {
+        id: "proj-data-pipeline",
+        name: "Data Pipeline Bridge",
+        bindingRevision: 7,
+        staleRevisionAttempted: 6,
+        scenario: "Stale/rebind/target-ambiguity",
+        scenarioDesc: "模拟 binding revision 过期且当前工作区存在多重匹配 target，只读可见，动作必须阻断。",
+        humanGate: null,
+        targetResolution: {
+          safe: false,
+          reason: "Target Ambiguity: 发现 2 个活跃 IDE 会话匹配此 binding (PID 4018 / 5921)；且 binding revision 7 > 请求 revision 6"
+        },
+        browser: {
+          endpointId: "browser-chatgpt-sess-411",
+          name: "Browser (ChatGPT Web)",
+          latestCompleted: "turn-bg-120",
+          lastProcessed: "turn-bg-120",
+          status: "IDLE",
+          summary: "上次提取的数据格式转换脚本已就绪",
+          timestamp: "11:20:00",
+          adapterType: "chatgpt-web",
+          targetScope: "tab:session-411"
+        },
+        ide: {
+          endpointId: "ide-cursor-sess-881",
+          name: "IDE (Cursor / Ambiguous)",
+          latestCompleted: "turn-cs-54",
+          lastProcessed: "turn-cs-53",
+          status: "NEW",
+          summary: "发现待交付变更集，但由于 target 冲突已被安全锁定",
+          timestamp: "11:36:45",
+          adapterType: "cursor-agent",
+          targetScope: "multi-match:[4018, 5921]"
+        }
+      },
+      {
+        id: "proj-release-cut",
+        name: "Release Cut v0.4",
+        bindingRevision: 3,
+        scenario: "Human Intervention",
+        scenarioDesc: "需要操作员进行关键人工确认（选择发布策略），独立于普通完成状态，具有高优先级门禁。",
+        humanGate: {
+          required: true,
+          gateType: "DECISION_REQUIRED",
+          prompt: "Browser 提议跳过破坏性迁移直接发布，IDE 提示存在未合并 schema PR。请人工仲裁发布策略。",
+          actions: ["批准跳过迁移", "暂停发布并合并 PR", "拒绝全部变更"]
+        },
+        targetResolution: { safe: true },
+        browser: {
+          endpointId: "browser-chatgpt-sess-733",
+          name: "Browser (ChatGPT Web)",
+          latestCompleted: "turn-bg-601",
+          lastProcessed: "turn-bg-601",
+          status: "IDLE",
+          summary: "已提交发布清单评审建议，等待操作员决策",
+          timestamp: "11:30:15",
+          adapterType: "chatgpt-web",
+          targetScope: "tab:session-733"
+        },
+        ide: {
+          endpointId: "ide-antigravity-conv-502",
+          name: "IDE (Antigravity)",
+          latestCompleted: "step-45",
+          lastProcessed: "step-44",
+          status: "NEW",
+          summary: "捕获到 schema migration 潜在冲突报告",
+          timestamp: "11:32:00",
+          adapterType: "antigravity-cli",
+          targetScope: "repo:browser-ide-rally/release"
+        }
+      }
+    ];
+
+    /**
+     * UI Variants Definitions
+     */
+    const VARIANTS = [
+      {
+        id: "A",
+        name: "Per-Endpoint Surface",
+        summary: "以项目为行基底、Browser 与 IDE 平行双列展开。两端状态独立显式展示，无综合主观所有权猜测。",
+        render: renderVariantA
+      },
+      {
+        id: "B",
+        name: "Explicit Handoff Tray",
+        summary: "以待办与交接队列（Queue/Tray）为第一视觉。左侧提取需关注的事项，右侧保留完整项目与端点真相以防信息遮蔽。",
+        render: renderVariantB
+      },
+      {
+        id: "C",
+        name: "Derived Baton",
+        summary: "卡片式项目流，卡片头部合成高阶 Baton/Attention 提示，但内部两端 Canonical Cursor 完整保留，两端皆有新结果时不丢不藏。",
+        render: renderVariantC
+      }
+    ];
+
+    let currentVariantId = "A";
+
+    function getVariant(id) {
+      return VARIANTS.find(v => v.id.toUpperCase() === id.toUpperCase()) || VARIANTS[0];
+    }
+
+    function showToast(msg) {
+      const toast = document.getElementById("toast");
+      toast.innerHTML = msg;
+      toast.classList.add("visible");
+      clearTimeout(toast._timer);
+      toast._timer = setTimeout(() => {
+        toast.classList.remove("visible");
+      }, 4000);
+    }
+
+    /**
+     * Action Handler simulating #8 safety contract
+     */
+    function triggerAction(actionName, projectId, targetName, isBlocked, blockReason) {
+      if (isBlocked) {
+        showToast(`<span style="color:#f85149;font-weight:bold;">[Action Blocked]</span> ${blockReason}`);
+        return;
+      }
+      // Honor #8: Action requested != delivered != completed
+      showToast(`<span style="color:#388bfd;font-weight:bold;">[Action Requested]</span> <strong>${actionName}</strong> on <em>${projectId}</em> (${targetName}).<br/><small style="color:#8b949e;">Prototype notice: Action requested; delivery not proven; target completion independent.</small>`);
+    }
+
+    function renderStatusBadge(status) {
+      if (status === "NEW") {
+        return `<span class="badge badge-new">&#x25CF; NEW RESULT</span>`;
+      }
+      if (status === "UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION") {
+        return `<span class="badge badge-unknown">&#x26A0; UNKNOWN (Wait Completion)</span>`;
+      }
+      if (status === "IDLE") {
+        return `<span class="badge badge-idle">IDLE / PROCESSED</span>`;
+      }
+      return `<span class="badge badge-idle">${status}</span>`;
+    }
+
+    /* =========================================================
+       VARIANT A RENDERER: Per-Endpoint Parallel Rows
+       ========================================================= */
+    function renderVariantA(container) {
+      let html = `
+        <table class="variant-a-table">
+          <thead>
+            <tr>
+              <th class="col-project">项目 / Binding Identity</th>
+              <th class="col-endpoint">Browser Endpoint (Web UI)</th>
+              <th class="col-endpoint">IDE Endpoint (Agentic CLI)</th>
+              <th class="col-actions">Safe Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+
+      SNAPSHOT_DATA.forEach(p => {
+        const isBlocked = !p.targetResolution.safe;
+        const blockReason = p.targetResolution.reason || "";
+
+        html += `
+          <tr>
+            <td class="col-project">
+              <div class="project-title">${p.name}</div>
+              <div style="margin-top:2px;">
+                <span class="project-id">${p.id}</span>
+                <span class="revision-tag">rev:${p.bindingRevision}</span>
+              </div>
+              <div style="font-size:0.72rem;color:var(--text-muted);margin-top:8px;">
+                <strong>Scenario:</strong> ${p.scenario}
+                <p style="margin-top:2px;font-size:0.7rem;color:#7d8590;">${p.scenarioDesc}</p>
+              </div>
+              ${p.humanGate ? `
+                <div class="human-box">
+                  <strong>&#x1F6A8; Human Intervention:</strong><br/>
+                  ${p.humanGate.prompt}
+                  <div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap;">
+                    ${p.humanGate.actions.map(act => `
+                      <button class="btn btn-action" style="font-size:0.68rem;padding:2px 6px;" onclick="triggerAction('${act}', '${p.id}', 'HumanGate', false, '')">${act}</button>
+                    `).join('')}
+                  </div>
+                </div>
+              ` : ''}
+              ${isBlocked ? `
+                <div class="blocked-reason">
+                  <strong>&#x26D4; Safety Interlock:</strong><br/>
+                  ${blockReason}
+                </div>
+              ` : ''}
+            </td>
+
+            <!-- Browser Endpoint -->
+            <td class="col-endpoint">
+              <div class="ep-card">
+                <div class="ep-card-head">
+                  <span class="ep-name">${p.browser.name}</span>
+                  ${renderStatusBadge(p.browser.status)}
+                </div>
+                <div class="ep-summary">${p.browser.summary}</div>
+                <div class="ep-meta">
+                  <span class="badge-cursor">latest: ${p.browser.latestCompleted || 'none'}</span>
+                  <span class="badge-cursor">last-proc: ${p.browser.lastProcessed}</span>
+                  <span style="color:#7d8590;">time: ${p.browser.timestamp}</span>
+                </div>
+                <div style="margin-top:6px;display:flex;gap:4px;">
+                  <button class="btn" ${isBlocked ? 'disabled' : ''} onclick="triggerAction('Focus/Open Browser Tab', '${p.id}', 'Browser', ${isBlocked}, '${blockReason}')">Focus Tab</button>
+                  <button class="btn ${p.browser.status === 'NEW' ? 'btn-action' : ''}" ${isBlocked ? 'disabled' : ''} onclick="triggerAction('Handoff Browser Result to IDE', '${p.id}', 'Browser->IDE', ${isBlocked}, '${blockReason}')">Handoff &rarr; IDE</button>
+                </div>
+              </div>
+            </td>
+
+            <!-- IDE Endpoint -->
+            <td class="col-endpoint">
+              <div class="ep-card">
+                <div class="ep-card-head">
+                  <span class="ep-name">${p.ide.name}</span>
+                  ${renderStatusBadge(p.ide.status)}
+                </div>
+                <div class="ep-summary">${p.ide.summary}</div>
+                <div class="ep-meta">
+                  <span class="badge-cursor">latest: ${p.ide.latestCompleted || 'none'}</span>
+                  <span class="badge-cursor">last-proc: ${p.ide.lastProcessed}</span>
+                  <span style="color:#7d8590;">time: ${p.ide.timestamp}</span>
+                </div>
+                <div style="margin-top:6px;display:flex;gap:4px;">
+                  <button class="btn" ${isBlocked ? 'disabled' : ''} onclick="triggerAction('Open IDE Session', '${p.id}', 'IDE', ${isBlocked}, '${blockReason}')">Open IDE</button>
+                  <button class="btn ${p.ide.status === 'NEW' ? 'btn-action' : ''}" ${isBlocked ? 'disabled' : ''} onclick="triggerAction('Handoff IDE Result to Browser', '${p.id}', 'IDE->Browser', ${isBlocked}, '${blockReason}')">Handoff &rarr; Browser</button>
+                </div>
+              </div>
+            </td>
+
+            <!-- Safe Action Column -->
+            <td class="col-actions">
+              <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;">
+                <button class="btn" ${isBlocked ? 'disabled' : ''} onclick="triggerAction('Sync Cursors', '${p.id}', 'Project', ${isBlocked}, '${blockReason}')">Sync Cursors</button>
+                <button class="btn" ${isBlocked ? 'disabled' : ''} onclick="triggerAction('Verify Binding', '${p.id}', 'Project', ${isBlocked}, '${blockReason}')">Verify Target</button>
+              </div>
+            </td>
+          </tr>
+        `;
+      });
+
+      html += `</tbody></table>`;
+      container.innerHTML = html;
+    }
+
+    /* =========================================================
+       VARIANT B RENDERER: Explicit Handoff Tray (Queue-First)
+       ========================================================= */
+    function renderVariantB(container) {
+      // Build attention queue items from projects
+      let trayItemsHtml = '';
+      SNAPSHOT_DATA.forEach(p => {
+        const isBlocked = !p.targetResolution.safe;
+        const blockReason = p.targetResolution.reason || "";
+
+        // Check if project has Human Gate
+        if (p.humanGate) {
+          trayItemsHtml += `
+            <div class="tray-item has-human">
+              <div class="tray-header">
+                <div>
+                  <span class="badge badge-human">HUMAN GATE</span>
+                  <strong style="font-size:0.8rem;margin-left:4px;color:var(--text-heading);">${p.name}</strong>
+                </div>
+                <span class="revision-tag">rev:${p.bindingRevision}</span>
+              </div>
+              <div class="tray-body">${p.humanGate.prompt}</div>
+              <div class="tray-actions">
+                ${p.humanGate.actions.map(act => `
+                  <button class="btn btn-action" style="font-size:0.68rem;" onclick="triggerAction('${act}', '${p.id}', 'HumanGate', false, '')">${act}</button>
+                `).join('')}
+              </div>
+            </div>
+          `;
+        }
+
+        // Check for Blocked / Target Ambiguity
+        if (isBlocked) {
+          trayItemsHtml += `
+            <div class="tray-item has-blocked">
+              <div class="tray-header">
+                <div>
+                  <span class="badge badge-blocked">BLOCKED ACTION</span>
+                  <strong style="font-size:0.8rem;margin-left:4px;color:var(--text-heading);">${p.name}</strong>
+                </div>
+                <span class="revision-tag">rev:${p.bindingRevision}</span>
+              </div>
+              <div class="tray-body" style="color:#f85149;font-size:0.75rem;">${blockReason}</div>
+              <div class="tray-actions">
+                <button class="btn" disabled>Handoff Disabled</button>
+              </div>
+            </div>
+          `;
+        }
+
+        // Check for Browser NEW
+        if (p.browser.status === "NEW") {
+          trayItemsHtml += `
+            <div class="tray-item has-attention">
+              <div class="tray-header">
+                <div>
+                  <span class="badge badge-new">BROWSER NEW</span>
+                  <strong style="font-size:0.8rem;margin-left:4px;color:var(--text-heading);">${p.name}</strong>
+                </div>
+                <span class="revision-tag">rev:${p.bindingRevision}</span>
+              </div>
+              <div class="tray-body">${p.browser.summary}</div>
+              <div class="tray-source-meta">
+                <span>From: ${p.browser.name} (${p.browser.latestCompleted})</span>
+                <span>To Target: ${p.ide.name}</span>
+              </div>
+              <div class="tray-actions">
+                <button class="btn btn-action" ${isBlocked ? 'disabled' : ''} onclick="triggerAction('Dispatch Browser Result to IDE', '${p.id}', 'TrayHandoff', ${isBlocked}, '${blockReason}')">Dispatch to IDE &rarr;</button>
+              </div>
+            </div>
+          `;
+        }
+
+        // Check for IDE NEW
+        if (p.ide.status === "NEW") {
+          trayItemsHtml += `
+            <div class="tray-item has-attention">
+              <div class="tray-header">
+                <div>
+                  <span class="badge badge-new">IDE NEW</span>
+                  <strong style="font-size:0.8rem;margin-left:4px;color:var(--text-heading);">${p.name}</strong>
+                </div>
+                <span class="revision-tag">rev:${p.bindingRevision}</span>
+              </div>
+              <div class="tray-body">${p.ide.summary}</div>
+              <div class="tray-source-meta">
+                <span>From: ${p.ide.name} (${p.ide.latestCompleted})</span>
+                <span>To Target: ${p.browser.name}</span>
+              </div>
+              <div class="tray-actions">
+                <button class="btn btn-action" ${isBlocked ? 'disabled' : ''} onclick="triggerAction('Dispatch IDE Result to Browser', '${p.id}', 'TrayHandoff', ${isBlocked}, '${blockReason}')">Dispatch to Browser &rarr;</button>
+              </div>
+            </div>
+          `;
+        }
+      });
+
+      // Projects canonical truth list on the right
+      let projectsHtml = '';
+      SNAPSHOT_DATA.forEach(p => {
+        projectsHtml += `
+          <div class="b-project-card">
+            <div class="project-header-row">
+              <div>
+                <span class="project-title">${p.name}</span>
+                <span class="project-id">${p.id}</span>
+              </div>
+              <span class="revision-tag">rev:${p.bindingRevision}</span>
+            </div>
+            <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:8px;">
+              <strong>Scenario:</strong> ${p.scenario} &middot; ${p.scenarioDesc}
+            </div>
+
+            <div class="b-project-endpoints">
+              <div class="ep-card">
+                <div class="ep-card-head">
+                  <span class="ep-name">${p.browser.name}</span>
+                  ${renderStatusBadge(p.browser.status)}
+                </div>
+                <div class="ep-summary">${p.browser.summary}</div>
+                <div class="ep-meta">
+                  <span class="badge-cursor">latest: ${p.browser.latestCompleted || 'none'}</span>
+                  <span class="badge-cursor">last-proc: ${p.browser.lastProcessed}</span>
+                </div>
+              </div>
+
+              <div class="ep-card">
+                <div class="ep-card-head">
+                  <span class="ep-name">${p.ide.name}</span>
+                  ${renderStatusBadge(p.ide.status)}
+                </div>
+                <div class="ep-summary">${p.ide.summary}</div>
+                <div class="ep-meta">
+                  <span class="badge-cursor">latest: ${p.ide.latestCompleted || 'none'}</span>
+                  <span class="badge-cursor">last-proc: ${p.ide.lastProcessed}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+      });
+
+      container.innerHTML = `
+        <div class="variant-b-container">
+          <!-- Left Column: Explicit Handoff Tray -->
+          <div class="tray-panel">
+            <div class="tray-title">
+              <span>&#x1F4EC; Explicit Handoff Tray</span>
+              <span class="badge badge-new">Pending Items</span>
+            </div>
+            <div style="font-size:0.72rem;color:var(--text-muted);">
+              将两端所有产生的待处理结果、决策门禁和阻断事项聚合为显式工作盘，支持快速调度。
+            </div>
+            <div style="display:flex;flex-direction:column;gap:10px;">
+              ${trayItemsHtml}
+            </div>
+          </div>
+
+          <!-- Right Column: Projects Baseline Canonical Source -->
+          <div class="b-projects-list">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;">
+              <h3 style="font-size:0.9rem;color:var(--text-heading);">Canonical Endpoint Truth by Project</h3>
+              <span style="font-size:0.75rem;color:var(--text-muted);">Tray items link directly to these endpoints</span>
+            </div>
+            ${projectsHtml}
+          </div>
+        </div>
+      `;
+    }
+
+    /* =========================================================
+       VARIANT C RENDERER: Derived Baton (Card-First with Baton Hint)
+       ========================================================= */
+    function renderVariantC(container) {
+      let html = `<div class="variant-c-grid">`;
+
+      SNAPSHOT_DATA.forEach(p => {
+        const isBlocked = !p.targetResolution.safe;
+        const blockReason = p.targetResolution.reason || "";
+
+        // Derive Baton Hint safely without destroying underlying truth
+        let batonBadge = '';
+        let batonDesc = '';
+
+        if (p.humanGate) {
+          batonBadge = `<span class="badge badge-human">&#x1F6A8; BATON: HUMAN ATTENTION</span>`;
+          batonDesc = '需要人工仲裁，两端动作暂停。';
+        } else if (isBlocked) {
+          batonBadge = `<span class="badge badge-blocked">&#x26D4; BATON: INTERLOCK BLOCKED</span>`;
+          batonDesc = 'Target 歧义或 revision 失效，禁用自动化传递。';
+        } else if (p.browser.status === "NEW" && p.ide.status === "NEW") {
+          batonBadge = `<span class="badge badge-new" style="background:rgba(88,166,255,0.2);color:#58a6ff;border-color:#58a6ff;">&#x21C6; DUAL BATON (CONCURRENT NEW)</span>`;
+          batonDesc = '两端同时产生新结果！两端均保有独立交接权，不得推断单一持有者。';
+        } else if (p.browser.status === "NEW") {
+          batonBadge = `<span class="badge badge-new">&#x2192; BATON: BROWSER LEADING</span>`;
+          batonDesc = 'Browser 具有最新未同步结果，等待流转至 IDE。';
+        } else if (p.ide.status === "NEW") {
+          batonBadge = `<span class="badge badge-new">&#x2192; BATON: IDE LEADING</span>`;
+          batonDesc = 'IDE 具有最新未同步结果，等待流转至 Browser。';
+        } else if (p.browser.status === "UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION" || p.ide.status === "UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION") {
+          batonBadge = `<span class="badge badge-unknown">&#x26A0; BATON: UNCERTAIN (FAIL-CLOSED)</span>`;
+          batonDesc = '一端连续性未知，严禁猜测主权归属。';
+        } else {
+          batonBadge = `<span class="badge badge-idle">&#x2714; BATON: QUIESCENT / IDLE</span>`;
+          batonDesc = '两端均处于已同步或空闲状态。';
+        }
+
+        html += `
+          <div class="c-card">
+            <!-- Project Header -->
+            <div class="project-header-row">
+              <div>
+                <span class="project-title">${p.name}</span>
+                <span class="project-id">${p.id}</span>
+              </div>
+              <span class="revision-tag">rev:${p.bindingRevision}</span>
+            </div>
+
+            <!-- Derived Baton Hint Bar -->
+            <div class="c-baton-bar">
+              <div>
+                <div class="c-baton-label">Derived Baton Hint</div>
+                <div style="font-size:0.75rem;color:var(--text);margin-top:2px;">${batonDesc}</div>
+              </div>
+              <div>${batonBadge}</div>
+            </div>
+
+            <!-- Endpoint Detail Columns -->
+            <div class="c-endpoints-grid">
+              <div class="ep-card">
+                <div class="ep-card-head">
+                  <span class="ep-name">${p.browser.name}</span>
+                  ${renderStatusBadge(p.browser.status)}
+                </div>
+                <div class="ep-summary">${p.browser.summary}</div>
+                <div class="ep-meta">
+                  <span class="badge-cursor">lat: ${p.browser.latestCompleted || 'none'}</span>
+                  <span class="badge-cursor">proc: ${p.browser.lastProcessed}</span>
+                </div>
+              </div>
+
+              <div class="ep-card">
+                <div class="ep-card-head">
+                  <span class="ep-name">${p.ide.name}</span>
+                  ${renderStatusBadge(p.ide.status)}
+                </div>
+                <div class="ep-summary">${p.ide.summary}</div>
+                <div class="ep-meta">
+                  <span class="badge-cursor">lat: ${p.ide.latestCompleted || 'none'}</span>
+                  <span class="badge-cursor">proc: ${p.ide.lastProcessed}</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Human / Blocked Warnings -->
+            ${p.humanGate ? `
+              <div class="human-box">
+                <strong>&#x1F6A8; Human Gate Required:</strong> ${p.humanGate.prompt}
+                <div style="margin-top:6px;display:flex;gap:6px;">
+                  ${p.humanGate.actions.map(act => `
+                    <button class="btn btn-action" style="font-size:0.68rem;" onclick="triggerAction('${act}', '${p.id}', 'HumanGate', false, '')">${act}</button>
+                  `).join('')}
+                </div>
+              </div>
+            ` : ''}
+
+            ${isBlocked ? `
+              <div class="blocked-reason">
+                <strong>&#x26D4; Safety Interlock Blocked:</strong> ${blockReason}
+              </div>
+            ` : ''}
+
+            <!-- Card Actions -->
+            <div class="c-card-footer">
+              <span style="font-size:0.7rem;color:var(--text-muted);">Scenario: ${p.scenario}</span>
+              <div style="display:flex;gap:6px;">
+                <button class="btn" ${isBlocked ? 'disabled' : ''} onclick="triggerAction('Focus Primary Target', '${p.id}', 'CardAction', ${isBlocked}, '${blockReason}')">Focus Active</button>
+                <button class="btn btn-action" ${isBlocked ? 'disabled' : ''} onclick="triggerAction('Advance Project Flow', '${p.id}', 'CardAction', ${isBlocked}, '${blockReason}')">Advance Flow &rarr;</button>
+              </div>
+            </div>
+          </div>
+        `;
+      });
+
+      html += `</div>`;
+      container.innerHTML = html;
+    }
+
+    /* =========================================================
+       SWITCHER & ROUTER LOGIC
+       ========================================================= */
+    function renderApp() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const variantParam = urlParams.get('variant') || 'A';
+      const variant = getVariant(variantParam);
+      currentVariantId = variant.id;
+
+      // Update banner
+      const banner = document.getElementById('model-banner');
+      banner.innerHTML = `
+        <h2>Model ${variant.id} — ${variant.name}</h2>
+        <p>${variant.summary}</p>
+      `;
+
+      // Update switcher label
+      document.getElementById('switcher-label').textContent = `Model ${variant.id} — ${variant.name}`;
+
+      // Render content
+      const appContainer = document.getElementById('app');
+      variant.render(appContainer);
+    }
+
+    function setVariant(newId) {
+      const currentUrl = new URL(window.location.href);
+      currentUrl.searchParams.set('variant', newId);
+      window.history.replaceState({}, '', currentUrl.toString());
+      renderApp();
+    }
+
+    function cycleVariant(direction) {
+      let idx = VARIANTS.findIndex(v => v.id === currentVariantId);
+      if (idx === -1) idx = 0;
+      let nextIdx = (idx + direction + VARIANTS.length) % VARIANTS.length;
+      setVariant(VARIANTS[nextIdx].id);
+    }
+
+    // Event listeners
+    document.getElementById('btn-prev').addEventListener('click', () => cycleVariant(-1));
+    document.getElementById('btn-next').addEventListener('click', () => cycleVariant(1));
+
+    window.addEventListener('keydown', (e) => {
+      // Don't intercept arrow keys if typing in an input
+      const tag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
+      if (tag === 'input' || tag === 'textarea' || document.activeElement.isContentEditable) {
+        return;
+      }
+      if (e.key === 'ArrowLeft') {
+        cycleVariant(-1);
+      } else if (e.key === 'ArrowRight') {
+        cycleVariant(1);
+      }
+    });
+
+    // Initial render
+    renderApp();
+  </script>
+</body>
+</html>
