@@ -6,15 +6,16 @@
  * 2. 连续性信任显式化：连续性信任必须显式提供，无明确信任证据时 fail-closed 到 UNKNOWN，绝不因“无错误”默认信任；未受信观察绝不污染规范游标；
  * 3. 观察与处理严格分离：recordEndpointObservation 只能更新 completion/continuity 事实，绝不接受或推进 last_handled_cursor；
  * 4. 显式推进防静默抹除：last_handled_cursor 仅由显式 markEndpointHandled() 推进至可靠 latest completed cursor，且强制比对 expected_cursor，旧/不匹配/缺失 cursor 绝不能清除当前 NEW；
- * 5. 身份守卫：禁止跨会话不安全 rebind，防止旧会话事实被带入新会话（真正的 reconciliation rebind 归属 #14）；
- * 6. 宿主独立、Relay 可选：不依赖任何 Relay Exchange 即可独立运作；
- * 7. 端点独立：Browser 与 IDE 的 Endpoint Result 独立更新，支持 Dual NEW 共存；
- * 8. 确定性三态：Endpoint Result 确定性地仅推导为 NEW、NO_NEW_RESULT 或 UNKNOWN，严禁使用 IDLE；
- * 9. 事实解耦：Action 事实与 Human Intervention 事实与 Endpoint Result 独立并存，绝不相互篡改；
- * 10. 无唯一所有者：不持久化、不推断 Baton、owner 或“轮到谁”。
+ * 5. 安全重绑与替换守卫 (#14)：通过 rebindEndpoint() 显式重绑，严格拦截未处理 NEW 结果的静默丢弃；新端点连续性重置为 UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION；未变端点事实完整保留；
+ * 6. 受信任反序列化 (#14)：专有受信 hydration 缝隙，与 live observation 彻底解耦，安全恢复持久化 handled 游标；
+ * 7. 宿主独立、Relay 可选：不依赖任何 Relay Exchange 即可独立运作；
+ * 8. 端点独立：Browser 与 IDE 的 Endpoint Result 独立更新，支持 Dual NEW 共存；
+ * 9. 确定性三态：Endpoint Result 确定性地仅推导为 NEW、NO_NEW_RESULT 或 UNKNOWN，严禁使用 IDLE；
+ * 10. 事实解耦：Action 事实与 Human Intervention 事实与 Endpoint Result 独立并存，绝不相互篡改；
+ * 11. 无唯一所有者：不持久化、不推断 Baton、owner 或“轮到谁”。
  */
 
-import { validateBinding } from '../controller/binding.js';
+import { validateBinding, bumpRevision } from '../controller/binding.js';
 import { formatStatusSnapshot, formatCompactStatus } from './status-view.js';
 
 export const ALLOWED_ENDPOINTS = ['browser', 'ide'];
@@ -56,18 +57,20 @@ export function deriveEndpointResult(endpointFact) {
  * 创建 Project Status Core 实例
  * @param {object} params
  * @param {object} params.binding - Project Binding 对象
+ * @param {object} [params.initial_endpoints] - 受信持久化恢复事实
  * @returns {ProjectStatusCore}
  */
-export function createProjectStatusCore({ binding }) {
-  return new ProjectStatusCore({ binding });
+export function createProjectStatusCore({ binding, initial_endpoints = null }) {
+  return new ProjectStatusCore({ binding, initial_endpoints });
 }
 
 export class ProjectStatusCore {
   /**
    * @param {object} options
    * @param {object} options.binding - Project Binding 实例
+   * @param {object} [options.initial_endpoints] - 受信持久化恢复事实
    */
-  constructor({ binding }) {
+  constructor({ binding, initial_endpoints = null }) {
     const validation = validateBinding(binding);
     if (!validation.valid) {
       throw new Error(`Invalid Binding for Status Core: ${validation.errors.join('; ')}`);
@@ -102,6 +105,10 @@ export class ProjectStatusCore {
       }
     };
 
+    if (initial_endpoints) {
+      this.hydrateEndpoints(initial_endpoints);
+    }
+
     // 人工介入状态（独立于端点完成与动作事实）
     this._humanIntervention = {
       active: false,
@@ -114,6 +121,57 @@ export class ProjectStatusCore {
   }
 
   /**
+   * 受信反序列化/恢复端点状态专用缝隙 (#14)
+   * 专供 Registry/持久化层恢复持久化端点事实，与 live observation 彻底解耦
+   * @param {object} endpointsFactMap 
+   */
+  hydrateEndpoints(endpointsFactMap) {
+    if (!endpointsFactMap || typeof endpointsFactMap !== 'object') {
+      return;
+    }
+
+    for (const ep of ALLOWED_ENDPOINTS) {
+      const fact = endpointsFactMap[ep];
+      if (fact) {
+        this._endpoints[ep] = {
+          endpoint: ep,
+          latest_completed_cursor: fact.latest_completed_cursor ?? null,
+          last_handled_cursor: fact.last_handled_cursor ?? null,
+          completed_at: fact.completed_at ?? null,
+          continuity: {
+            trusted: Boolean(fact.continuity?.trusted),
+            unknown_reason: fact.continuity?.unknown_reason ?? null
+          },
+          updated_at: fact.updated_at || this._updatedAt
+        };
+      }
+    }
+  }
+
+  /**
+   * 导出内部规范持久化状态
+   * @returns {object}
+   */
+  exportState() {
+    return {
+      binding: { ...this._binding },
+      endpoints: {
+        browser: {
+          ...this._endpoints.browser,
+          continuity: { ...this._endpoints.browser.continuity }
+        },
+        ide: {
+          ...this._endpoints.ide,
+          continuity: { ...this._endpoints.ide.continuity }
+        }
+      },
+      human_intervention: { ...this._humanIntervention },
+      actions: this._actions.map(a => ({ ...a })),
+      updated_at: this._updatedAt
+    };
+  }
+
+  /**
    * 获取当前绑定的快照副本
    */
   getBinding() {
@@ -122,7 +180,7 @@ export class ProjectStatusCore {
 
   /**
    * 更新当前 Binding（仅限保持身份的更新，如 revision bump 或 paused 切换）
-   * 严格禁止跨 conversation 的不安全 rebind（防止旧端点结果被误带入新会话）
+   * 严格禁止通过本方法跨 conversation 不安全 rebind
    * @param {object} nextBinding 
    */
   updateBinding(nextBinding) {
@@ -135,7 +193,7 @@ export class ProjectStatusCore {
       throw new Error(`Cannot change binding_id from "${this._binding.binding_id}" to "${nextBinding.binding_id}".`);
     }
 
-    // 身份守卫：端点身份变更属于 #14 reconciliation rebind，在此直接拦截
+    // 身份守卫：端点身份变更属于 #14 safe rebind，必须调用 rebindEndpoint()
     const browserChanged =
       nextBinding.browser.provider !== this._binding.browser.provider ||
       nextBinding.browser.conversation_id !== this._binding.browser.conversation_id;
@@ -147,12 +205,95 @@ export class ProjectStatusCore {
 
     if (browserChanged || ideChanged) {
       throw new Error(
-        'Identity-changing rebind is prohibited in Status Core (#13); cross-conversation reconciliation belongs to #14.'
+        'Identity-changing rebind is prohibited in Status Core; use rebindEndpoint() for safe rebind (#14).'
       );
     }
 
     this._binding = { ...nextBinding };
     this._updatedAt = new Date().toISOString();
+  }
+
+  /**
+   * 安全端点重绑 (Safe Endpoint Rebind, #14)
+   *
+   * 规范契约 (Spec Invariants):
+   * 1. 保持 Project Binding 身份不变，版本号递增 (binding_revision += 1)；
+   * 2. 单次仅重绑一个端点（Browser 或 IDE），未替换端点的事实完全保持不变；
+   * 3. 未处理 NEW 替换守卫：若被替换端点当前存在未处理 NEW，默认拒绝替换；除非显式传 allow_discard_unhandled: true；
+   * 4. 显式丢弃未处理 NEW 时，绝不伪造 mark handled；
+   * 5. 新绑定的端点连续性事实尚未确立，初始进入 UNKNOWN 状态，原因明确为 UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION。
+   *
+   * @param {object} params
+   * @param {'browser' | 'ide'} params.endpoint - 待重绑的端点
+   * @param {object} params.identity - 新端点身份信息
+   * @param {boolean} [params.allow_discard_unhandled=false] - 是否显式确认丢弃未处理 NEW
+   * @returns {object} 更新后的项目快照
+   */
+  rebindEndpoint({ endpoint, identity, allow_discard_unhandled = false }) {
+    if (!ALLOWED_ENDPOINTS.includes(endpoint)) {
+      throw new Error(`Invalid endpoint "${endpoint}". Must be 'browser' or 'ide'.`);
+    }
+
+    if (!identity || typeof identity !== 'object') {
+      throw new Error('New endpoint identity must be a valid object');
+    }
+
+    // 1. 未处理 NEW 替换守卫 (Unhandled NEW Replacement Guard)
+    const currentTargetFact = this._endpoints[endpoint];
+    const currentDerivedState = deriveEndpointResult(currentTargetFact);
+
+    if (currentDerivedState === 'NEW' && !allow_discard_unhandled) {
+      throw new Error(
+        `Cannot replace ${endpoint} endpoint with unhandled NEW result without explicit confirmation (allow_discard_unhandled: true).`
+      );
+    }
+
+    const now = new Date().toISOString();
+
+    // 2. 递增 binding_revision 并更新指定端点的身份
+    const nextBinding = bumpRevision(this._binding);
+    if (endpoint === 'browser') {
+      if (!identity.conversation_id || typeof identity.conversation_id !== 'string') {
+        throw new Error('New browser identity requires valid conversation_id');
+      }
+      nextBinding.browser = {
+        provider: identity.provider || this._binding.browser?.provider || 'chatgpt',
+        conversation_id: identity.conversation_id
+      };
+    } else {
+      if (!identity.conversation_id || !identity.workspace_identity || !identity.repository_identity) {
+        throw new Error('New ide identity requires conversation_id, workspace_identity, and repository_identity');
+      }
+      nextBinding.ide = {
+        conversation_id: identity.conversation_id,
+        workspace_identity: identity.workspace_identity,
+        repository_identity: identity.repository_identity
+      };
+    }
+
+    const validation = validateBinding(nextBinding);
+    if (!validation.valid) {
+      throw new Error(`Invalid Rebind configuration: ${validation.errors.join('; ')}`);
+    }
+
+    this._binding = nextBinding;
+
+    // 3. 重置被重绑端点的规范事实为 UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION
+    // 未被重绑的另一个端点完全保持原状！
+    this._endpoints[endpoint] = {
+      endpoint,
+      latest_completed_cursor: null,
+      last_handled_cursor: null,
+      completed_at: null,
+      continuity: {
+        trusted: false,
+        unknown_reason: 'UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION'
+      },
+      updated_at: now
+    };
+
+    this._updatedAt = now;
+    return this.getSnapshot();
   }
 
   /**
