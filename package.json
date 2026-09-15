@@ -1,0 +1,14 @@
+{
+  "name": "browser-ide-rally",
+  "version": "0.3.0",
+  "description": "Rally Status Core and Browser/IDE collaboration companion",
+  "type": "module",
+  "scripts": {
+    "test": "node scripts/run-tests.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/carllx/browser-ide-rally.git"
+  },
+  "license": "MIT"
+}
