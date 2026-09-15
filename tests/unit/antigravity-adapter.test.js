@@ -102,27 +102,45 @@ test('[IDE Adapter] 1. exact conversation + workspace + repository identity matc
     assert.equal(snap1.endpoints.ide.result_state, 'UNKNOWN');
     assert.match(snap1.endpoints.ide.continuity.unknown_reason, /workspace_mismatch/);
 
-    // 1c. repository identity 不匹配：fail-closed 到 UNKNOWN
-    const bindingMismatchRepo = makeSampleBinding('proj-repo-mismatch', {
+    // 1c. repository identity 严格规范匹配：必须匹配真正的 Git remote canonical owner/repo
+    // 反例 1: 相同仓库名但不同 owner (fork/other-org) 必须 fail closed 到 UNKNOWN
+    const bindingOtherOwner = makeSampleBinding('proj-other-owner', {
       ide: {
         conversation_id: 'conv-ag-001',
         workspace_identity: '/Users/yamlam/Documents/GitHub/browser-ide-rally',
-        repository_identity: 'different-org/unrelated-repo'
+        repository_identity: 'other-owner/browser-ide-rally'
       }
     });
-    const adapterMismatchRepo = new AntigravityIdeAdapter({ binding: bindingMismatchRepo, statusCore: core });
-    const resWrongRepo = adapterMismatchRepo.handleStopHook({
+    const adapterOtherOwner = new AntigravityIdeAdapter({ binding: bindingOtherOwner, statusCore: core });
+    const resWrongOwner = adapterOtherOwner.handleStopHook({
       conversationId: 'conv-ag-001',
       workspacePaths: ['/Users/yamlam/Documents/GitHub/browser-ide-rally'],
       fullyIdle: true,
       terminationReason: 'NO_TOOL_CALL',
       transcriptPath: transcriptFile
     });
-    assert.equal(resWrongRepo.accepted, false);
-    assert.match(resWrongRepo.reason, /repository_mismatch/);
-    const snapRepo = core.getSnapshot();
-    assert.equal(snapRepo.endpoints.ide.result_state, 'UNKNOWN');
-    assert.match(snapRepo.endpoints.ide.continuity.unknown_reason, /repository_mismatch/);
+    assert.equal(resWrongOwner.accepted, false);
+    assert.match(resWrongOwner.reason, /repository_mismatch/);
+    assert.equal(core.getSnapshot().endpoints.ide.result_state, 'UNKNOWN');
+
+    // 反例 2: 仅为 remote URL 的部分子串 (例如仅 carllx 或仅 rally) 必须 fail closed
+    const bindingSubstr = makeSampleBinding('proj-substr', {
+      ide: {
+        conversation_id: 'conv-ag-001',
+        workspace_identity: '/Users/yamlam/Documents/GitHub/browser-ide-rally',
+        repository_identity: 'carllx'
+      }
+    });
+    const adapterSubstr = new AntigravityIdeAdapter({ binding: bindingSubstr, statusCore: core });
+    const resSubstr = adapterSubstr.handleStopHook({
+      conversationId: 'conv-ag-001',
+      workspacePaths: ['/Users/yamlam/Documents/GitHub/browser-ide-rally'],
+      fullyIdle: true,
+      terminationReason: 'NO_TOOL_CALL',
+      transcriptPath: transcriptFile
+    });
+    assert.equal(resSubstr.accepted, false);
+    assert.match(resSubstr.reason, /repository_mismatch/);
   } finally {
     cleanup();
   }
@@ -161,7 +179,8 @@ test('[IDE Adapter] 2. non-final / intermediate activity does not commit complet
     assert.match(resIntermediate.reason, /intermediate_activity/);
     assert.equal(core.getSnapshot().endpoints.ide.result_state, 'NO_NEW_RESULT');
 
-    // 2b. 非终止 reason (例如空或未知非最终原因)
+    // 2b. 未验证 terminationReason (如 SOME_TEMPORARY_STEP 或未验证的 model_stop 等 hook 漂移)
+    // 关键契约 (#16 Review Gate 3): 必须 fail closed 到 UNKNOWN，绝不能保留旧的 NO_NEW_RESULT 受信状态！
     const resUnknownReason = adapter.handleStopHook({
       conversationId: 'conv-ag-001',
       workspacePaths: ['/Users/yamlam/Documents/GitHub/browser-ide-rally'],
@@ -171,7 +190,9 @@ test('[IDE Adapter] 2. non-final / intermediate activity does not commit complet
     });
     assert.equal(resUnknownReason.accepted, false);
     assert.match(resUnknownReason.reason, /non_final_termination_reason/);
-    assert.equal(core.getSnapshot().endpoints.ide.result_state, 'NO_NEW_RESULT');
+    const snapDrift = core.getSnapshot();
+    assert.equal(snapDrift.endpoints.ide.result_state, 'UNKNOWN');
+    assert.match(snapDrift.endpoints.ide.continuity.unknown_reason, /non_final_termination_reason/);
   } finally {
     cleanup();
   }
@@ -219,7 +240,6 @@ test('[IDE Adapter] 3. one reliable final Stop-hook completion advances IDE from
 
     assert.equal(res.accepted, true);
 
-    // 核验 IDE 变更为 NEW，且 Browser 依然保持为 NO_NEW_RESULT
     const updatedSnapshot = core.getSnapshot();
     assert.equal(updatedSnapshot.endpoints.ide.result_state, 'NEW');
     assert.equal(updatedSnapshot.endpoints.browser.result_state, 'NO_NEW_RESULT');
@@ -250,13 +270,11 @@ test('[IDE Adapter] 4. repeated replay of the same opaque IDE cursor does not cr
       transcriptPath: transcriptFile
     };
 
-    // 首次触发 Stop Hook -> IDE 变为 NEW
     adapter.handleStopHook(hookEvent);
     const snap1 = core.getSnapshot();
     assert.equal(snap1.endpoints.ide.result_state, 'NEW');
     const cursor = snap1.endpoints.ide.latest_completed_cursor;
 
-    // 显式 Mark handled
     const markRes = core.markEndpointHandled('ide', { expected_cursor: cursor });
     assert.equal(markRes.success, true);
     assert.equal(core.getSnapshot().endpoints.ide.result_state, 'NO_NEW_RESULT');
@@ -298,7 +316,7 @@ test('[IDE Adapter] 5. explicit Mark handled returns IDE to NO_NEW_RESULT, Brows
       conversationId: 'conv-ag-001',
       workspacePaths: ['/Users/yamlam/Documents/GitHub/browser-ide-rally'],
       fullyIdle: true,
-      terminationReason: 'model_stop',
+      terminationReason: 'NO_TOOL_CALL',
       transcriptPath: transcriptFile
     });
 
@@ -325,7 +343,6 @@ test('[IDE Adapter] 6. restart/reopen restores the handled IDE cursor without re
   try {
     const binding = makeSampleBinding();
 
-    // 阶段 1：在初始运行周期中完成一个 Turn 并 Mark handled，然后落盘
     {
       const registry = createProjectRegistry({ storagePath: registryFile });
       const core = registry.registerProject({ binding });
@@ -349,7 +366,6 @@ test('[IDE Adapter] 6. restart/reopen restores the handled IDE cursor without re
       registry.saveToFile(registryFile);
     }
 
-    // 阶段 2：重启加载
     {
       const reloadedRegistry = createProjectRegistry({ storagePath: registryFile });
       const reloadedCore = reloadedRegistry.getProject(binding.binding_id);
@@ -374,7 +390,6 @@ test('[IDE Adapter] 7. next genuine final IDE completion advances exactly once a
   try {
     const binding = makeSampleBinding();
 
-    // 阶段 1：处理完成 Turn 1 并持久化
     {
       const registry = createProjectRegistry({ storagePath: registryFile });
       const core = registry.registerProject({ binding });
@@ -398,7 +413,6 @@ test('[IDE Adapter] 7. next genuine final IDE completion advances exactly once a
       registry.saveToFile(registryFile);
     }
 
-    // 阶段 2：重启并发生新的 Turn 2
     {
       const reloadedRegistry = createProjectRegistry({ storagePath: registryFile });
       const reloadedCore = reloadedRegistry.getProject(binding.binding_id);
@@ -452,7 +466,33 @@ test('[IDE Adapter] 8. stale binding revision, transcript truncation/drift, iden
     assert.equal(core.getSnapshot().endpoints.ide.result_state, 'UNKNOWN');
     assert.match(core.getSnapshot().endpoints.ide.continuity.unknown_reason, /stale_revision/);
 
+    // 8a-2. 旧版本 adapter 的 fail-closed observation 必须携带其绑定时的 binding_revision
+    // 当 core 升级到 rev 2 之后，持有着 rev 1 的旧 adapter 发出的 failure 观察无法篡改新 revision 的端点
+    core.updateBinding({
+      ...binding,
+      binding_revision: 2
+    });
+    // 此时 Core 的 revision 为 2，设置当前端点为受信 NO_NEW_RESULT
+    core.recordEndpointObservation('ide', {
+      conversation_id: 'conv-ag-001',
+      binding_revision: 2,
+      trusted: true,
+      latest_completed_cursor: 'ag-step:1:rev2valid'
+    });
+    core.markEndpointHandled('ide', { expected_cursor: 'ag-step:1:rev2valid' });
+    assert.equal(core.getSnapshot().endpoints.ide.result_state, 'NO_NEW_RESULT');
+
+    // adapter 仍然持有旧的 binding (rev 1)，直接调用其私有 _failClosedToUnknown 模拟抛出 fail closed 事实
+    adapter._failClosedToUnknown('some_failure');
+    // Core 收到带 revision 1 的 observation，与当前 revision 2 不符，判定为 stale_revision
+    assert.match(core.getSnapshot().endpoints.ide.continuity.unknown_reason, /stale_revision: expected rev 2, got rev 1/);
+
     // 8b. Transcript 截断与漂移 (Handled cursor step_index 不在 transcript 或指纹不符)
+    // 恢复为版本 1 的 binding，测试同版本下的历史截断
+    core.updateBinding({
+      ...binding,
+      binding_revision: 1
+    });
     writeTranscript(transcriptFile, [
       { step_index: 10, type: 'PLANNER_RESPONSE', status: 'DONE', content: 'Completely different truncated step' }
     ]);
