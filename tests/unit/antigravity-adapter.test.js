@@ -101,6 +101,28 @@ test('[IDE Adapter] 1. exact conversation + workspace + repository identity matc
     const snap1 = core.getSnapshot();
     assert.equal(snap1.endpoints.ide.result_state, 'UNKNOWN');
     assert.match(snap1.endpoints.ide.continuity.unknown_reason, /workspace_mismatch/);
+
+    // 1c. repository identity 不匹配：fail-closed 到 UNKNOWN
+    const bindingMismatchRepo = makeSampleBinding('proj-repo-mismatch', {
+      ide: {
+        conversation_id: 'conv-ag-001',
+        workspace_identity: '/Users/yamlam/Documents/GitHub/browser-ide-rally',
+        repository_identity: 'different-org/unrelated-repo'
+      }
+    });
+    const adapterMismatchRepo = new AntigravityIdeAdapter({ binding: bindingMismatchRepo, statusCore: core });
+    const resWrongRepo = adapterMismatchRepo.handleStopHook({
+      conversationId: 'conv-ag-001',
+      workspacePaths: ['/Users/yamlam/Documents/GitHub/browser-ide-rally'],
+      fullyIdle: true,
+      terminationReason: 'NO_TOOL_CALL',
+      transcriptPath: transcriptFile
+    });
+    assert.equal(resWrongRepo.accepted, false);
+    assert.match(resWrongRepo.reason, /repository_mismatch/);
+    const snapRepo = core.getSnapshot();
+    assert.equal(snapRepo.endpoints.ide.result_state, 'UNKNOWN');
+    assert.match(snapRepo.endpoints.ide.continuity.unknown_reason, /repository_mismatch/);
   } finally {
     cleanup();
   }

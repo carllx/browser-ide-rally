@@ -11,7 +11,9 @@
  */
 
 import fs from 'node:fs';
+import path from 'node:path';
 import crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 
 export const FINAL_TERMINATION_REASONS = [
   'NO_TOOL_CALL',
@@ -51,6 +53,43 @@ export function matchesWorkspace(actualWorkspaces, expectedWorkspace) {
     : (typeof actualWorkspaces === 'string' ? [actualWorkspaces] : []);
 
   return actualList.some(w => normalizePath(w) === expectedNorm);
+}
+
+/**
+ * 从本地 git 仓库探测或从路径校验 repository_identity (例如 carllx/browser-ide-rally)
+ * @param {string} workspacePath 
+ * @param {string} expectedRepository 
+ * @returns {boolean}
+ */
+export function matchesRepository(workspacePath, expectedRepository) {
+  if (!expectedRepository || typeof expectedRepository !== 'string') return false;
+  const exp = expectedRepository.trim().toLowerCase();
+  const normWs = normalizePath(workspacePath);
+  if (!normWs || !fs.existsSync(normWs)) {
+    return false;
+  }
+
+  // 1. 若工作区目录内包含 .git，通过 git remote 探测权威远程仓库标识
+  const gitDir = path.join(normWs, '.git');
+  if (fs.existsSync(gitDir)) {
+    try {
+      const remoteUrl = execFileSync('git', ['remote', 'get-url', 'origin'], {
+        cwd: normWs,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore']
+      }).trim().toLowerCase();
+
+      if (remoteUrl.includes(exp)) {
+        return true;
+      }
+    } catch {
+      // 若没有 git origin remote，降级核验目录后缀
+    }
+  }
+
+  // 2. 目录名或路径后缀核验
+  const repoName = exp.split('/').pop();
+  return normWs.toLowerCase().endsWith(exp) || normWs.toLowerCase().endsWith(repoName);
 }
 
 /**
@@ -151,6 +190,18 @@ export class AntigravityIdeAdapter {
   }
 
   /**
+   * 统一向 Status Core 记录 UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION 观察
+   * @param {string} reason 
+   */
+  _failClosedToUnknown(reason = 'UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION') {
+    this._statusCore.recordEndpointObservation('ide', {
+      conversation_id: this._binding.ide?.conversation_id,
+      continuity_lost: true,
+      reason
+    });
+  }
+
+  /**
    * 更新当前绑定的快照引用（如发生安全 rebind 或版本 bump）
    * @param {object} nextBinding 
    */
@@ -167,10 +218,7 @@ export class AntigravityIdeAdapter {
    */
   handleStopHook(hookPayload) {
     if (!hookPayload || typeof hookPayload !== 'object') {
-      this._statusCore.recordEndpointObservation('ide', {
-        continuity_lost: true,
-        reason: 'malformed_hook_payload: payload must be a non-null object'
-      });
+      this._failClosedToUnknown('malformed_hook_payload: payload must be a non-null object');
       return { accepted: false, reason: 'malformed_hook_payload' };
     }
 
@@ -195,15 +243,19 @@ export class AntigravityIdeAdapter {
 
     // 2. workspace identity 归属核验
     if (!matchesWorkspace(workspacePaths, expectedIde.workspace_identity)) {
-      this._statusCore.recordEndpointObservation('ide', {
-        conversation_id: expectedIde.conversation_id,
-        continuity_lost: true,
-        reason: `workspace_mismatch: expected ${expectedIde.workspace_identity}`
-      });
+      this._failClosedToUnknown(`workspace_mismatch: expected ${expectedIde.workspace_identity}`);
       return { accepted: false, reason: 'workspace_mismatch' };
     }
 
-    // 3. fullyIdle 最终性核验：中间步骤 / 仍有未完成后台任务时不产生完成事实
+    // 3. repository identity 归属核验
+    const matchedWs = (Array.isArray(workspacePaths) ? workspacePaths : [workspacePaths])
+      .find(w => normalizePath(w) === normalizePath(expectedIde.workspace_identity));
+    if (!matchesRepository(matchedWs, expectedIde.repository_identity)) {
+      this._failClosedToUnknown(`repository_mismatch: expected ${expectedIde.repository_identity}`);
+      return { accepted: false, reason: 'repository_mismatch' };
+    }
+
+    // 4. fullyIdle 最终性核验：中间步骤 / 仍有未完成后台任务时不产生完成事实
     if (fullyIdle !== true) {
       return {
         accepted: false,
@@ -211,7 +263,7 @@ export class AntigravityIdeAdapter {
       };
     }
 
-    // 4. final terminationReason 核验
+    // 5. final terminationReason 核验
     if (!terminationReason || !FINAL_TERMINATION_REASONS.includes(terminationReason)) {
       return {
         accepted: false,
@@ -219,24 +271,15 @@ export class AntigravityIdeAdapter {
       };
     }
 
-    // 5. 从 transcript 提取最新完成游标
-    const effectiveTranscriptPath = transcriptPath || this._findTranscriptPath(conversationId);
-    if (!effectiveTranscriptPath || !fs.existsSync(effectiveTranscriptPath)) {
-      this._statusCore.recordEndpointObservation('ide', {
-        conversation_id: expectedIde.conversation_id,
-        continuity_lost: true,
-        reason: 'transcript_not_found: cannot verify completion cursor'
-      });
+    // 6. 从 transcript 提取最新完成游标（必须由 hookPayload 显式提供真实路径，绝不猜测）
+    if (!transcriptPath || typeof transcriptPath !== 'string' || !fs.existsSync(transcriptPath)) {
+      this._failClosedToUnknown('transcript_not_found: official transcriptPath missing or invalid');
       return { accepted: false, reason: 'transcript_not_found' };
     }
 
-    const turns = parseTranscriptCompletedTurns(effectiveTranscriptPath);
+    const turns = parseTranscriptCompletedTurns(transcriptPath);
     if (turns.length === 0) {
-      this._statusCore.recordEndpointObservation('ide', {
-        conversation_id: expectedIde.conversation_id,
-        continuity_lost: true,
-        reason: 'no_completed_turns_found: transcript has no completed turn'
-      });
+      this._failClosedToUnknown('no_completed_turns_found: transcript has no completed turn');
       return { accepted: false, reason: 'no_completed_turns_found' };
     }
 
@@ -263,29 +306,25 @@ export class AntigravityIdeAdapter {
    * - 若 handled 游标在物理 transcript 中精确匹配，且无后续新 turn -> caught-up (NO_NEW_RESULT)
    * - 若 handled 游标精确匹配，且存在后续新 turn -> NEW (最新 turn 游标)
    * - 若无 handled 游标但从未产生过完成 -> NO_NEW_RESULT
+   * - 若存在未 handled 的 latest 游标，且后续出现新轮次 -> 正确推进至最新轮次
    * - 若历史截断、指纹不匹配、游标漂移或文件丢失 -> 坚决 fail-closed 到 UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION
-   * @param {string} [transcriptPath]
+   * @param {string} transcriptPath 官方 transcript 路径（必需参数）
    * @returns {{ status: 'RECONCILED' | 'UNKNOWN', reason?: string }}
    */
-  reconcileOnStartup(transcriptPath = null) {
+  reconcileOnStartup(transcriptPath) {
     const expectedIde = this._binding.ide;
-    const effectivePath = transcriptPath || this._findTranscriptPath(expectedIde.conversation_id);
 
-    if (!effectivePath || !fs.existsSync(effectivePath)) {
-      this._statusCore.recordEndpointObservation('ide', {
-        conversation_id: expectedIde.conversation_id,
-        continuity_lost: true,
-        reason: 'UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION'
-      });
+    if (!transcriptPath || typeof transcriptPath !== 'string' || !fs.existsSync(transcriptPath)) {
+      this._failClosedToUnknown('UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION');
       return { status: 'UNKNOWN', reason: 'transcript_unavailable' };
     }
 
     const currentSnapshot = this._statusCore.getSnapshot();
-    const ideFact = currentSnapshot.endpoints.ide;
+    const ideFact = currentSnapshot.endpoints?.ide || {};
     const handledCursor = ideFact.last_handled_cursor;
-    const turns = parseTranscriptCompletedTurns(effectivePath);
+    const turns = parseTranscriptCompletedTurns(transcriptPath);
 
-    // 1. 如果此前从未处理过任何完成
+    // 1. 如果此前从未处理过任何完成 (handledCursor 为空)
     if (!handledCursor) {
       if (turns.length === 0) {
         // 无历史完成记录，且 transcript 确实没有任何完成轮次：处于干净初始状态
@@ -298,40 +337,36 @@ export class AntigravityIdeAdapter {
         return { status: 'RECONCILED' };
       }
 
-      // 如果已有持久化的 latest_completed_cursor，检查是否与 transcript 末尾一致
+      // 如果已有持久化的 latest_completed_cursor，检查在 transcript 中的位置与指纹
       if (ideFact.latest_completed_cursor) {
         const decodedLatest = decodeOpaqueCursor(ideFact.latest_completed_cursor);
         const matchingTurn = turns.find(t => t.stepIndex === decodedLatest?.stepIndex);
         if (matchingTurn && matchingTurn.fingerprint === decodedLatest.fingerprint) {
-          // 状态与 transcript 吻合，恢复该 NEW 游标
+          // 检查 latest 之后是否又有新完成轮次产生
+          const subsequentTurns = turns.filter(t => t.stepIndex > decodedLatest.stepIndex);
+          const effectiveTurn = subsequentTurns.length > 0 ? subsequentTurns[subsequentTurns.length - 1] : matchingTurn;
+          const effectiveCursor = encodeOpaqueCursor(effectiveTurn.stepIndex, effectiveTurn.fingerprint);
+
           this._statusCore.recordEndpointObservation('ide', {
             conversation_id: expectedIde.conversation_id,
             binding_revision: this._binding.binding_revision,
             trusted: true,
-            latest_completed_cursor: ideFact.latest_completed_cursor,
-            completed_at: matchingTurn.createdAt || ideFact.completed_at
+            latest_completed_cursor: effectiveCursor,
+            completed_at: effectiveTurn.createdAt || ideFact.completed_at
           });
           return { status: 'RECONCILED' };
         }
       }
 
       // 无法建立历史基线：必须 fail-closed 到 UNKNOWN
-      this._statusCore.recordEndpointObservation('ide', {
-        conversation_id: expectedIde.conversation_id,
-        continuity_lost: true,
-        reason: 'UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION'
-      });
+      this._failClosedToUnknown('UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION');
       return { status: 'UNKNOWN', reason: 'cannot_align_unhandled_history' };
     }
 
     // 2. 已有 handledCursor，解码核验
     const decodedHandled = decodeOpaqueCursor(handledCursor);
     if (!decodedHandled) {
-      this._statusCore.recordEndpointObservation('ide', {
-        conversation_id: expectedIde.conversation_id,
-        continuity_lost: true,
-        reason: 'UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION'
-      });
+      this._failClosedToUnknown('UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION');
       return { status: 'UNKNOWN', reason: 'malformed_handled_cursor' };
     }
 
@@ -339,11 +374,7 @@ export class AntigravityIdeAdapter {
     const handledTurn = turns.find(t => t.stepIndex === decodedHandled.stepIndex);
     if (!handledTurn || handledTurn.fingerprint !== decodedHandled.fingerprint) {
       // 历史截断、step_index 漂移或内容篡改：fail-closed 到 UNKNOWN
-      this._statusCore.recordEndpointObservation('ide', {
-        conversation_id: expectedIde.conversation_id,
-        continuity_lost: true,
-        reason: 'UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION'
-      });
+      this._failClosedToUnknown('UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION');
       return { status: 'UNKNOWN', reason: 'handled_cursor_drift_or_truncated' };
     }
 
@@ -374,20 +405,5 @@ export class AntigravityIdeAdapter {
     });
 
     return { status: 'RECONCILED' };
-  }
-
-  /**
-   * 定位会话对应的 transcript 文件路径（辅助函数）
-   * @param {string} conversationId 
-   * @returns {string|null}
-   */
-  _findTranscriptPath(conversationId) {
-    if (!conversationId) return null;
-    const homedir = process.env.HOME || '';
-    const cand1 = `${homedir}/.gemini/antigravity/brain/${conversationId}/.system_generated/logs/transcript.jsonl`;
-    if (fs.existsSync(cand1)) return cand1;
-    const cand2 = `${homedir}/.gemini/antigravity/brain/${conversationId}/.system_generated/logs/transcript_full.jsonl`;
-    if (fs.existsSync(cand2)) return cand2;
-    return null;
   }
 }
