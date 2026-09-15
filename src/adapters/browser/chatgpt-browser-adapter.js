@@ -3,10 +3,12 @@
  * 
  * 职责：
  * 1. 精确解析与唯一定位绑定的 ChatGPT 会话标签页（0 匹配或多匹配严格 fail-closed）；
- * 2. 观察目标标签页的 DOM 生命周期状态（stop-button 生成状态、非占位 Assistant 完成轮次）；
- * 3. 提取最终非占位完成 Assistant 消息 ID 并将其转换为 Core 所需的不透明游标 (opaque cursor)；
- * 4. 抹平所有 ChatGPT DOM/浏览器平台实现细节，输出标准化规范观察事实 (Normalized Observation)；
- * 5. 任何归属模糊、DOM 漂移、占位中状态或未结束生成，均 fail-closed 产出非受信或 UNKNOWN。
+ * 2. 在 DOM 探测执行瞬间原子化重新核验标签页会话归属（防御 TOCTOU / 标签页导航与切换漂移）；
+ * 3. 观察目标标签页的 DOM 生命周期状态（stop-button 生成状态、非占位 Assistant 完成轮次）；
+ * 4. 提取最终非占位完成 Assistant 消息 ID，严格过滤空值、placeholder-* 以及实机验证的 request-placeholder-*；
+ * 5. 将合法完成 ID 转换为 Core 所需的不透明游标 (opaque cursor)；
+ * 6. 正常 generation-in-progress 作为运行时暂态处理，绝非连续性中断（continuity_lost），不得将已有 NEW/NO_NEW_RESULT 冲刷为 UNKNOWN；
+ * 7. 任何归属模糊、DOM 漂移、无法解析等真正异常，均 fail-closed 产出非受信或 UNKNOWN。
  * 
  * 严格边界：
  * - 不包含任何 Relay send 路径、不修改 DOM、不夺取系统焦点；
@@ -24,6 +26,56 @@ export function defaultAppleScriptExecutor(script) {
   return execFileSync('osascript', ['-e', script], { encoding: 'utf8' }).trim();
 }
 
+/**
+ * 构造用于匹配 ChatGPT 会话 URL 的正则表达式模式
+ * 支持标准 /c/<convId> 以及 GPT 路径 /g/<gptId>/c/<convId>，严格防止子字符串与查询参数误判
+ * @param {string} conversationId
+ * @returns {string}
+ */
+export function getConversationUrlPattern(conversationId) {
+  const escaped = conversationId.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return `(^|https?:\\/\\/[^\\/]+)?\\/(?:g\\/[^\\/]+\\/)?c\\/${escaped}(?:[?#\\/]|$)`;
+}
+
+/**
+ * 判断 URL 是否精确归属于指定的 ChatGPT 会话 ID
+ * 支持标准 /c/<convId> 以及 GPT 路径 /g/<gptId>/c/<convId>，防止子字符串误判
+ * @param {string} url
+ * @param {string} conversationId
+ * @returns {boolean}
+ */
+export function isExactConversationUrl(url, conversationId) {
+  if (!url || typeof url !== 'string' || !conversationId || typeof conversationId !== 'string') {
+    return false;
+  }
+  const trimmedId = conversationId.trim();
+  if (!trimmedId) return false;
+
+  const pattern = getConversationUrlPattern(trimmedId);
+  return new RegExp(pattern).test(url);
+}
+
+/**
+ * 判断消息 ID 是否为占位或未就绪 ID
+ * 严格过滤：空值、placeholder 前缀、以及实机验证的 request-placeholder-* 族
+ * @param {string|null|undefined} rawId
+ * @returns {boolean}
+ */
+export function isPlaceholderMessageId(rawId) {
+  if (!rawId || typeof rawId !== 'string') {
+    return true;
+  }
+  const trimmed = rawId.trim();
+  if (trimmed === '') {
+    return true;
+  }
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith('placeholder') || lower.startsWith('request-placeholder')) {
+    return true;
+  }
+  return false;
+}
+
 export class ChatGPTBrowserAdapter {
   /**
    * @param {object} [options]
@@ -35,6 +87,7 @@ export class ChatGPTBrowserAdapter {
 
   /**
    * 定位唯一的匹配标签页（0 匹配或多匹配时 fail-closed）
+   * 采用精确 URL 路径比对，严禁任意子字符串模糊匹配
    * @param {string} conversationId 
    * @returns {{ windowIndex: number, tabIndex: number, url: string }}
    */
@@ -44,8 +97,8 @@ export class ChatGPTBrowserAdapter {
     }
 
     const trimmedId = conversationId.trim();
-    // 转义双引号以确保 AppleScript 安全
-    const safeConvId = trimmedId.replace(/"/g, '\\"');
+    const safeConvId = JSON.stringify(trimmedId);
+    const safeUrlPattern = JSON.stringify(getConversationUrlPattern(trimmedId));
 
     const script = `
     tell application "Google Chrome"
@@ -53,6 +106,8 @@ export class ChatGPTBrowserAdapter {
       set targetWin to 0
       set targetTab to 0
       set targetURL to ""
+      set convId to ${safeConvId}
+      set urlPat to ${safeUrlPattern}
       
       set winList to every window
       repeat with i from 1 to count of winList
@@ -61,11 +116,16 @@ export class ChatGPTBrowserAdapter {
         repeat with j from 1 to count of tabList
           set t to item j of tabList
           set u to URL of t
-          if u contains "${safeConvId}" then
-            set matchCount to matchCount + 1
-            set targetWin to i
-            set targetTab to j
-            set targetURL to u
+          -- 粗筛：URL 中必须至少包含对话 ID 字符
+          if u contains convId then
+            -- 精筛：由内置 JS 正则做精确路径边界校验，排除子串和参数伪造
+            set isValid to (execute t javascript "(function() { return new RegExp(" & urlPat & ").test(location.href); })()")
+            if isValid = true or isValid = "true" then
+              set matchCount to matchCount + 1
+              set targetWin to i
+              set targetTab to j
+              set targetURL to u
+            end if
           end if
         end repeat
       end repeat
@@ -120,54 +180,32 @@ export class ChatGPTBrowserAdapter {
   }
 
   /**
-   * 观察底层目标标签页的 DOM 状态并返回规范化端点观察事实 (Normalized Observation)
-   * 
-   * 观察流程与不变式：
-   * 1. 定位目标会话标签页；若定位失败（0 匹配或多匹配），返回 trusted=false 与对应 unknown_reason；
-   * 2. 注入探测脚本，提取：
-   *    - isGenerating: 是否存在 button[data-testid="stop-button"]；
-   *    - final non-placeholder Assistant message-id (data-message-id 存在且非空)；
-   *    - assistantTurnCount: assistant 消息元素总数；
-   * 3. 若正在生成 (isGenerating === true)：说明当前轮次未完结，不得将不完整状态提交为完成游标；返回 trusted=false；
-   * 4. 若无 assistant 消息：说明尚未产生任何 assistant 回复，返回 trusted=true 且游标为 null；
-   * 5. 若最后一条 assistant 消息缺少合法的非空 data-message-id：说明处于占位或 DOM 漂移状态，fail-closed 返回 trusted=false；
-   * 6. 生成已结束且存在稳定 message-id：返回 trusted=true，将该 ID 封装为 opaque cursor（前缀区分命名空间，不暴露内部 DOM 语义）。
-   * 
-   * @param {object} params
-   * @param {string} params.conversationId - 期望绑定的会话 ID
-   * @param {number} [params.bindingRevision] - 绑定的版本号
-   * @returns {object} 规范化观察结果 (供 statusCore.recordEndpointObservation('browser', ...) 使用)
+   * 构建注入到目标标签页的 DOM 探针脚本
+   * 包含当前 URL 的精确路径正则重验（彻底消除 lookup 到 probe 的 TOCTOU 漂移）
+   * @param {string} conversationId
+   * @returns {string}
    */
-  observeBrowserEndpoint({ conversationId, bindingRevision } = {}) {
-    const baseObservation = {
-      conversation_id: conversationId,
-      binding_revision: bindingRevision,
-      latest_completed_cursor: null,
-      completed_at: null,
-      trusted: false,
-      continuity_lost: false,
-      reason: null
-    };
+  buildProbeScript(conversationId) {
+    const trimmedId = conversationId.trim();
+    const safeConvId = JSON.stringify(trimmedId);
+    const urlPattern = getConversationUrlPattern(trimmedId);
+    const safeUrlPattern = JSON.stringify(urlPattern);
 
-    if (!conversationId || typeof conversationId !== 'string') {
-      baseObservation.reason = 'missing_conversation_identity';
-      return baseObservation;
-    }
-
-    // 1. 定位标签页（严格唯一归属）
-    let tabTarget;
-    try {
-      tabTarget = this.locateExactConversationTab(conversationId);
-    } catch (err) {
-      baseObservation.continuity_lost = true;
-      baseObservation.reason = err.message;
-      return baseObservation;
-    }
-
-    // 2. 探测目标标签页 DOM
-    const probeScript = `
+    return `
       (() => {
         try {
+          const expectedConvId = ${safeConvId};
+          const currentUrl = window.location.href;
+          const exactRegex = new RegExp(${safeUrlPattern});
+          
+          if (!exactRegex.test(currentUrl)) {
+            return JSON.stringify({
+              error: "tab_url_mismatch_at_probe_time",
+              currentUrl: currentUrl,
+              expectedConvId: expectedConvId
+            });
+          }
+
           const stopBtn = document.querySelector('button[data-testid="stop-button"]');
           const isGenerating = !!stopBtn;
           
@@ -187,7 +225,15 @@ export class ChatGPTBrowserAdapter {
           const lastEl = assistantEls[count - 1];
           const rawId = lastEl.getAttribute('data-message-id');
           const hasAttr = lastEl.hasAttribute('data-message-id');
-          const isPlaceholder = !hasAttr || !rawId || rawId.trim() === '' || rawId.startsWith('placeholder');
+          
+          let isPlaceholder = !hasAttr || !rawId;
+          if (!isPlaceholder) {
+            const trimmed = rawId.trim();
+            const lower = trimmed.toLowerCase();
+            if (trimmed === '' || lower.startsWith('placeholder') || lower.startsWith('request-placeholder')) {
+              isPlaceholder = true;
+            }
+          }
           
           return JSON.stringify({
             isGenerating,
@@ -201,26 +247,159 @@ export class ChatGPTBrowserAdapter {
         }
       })()
     `;
+  }
 
-    let probeResult;
-    try {
-      const rawOutput = this.runTabJS(tabTarget.windowIndex, tabTarget.tabIndex, probeScript);
-      probeResult = JSON.parse(rawOutput);
-    } catch (err) {
+  /**
+   * 执行原子化标签页查找与 DOM 探测
+   * 在单次 AppleScript 调用中完成精准归属匹配并在该标签页执行探针，
+   * 同时探针闭包内重新验证当前 location.href，彻底消除 TOCTOU 竞态。
+   * 
+   * @param {string} conversationId
+   * @returns {object} 解析后的探针结果对象
+   */
+  runAtomicProbe(conversationId) {
+    const trimmedId = conversationId.trim();
+    const safeConvId = JSON.stringify(trimmedId);
+    const urlPattern = getConversationUrlPattern(trimmedId);
+    const safeUrlPattern = JSON.stringify(urlPattern);
+    const probeCode = this.buildProbeScript(trimmedId);
+    const safeProbeCode = JSON.stringify(probeCode);
+
+    const atomicScript = `
+    tell application "Google Chrome"
+      set matchCount to 0
+      set targetWin to 0
+      set targetTab to 0
+      set targetURL to ""
+      set convId to ${safeConvId}
+      set urlPat to ${safeUrlPattern}
+      set probeJS to ${safeProbeCode}
+      
+      set winList to every window
+      repeat with i from 1 to count of winList
+        set w to item i of winList
+        set tabList to every tab of w
+        repeat with j from 1 to count of tabList
+          set t to item j of tabList
+          set u to URL of t
+          if u contains convId then
+            set isValid to (execute t javascript "(function() { return new RegExp(" & urlPat & ").test(location.href); })()")
+            if isValid = true or isValid = "true" then
+              set matchCount to matchCount + 1
+              set targetWin to i
+              set targetTab to j
+              set targetURL to u
+            end if
+          end if
+        end repeat
+      end repeat
+      
+      if matchCount = 0 then
+        return "ERROR:ZERO_MATCHES"
+      else if matchCount > 1 then
+        return "ERROR:AMBIGUOUS_MATCHES:" & matchCount
+      else
+        tell tab targetTab of (item targetWin of winList)
+          set res to execute javascript probeJS
+          return "SUCCESS:" & res
+        end tell
+      end if
+    end tell
+    `;
+
+    const out = this._executor(atomicScript);
+    if (out.startsWith('ERROR:ZERO_MATCHES')) {
+      throw new Error(`TARGET_LOOKUP_FAIL: No Chrome tab found matching conversation "${conversationId}"`);
+    }
+    if (out.startsWith('ERROR:AMBIGUOUS_MATCHES')) {
+      const count = out.split(':')[2] || 'multiple';
+      throw new Error(`TARGET_LOOKUP_FAIL: Ambiguous match: ${count} tabs match conversation "${conversationId}"`);
+    }
+    if (!out.startsWith('SUCCESS:')) {
+      throw new Error(`TARGET_LOOKUP_FAIL: Unexpected AppleScript output: ${out}`);
+    }
+
+    const jsonText = out.slice('SUCCESS:'.length);
+    return JSON.parse(jsonText);
+  }
+
+  /**
+   * 观察底层目标标签页的 DOM 状态并返回规范化端点观察事实 (Normalized Observation)
+   * 
+   * 观察流程与不变式：
+   * 1. 严格定位标签页并执行 DOM 探针；若定位失败（0 匹配或多匹配），fail-closed 返回 continuity_lost=true；
+   * 2. 在探针闭包内重新验证当前 location.href，防御 TOCTOU / 漂移；若失配 fail-closed 返回 continuity_lost=true；
+   * 3. 探针提取生命周期：
+   *    - isGenerating: 是否存在 button[data-testid="stop-button"]；
+   *    - final non-placeholder Assistant message-id；
+   *    - assistantTurnCount: assistant 消息元素总数；
+   * 4. 正常 generation-in-progress（isGenerating === true）：
+   *    - 属于运行时瞬态 (runtime pending activity)，绝非连续性丢失！
+   *    - 必须返回 is_generating: true, continuity_lost: false, trusted: false；
+   *    - 使得已有的 NEW / NO_NEW_RESULT 规范事实保持不动，绝不冲刷为 UNKNOWN；
+   * 5. 若无 assistant 消息：连续性受信任，游标为 null；
+   * 6. 若最后一条 assistant 消息缺少合法的非空 ID，或属于 placeholder-* / request-placeholder-*：
+   *    - fail-closed 返回 continuity_lost: true，拒绝将占位状态提交为完成游标；
+   * 7. 生成已结束且存在稳定非占位 message-id：
+   *    - 返回 trusted: true，将 ID 封装为 opaque cursor (`chatgpt_msg_${id}`)。
+   * 
+   * @param {object} params
+   * @param {string} params.conversationId - 期望绑定的会话 ID
+   * @param {number} [params.bindingRevision] - 绑定的版本号
+   * @returns {object} 规范化观察结果
+   */
+  observeBrowserEndpoint({ conversationId, bindingRevision } = {}) {
+    const baseObservation = {
+      conversation_id: conversationId,
+      binding_revision: bindingRevision,
+      latest_completed_cursor: undefined,
+      completed_at: undefined,
+      trusted: false,
+      continuity_lost: false,
+      is_generating: false,
+      reason: null
+    };
+
+    if (!conversationId || typeof conversationId !== 'string') {
       baseObservation.continuity_lost = true;
-      baseObservation.reason = `dom_probe_failed: ${err.message}`;
+      baseObservation.reason = 'missing_conversation_identity';
       return baseObservation;
     }
 
+    // 1. 定位目标标签页（精确 URL 路径比对，0 匹配或多匹配 fail-closed）
+    let target;
+    try {
+      target = this.locateExactConversationTab(conversationId);
+    } catch (err) {
+      baseObservation.continuity_lost = true;
+      baseObservation.reason = err.message;
+      return baseObservation;
+    }
+
+    // 2. 注入 DOM 探针（并在探针闭包内重新验证当前 URL，防御 TOCTOU / 漂移）
+    let probeResult;
+    try {
+      const probeCode = this.buildProbeScript(conversationId);
+      const rawRes = this.runTabJS(target.windowIndex, target.tabIndex, probeCode);
+      probeResult = JSON.parse(rawRes);
+    } catch (err) {
+      baseObservation.continuity_lost = true;
+      baseObservation.reason = `DOM probe execution failed: ${err.message}`;
+      return baseObservation;
+    }
+
+    // 3. 探针时刻 URL 漂移或执行期错误处理（fail-closed）
     if (probeResult.error) {
       baseObservation.continuity_lost = true;
       baseObservation.reason = `dom_probe_execution_error: ${probeResult.error}`;
       return baseObservation;
     }
 
-    // 3. 生成生命周期检查 (scoped stop-button generation lifecycle)
+    // 3. 正常生成中检查 (Gate 3: generation-in-progress is NOT continuity loss)
     if (probeResult.isGenerating) {
-      baseObservation.continuity_lost = true;
+      baseObservation.is_generating = true;
+      baseObservation.trusted = false;
+      baseObservation.continuity_lost = false;
       baseObservation.reason = 'generation_in_progress: ChatGPT is currently generating response';
       return baseObservation;
     }
@@ -233,15 +412,14 @@ export class ChatGPTBrowserAdapter {
       return baseObservation;
     }
 
-    // 5. 占位检查 (Placeholder/Unfinished identity guard)
-    if (probeResult.isPlaceholder || !probeResult.hasValidLastMessage || !probeResult.lastMessageId) {
+    // 5. 占位检查 (Gate 1: request-placeholder-* & placeholder-* 严格过滤)
+    if (probeResult.isPlaceholder || !probeResult.hasValidLastMessage || !probeResult.lastMessageId || isPlaceholderMessageId(probeResult.lastMessageId)) {
       baseObservation.continuity_lost = true;
       baseObservation.reason = 'placeholder_or_unidentified_turn: final assistant turn lacks valid non-placeholder message id';
       return baseObservation;
     }
 
-    // 6. 成功捕获完成 turn：生成稳定且不透明的 cursor
-    // 使用统一的前缀包装，使 Core 只感知 opaque cursor，不依赖底层 DOM/UUID 格式
+    // 6. 成功捕获完成轮次：生成稳定且不透明的 cursor
     const opaqueCursor = `chatgpt_msg_${probeResult.lastMessageId}`;
 
     baseObservation.trusted = true;

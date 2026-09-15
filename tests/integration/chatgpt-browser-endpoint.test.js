@@ -92,7 +92,7 @@ describe('Browser Endpoint Result 集成测试矩阵 (#15)', () => {
     assert.match(snapC.unknown_reason, /Ambiguous match: 3 tabs/);
   });
 
-  it('2. 生成中 (stop-button) 与占位轮次 (placeholder) 绝不提交完成游标，保持或进入 UNKNOWN', () => {
+  it('2. 生成中 (stop-button) 与占位轮次 (placeholder) 绝不提交完成游标 (Gate 1 & Gate 3 前置)', () => {
     const storagePath = createTempStorage();
     const registry = createProjectRegistry({ storagePath });
     const core = registry.registerProject({ binding: baseBinding });
@@ -100,7 +100,7 @@ describe('Browser Endpoint Result 集成测试矩阵 (#15)', () => {
     // 初始状态为 UNKNOWN
     assert.equal(core.getSnapshot().endpoints.browser.result_state, 'UNKNOWN');
 
-    // A. 正在生成中 (button[data-testid="stop-button"])
+    // A. 正在生成中 (button[data-testid="stop-button"]): 属于运行时活动，continuity_lost=false
     const generatingExecutor = (script) => {
       if (script.includes('set matchCount to 0')) {
         return `SUCCESS:1:2:https://chatgpt.com/c/${targetConvId}`;
@@ -118,11 +118,11 @@ describe('Browser Endpoint Result 集成测试矩阵 (#15)', () => {
       conversationId: targetConvId,
       bindingRevision: 1
     });
-    core.recordEndpointObservation('browser', obsGen);
-    assert.equal(core.getSnapshot().endpoints.browser.result_state, 'UNKNOWN');
-    assert.equal(core.getSnapshot().endpoints.browser.latest_completed_cursor, null);
+    assert.equal(obsGen.is_generating, true);
+    assert.equal(obsGen.continuity_lost, false); // 绝非 continuity loss
+    assert.equal(obsGen.latest_completed_cursor, undefined);
 
-    // B. 生成停止但处于占位状态 (例如 data-message-id 尚不可用)
+    // B. 实机 request-placeholder-* 占位轮次绝不推进完成，导致 fail-closed 到 UNKNOWN
     const placeholderExecutor = (script) => {
       if (script.includes('set matchCount to 0')) {
         return `SUCCESS:1:2:https://chatgpt.com/c/${targetConvId}`;
@@ -130,8 +130,8 @@ describe('Browser Endpoint Result 集成测试矩阵 (#15)', () => {
       return JSON.stringify({
         isGenerating: false,
         assistantCount: 2,
-        lastMessageId: null,
-        hasValidLastMessage: false,
+        lastMessageId: 'request-placeholder-998877',
+        hasValidLastMessage: true,
         isPlaceholder: true
       });
     };
@@ -140,6 +140,8 @@ describe('Browser Endpoint Result 集成测试矩阵 (#15)', () => {
       conversationId: targetConvId,
       bindingRevision: 1
     });
+    assert.equal(obsPlaceholder.continuity_lost, true);
+    assert.equal(obsPlaceholder.latest_completed_cursor, undefined);
     core.recordEndpointObservation('browser', obsPlaceholder);
     assert.equal(core.getSnapshot().endpoints.browser.result_state, 'UNKNOWN');
     assert.equal(core.getSnapshot().endpoints.browser.latest_completed_cursor, null);
@@ -444,5 +446,120 @@ describe('Browser Endpoint Result 集成测试矩阵 (#15)', () => {
     assert.equal(stateStr.includes('tabIndex'), false);
     // 保证游标为不透明前缀包裹
     assert.ok(state.endpoints.browser.latest_completed_cursor.startsWith('chatgpt_msg_'));
+  });
+
+  it('10. 回归测试：Browser 已有受信结果时开始生成，规范 Endpoint Result 保持不变 (Gate 3)', () => {
+    const registry = createProjectRegistry();
+    const core = registry.registerProject({ binding: baseBinding });
+    const turn1MsgId = '9b42e774-8d48-43d9-a78c-02cf30a08e1a';
+
+    // 1. 建立初始完成事实 -> 规范结果为 NEW
+    const completedExecutor = (script) => {
+      if (script.includes('set matchCount to 0')) {
+        return `SUCCESS:1:2:https://chatgpt.com/c/${targetConvId}`;
+      }
+      return JSON.stringify({
+        isGenerating: false,
+        assistantCount: 1,
+        lastMessageId: turn1MsgId,
+        hasValidLastMessage: true,
+        isPlaceholder: false
+      });
+    };
+    const completedAdapter = new ChatGPTBrowserAdapter({ executor: completedExecutor });
+    core.recordEndpointObservation('browser', completedAdapter.observeBrowserEndpoint({
+      conversationId: targetConvId,
+      bindingRevision: 1
+    }));
+    assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NEW');
+
+    // 2. ChatGPT 开始新一轮生成 (is_generating: true)
+    const generatingExecutor = (script) => {
+      if (script.includes('set matchCount to 0')) {
+        return `SUCCESS:1:2:https://chatgpt.com/c/${targetConvId}`;
+      }
+      return JSON.stringify({
+        isGenerating: true,
+        assistantCount: 2,
+        lastMessageId: 'streaming-temp-id',
+        hasValidLastMessage: true,
+        isPlaceholder: false
+      });
+    };
+    const generatingAdapter = new ChatGPTBrowserAdapter({ executor: generatingExecutor });
+    const obsGen = generatingAdapter.observeBrowserEndpoint({
+      conversationId: targetConvId,
+      bindingRevision: 1
+    });
+
+    // 验证观察事实：属于 pending 运行时活动，无连续性断裂
+    assert.equal(obsGen.is_generating, true);
+    assert.equal(obsGen.continuity_lost, false);
+    assert.equal(obsGen.latest_completed_cursor, undefined);
+
+    // 验证：瞬态生成绝不抹除或篡改已有的 NEW 规范结果
+    assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NEW');
+    assert.equal(core.getSnapshot().endpoints.browser.latest_completed_cursor, `chatgpt_msg_${turn1MsgId}`);
+
+    // 3. Mark handled 推进至 NO_NEW_RESULT
+    core.markEndpointHandled('browser', { expected_cursor: `chatgpt_msg_${turn1MsgId}` });
+    assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NO_NEW_RESULT');
+
+    // 4. 再次观察到生成中：依然严格保持 NO_NEW_RESULT，绝不退化为 UNKNOWN
+    const obsGen2 = generatingAdapter.observeBrowserEndpoint({
+      conversationId: targetConvId,
+      bindingRevision: 1
+    });
+    assert.equal(obsGen2.is_generating, true);
+    assert.equal(obsGen2.continuity_lost, false);
+    assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NO_NEW_RESULT');
+
+    // 5. 对比：若发生真正的归属失配/DOM 漂移，必须严格 fail-closed 到 UNKNOWN
+    const driftExecutor = () => 'ERROR:ZERO_MATCHES';
+    const driftAdapter = new ChatGPTBrowserAdapter({ executor: driftExecutor });
+    const obsDrift = driftAdapter.observeBrowserEndpoint({
+      conversationId: targetConvId,
+      bindingRevision: 1
+    });
+    assert.equal(obsDrift.continuity_lost, true);
+    core.recordEndpointObservation('browser', obsDrift);
+    assert.equal(core.getSnapshot().endpoints.browser.result_state, 'UNKNOWN');
+  });
+
+  it('11. 回归测试：子串假阳性与探针时刻 URL 漂移 (TOCTOU) 严格 fail-closed 为 UNKNOWN (Gate 2)', () => {
+    const registry = createProjectRegistry();
+    const core = registry.registerProject({ binding: baseBinding });
+
+    // A. 子串假阳性匹配被识别为 0 匹配：fail-closed 为 UNKNOWN
+    const substringExecutor = () => 'ERROR:ZERO_MATCHES';
+    const substringAdapter = new ChatGPTBrowserAdapter({ executor: substringExecutor });
+    const obsSub = substringAdapter.observeBrowserEndpoint({
+      conversationId: targetConvId,
+      bindingRevision: 1
+    });
+    assert.equal(obsSub.continuity_lost, true);
+    core.recordEndpointObservation('browser', obsSub);
+    assert.equal(core.getSnapshot().endpoints.browser.result_state, 'UNKNOWN');
+
+    // B. Lookup 成功但 probe 时 URL 漂移 (TOCTOU)：fail-closed 为 UNKNOWN
+    const toctouExecutor = (script) => {
+      if (script.includes('set matchCount to 0')) {
+        return `SUCCESS:1:2:https://chatgpt.com/c/${targetConvId}`;
+      }
+      return JSON.stringify({
+        error: 'tab_url_mismatch_at_probe_time',
+        currentUrl: 'https://chatgpt.com/c/navigated-away-conversation',
+        expectedConvId: targetConvId
+      });
+    };
+    const toctouAdapter = new ChatGPTBrowserAdapter({ executor: toctouExecutor });
+    const obsToctou = toctouAdapter.observeBrowserEndpoint({
+      conversationId: targetConvId,
+      bindingRevision: 1
+    });
+    assert.equal(obsToctou.continuity_lost, true);
+    assert.match(obsToctou.reason, /tab_url_mismatch_at_probe_time/);
+    core.recordEndpointObservation('browser', obsToctou);
+    assert.equal(core.getSnapshot().endpoints.browser.result_state, 'UNKNOWN');
   });
 });
