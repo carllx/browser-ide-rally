@@ -367,8 +367,8 @@ export class ProjectStatusCore {
       trusted = false;
       unknownReason = 'disallowed_idle_state: IDLE is not canonical Endpoint Result truth';
     }
-    // 2. 版本校验：若提供 binding_revision，必须与当前 binding_revision 一致（防范过时 adapter 污染当前 revision）
-    else if (observation.binding_revision && observation.binding_revision !== this._binding.binding_revision) {
+    // 2. 版本校验：若提供 binding_revision，必须与当前 binding_revision 一致（防范过时 adapter 污染当前 revision，含 revision 0）
+    else if (observation.binding_revision !== undefined && observation.binding_revision !== this._binding.binding_revision) {
       trusted = false;
       unknownReason = `stale_revision: expected rev ${this._binding.binding_revision}, got rev ${observation.binding_revision}`;
     }

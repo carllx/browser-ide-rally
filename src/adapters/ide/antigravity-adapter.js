@@ -329,12 +329,60 @@ export class AntigravityIdeAdapter {
    * - 若无 handled 游标但从未产生过完成 -> NO_NEW_RESULT
    * - 若存在未 handled 的 latest 游标，且后续出现新轮次 -> 正确推进至最新轮次
    * - 若历史截断、指纹不匹配、游标漂移或文件丢失 -> 坚决 fail-closed 到 UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION
-   * @param {string} transcriptPath 官方 transcript 路径（必需参数）
+   * 
+   * 严格核验约束：在允许 transcript 建立 trusted / NEW / NO_NEW_RESULT 前，必须验证当前 Antigravity identity 与 Binding 一致：
+   * - exact conversation；
+   * - expected workspace；
+   * - expected repository。
+   * 若未提供可靠凭据或身份不匹配，fail-closed 到 UNKNOWN / UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION。
+   * @param {string|object} transcriptPathOrOptions 官方 transcript 路径或包含凭据的选项对象
+   * @param {object} [identityProof] 身份证明凭据，包含 conversationId 和 workspacePaths
    * @returns {{ status: 'RECONCILED' | 'UNKNOWN', reason?: string }}
    */
-  reconcileOnStartup(transcriptPath) {
+  reconcileOnStartup(transcriptPathOrOptions, identityProof = {}) {
+    let transcriptPath;
+    let identity;
+    if (typeof transcriptPathOrOptions === 'object' && transcriptPathOrOptions !== null) {
+      transcriptPath = transcriptPathOrOptions.transcriptPath;
+      identity = transcriptPathOrOptions;
+    } else {
+      transcriptPath = transcriptPathOrOptions;
+      identity = identityProof;
+    }
+
     const expectedIde = this._binding.ide;
 
+    // 1. exact conversationId 归属核验（必须显式提供且完全一致）
+    if (!identity?.conversationId || identity.conversationId !== expectedIde.conversation_id) {
+      this._failClosedToUnknown('UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION');
+      return {
+        status: 'UNKNOWN',
+        reason: `attribution_mismatch: conversation_id mismatch or unproved`
+      };
+    }
+
+    // 2. workspace identity 归属核验
+    const actualWorkspaces = identity.workspacePaths || identity.workspacePath;
+    if (!matchesWorkspace(actualWorkspaces, expectedIde.workspace_identity)) {
+      this._failClosedToUnknown('UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION');
+      return {
+        status: 'UNKNOWN',
+        reason: `workspace_mismatch: expected ${expectedIde.workspace_identity}`
+      };
+    }
+
+    // 3. repository identity 归属核验（canonical owner/repo 精确比较）
+    const matchedWs = (Array.isArray(actualWorkspaces) ? actualWorkspaces : [actualWorkspaces])
+      .find(w => normalizePath(w) === normalizePath(expectedIde.workspace_identity));
+    if (!matchesRepository(matchedWs, expectedIde.repository_identity)) {
+      this._failClosedToUnknown('UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION');
+      return {
+        status: 'UNKNOWN',
+        reason: `repository_mismatch: expected ${expectedIde.repository_identity}`
+      };
+    }
+
+    // 4. transcript 物理文件校验
     if (!transcriptPath || typeof transcriptPath !== 'string' || !fs.existsSync(transcriptPath)) {
       this._failClosedToUnknown('UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION');
       return { status: 'UNKNOWN', reason: 'transcript_unavailable' };
