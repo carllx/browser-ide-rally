@@ -3,9 +3,9 @@
  *
  * 核心设计原则 (Core Principles):
  * 1. 规范事实优先：Endpoint Result 必须从底层规范事实（latest completed cursor、last handled cursor、continuity/trust）确定性派生，绝不把 NEW / NO_NEW_RESULT 当作可写输入；
- * 2. 连续性信任显式化：连续性信任必须显式提供，无明确信任证据时 fail-closed 到 UNKNOWN，绝不因“无错误”默认信任；
+ * 2. 连续性信任显式化：连续性信任必须显式提供，无明确信任证据时 fail-closed 到 UNKNOWN，绝不因“无错误”默认信任；未受信观察绝不污染规范游标；
  * 3. 观察与处理严格分离：recordEndpointObservation 只能更新 completion/continuity 事实，绝不接受或推进 last_handled_cursor；
- * 4. 显式推进防静默抹除：last_handled_cursor 仅由显式 markEndpointHandled() 推进至可靠 latest completed cursor，旧/不匹配 cursor 绝不能清除当前 NEW；
+ * 4. 显式推进防静默抹除：last_handled_cursor 仅由显式 markEndpointHandled() 推进至可靠 latest completed cursor，且强制比对 expected_cursor，旧/不匹配/缺失 cursor 绝不能清除当前 NEW；
  * 5. 身份守卫：禁止跨会话不安全 rebind，防止旧会话事实被带入新会话（真正的 reconciliation rebind 归属 #14）；
  * 6. 宿主独立、Relay 可选：不依赖任何 Relay Exchange 即可独立运作；
  * 7. 端点独立：Browser 与 IDE 的 Endpoint Result 独立更新，支持 Dual NEW 共存；
@@ -28,6 +28,7 @@ export const ALLOWED_ACTION_STAGES = [
 
 /**
  * 从端点规范事实纯函数式确定性派生 Endpoint Result
+ * 严格防范假值游标（如 0 或空字符串）漏判
  * @param {object} endpointFact
  * @returns {'NEW' | 'NO_NEW_RESULT' | 'UNKNOWN'}
  */
@@ -39,7 +40,11 @@ export function deriveEndpointResult(endpointFact) {
   const { latest_completed_cursor, last_handled_cursor } = endpointFact;
 
   // 若存在可靠的最新完成游标，且未被 Rally 明确 handled，则确定性派生为 NEW
-  if (latest_completed_cursor && latest_completed_cursor !== last_handled_cursor) {
+  if (
+    latest_completed_cursor !== null &&
+    latest_completed_cursor !== undefined &&
+    latest_completed_cursor !== last_handled_cursor
+  ) {
     return 'NEW';
   }
 
@@ -156,7 +161,8 @@ export class ProjectStatusCore {
    * 规范约束 (Invariants):
    * 1. 严格禁止传入 NEW / NO_NEW_RESULT 作为权威事实写入；
    * 2. 连续性信任必须显式提供 (trusted: true 或 continuity: { trusted: true })，无显式信任证据时 fail-closed 为 UNKNOWN；
-   * 3. 绝不读取或修改 last_handled_cursor：live observation 只能更新 completion/continuity 事实，handled 只能由 markEndpointHandled() 推进。
+   * 3. 绝不读取或修改 last_handled_cursor：live observation 只能更新 completion/continuity 事实，handled 只能由 markEndpointHandled() 推进；
+   * 4. 未受信观察绝不写入或污染 latest_completed_cursor。
    *
    * @param {string} endpoint - 'browser' | 'ide'
    * @param {object} observation - 规范事实输入
@@ -211,13 +217,18 @@ export class ProjectStatusCore {
       unknownReason = null;
     }
 
-    // 提取完成游标事实（支持 latest_completed_cursor 或别名 turn_id / cursor）
-    // 注意：若传入了 null 或新的有效游标则更新；未指定则保留当前游标
-    const latestCursor = observation.latest_completed_cursor !== undefined
-      ? observation.latest_completed_cursor
-      : (observation.turn_id ?? observation.cursor ?? current.latest_completed_cursor);
+    // 提取完成游标事实：仅在连续性受信时才允许更新游标；未受信观察绝不污染已有的完成游标
+    let latestCursor = current.latest_completed_cursor;
+    let completedAt = current.completed_at;
 
-    const completedAt = observation.completed_at ?? current.completed_at;
+    if (trusted) {
+      if (observation.latest_completed_cursor !== undefined) {
+        latestCursor = observation.latest_completed_cursor;
+      }
+      if (observation.completed_at !== undefined) {
+        completedAt = observation.completed_at;
+      }
+    }
 
     // 注意：绝不更新 last_handled_cursor，严格保持 current.last_handled_cursor！
     this._endpoints[endpoint] = {
@@ -238,14 +249,13 @@ export class ProjectStatusCore {
   /**
    * 显式标记某端点已处理 (Mark handled)
    * 核心不变量：只能推进到当前可靠的 latest completed cursor！
-   * 若连续性未知、无可靠最新完成、或 expected_cursor 与当前 latest cursor 不匹配，绝不能清除 NEW
+   * 强制比对 expected_cursor：若未提供、或与当前 latest cursor 不匹配，绝不能清除 NEW
    * @param {string} endpoint 
-   * @param {object} [params]
-   * @param {string} [params.expected_cursor] - 预期的游标，必须与当前 latest_completed_cursor 一致
-   * @param {string} [params.handled_turn_id] - 别名，同 expected_cursor
+   * @param {object} params
+   * @param {string} params.expected_cursor - 预期的游标，必须与当前 latest_completed_cursor 一致
    * @returns {{ success: boolean, reason?: string, handled_cursor?: string }}
    */
-  markEndpointHandled(endpoint, { expected_cursor = null, handled_turn_id = null } = {}) {
+  markEndpointHandled(endpoint, { expected_cursor } = {}) {
     if (!ALLOWED_ENDPOINTS.includes(endpoint)) {
       throw new Error(`Invalid endpoint "${endpoint}".`);
     }
@@ -259,14 +269,12 @@ export class ProjectStatusCore {
     }
 
     // 2. 若当前没有可靠的 latest_completed_cursor，无完成可推进
-    if (!current.latest_completed_cursor) {
+    if (current.latest_completed_cursor === null || current.latest_completed_cursor === undefined) {
       return { success: false, reason: 'no_latest_completed_cursor' };
     }
 
-    // 3. 若调用者指定了 expected cursor，必须精确匹配当前 latest_completed_cursor
-    const targetCursor = expected_cursor || handled_turn_id;
-    if (targetCursor && targetCursor !== current.latest_completed_cursor) {
-      // 游标不匹配（旧游标或未知游标）：绝不能清除当前 NEW！
+    // 3. 强制比对 expected_cursor：未提供或游标不匹配时，绝不能清除当前 NEW！
+    if (expected_cursor === null || expected_cursor === undefined || expected_cursor !== current.latest_completed_cursor) {
       return { success: false, reason: 'cursor_mismatch' };
     }
 
@@ -296,20 +304,15 @@ export class ProjectStatusCore {
 
   /**
    * 清除人工介入
-   * 独立共存：绝不影响或改写端点的 Endpoint Result
+   * 代理委托至 setHumanIntervention 消除重复
    */
   clearHumanIntervention() {
-    this._humanIntervention = {
-      active: false,
-      reason: null,
-      updated_at: new Date().toISOString()
-    };
-    this._updatedAt = this._humanIntervention.updated_at;
+    this.setHumanIntervention({ active: false, reason: null });
   }
 
   /**
    * 记录动作事实
-   * 独立共存：动作生命周期与 Endpoint Result 互不干扰
+   * 独立共存：动作事实记录与 Endpoint Result 互不干扰
    * @param {object} actionFact
    */
   recordActionFact({
@@ -382,36 +385,9 @@ export class ProjectStatusCore {
    * @returns {object}
    */
   getSnapshot() {
-    const endpointsSnapshot = {
-      browser: {
-        endpoint: 'browser',
-        result_state: deriveEndpointResult(this._endpoints.browser),
-        latest_completed_cursor: this._endpoints.browser.latest_completed_cursor,
-        last_handled_cursor: this._endpoints.browser.last_handled_cursor,
-        turn_id: this._endpoints.browser.latest_completed_cursor,
-        last_handled_turn_id: this._endpoints.browser.last_handled_cursor,
-        completed_at: this._endpoints.browser.completed_at,
-        continuity: { ...this._endpoints.browser.continuity },
-        unknown_reason: this._endpoints.browser.continuity.trusted ? null : this._endpoints.browser.continuity.unknown_reason,
-        updated_at: this._endpoints.browser.updated_at
-      },
-      ide: {
-        endpoint: 'ide',
-        result_state: deriveEndpointResult(this._endpoints.ide),
-        latest_completed_cursor: this._endpoints.ide.latest_completed_cursor,
-        last_handled_cursor: this._endpoints.ide.last_handled_cursor,
-        turn_id: this._endpoints.ide.latest_completed_cursor,
-        last_handled_turn_id: this._endpoints.ide.last_handled_cursor,
-        completed_at: this._endpoints.ide.completed_at,
-        continuity: { ...this._endpoints.ide.continuity },
-        unknown_reason: this._endpoints.ide.continuity.trusted ? null : this._endpoints.ide.continuity.unknown_reason,
-        updated_at: this._endpoints.ide.updated_at
-      }
-    };
-
     return formatStatusSnapshot({
       binding: this._binding,
-      endpoints: endpointsSnapshot,
+      endpoints: this._endpoints,
       humanIntervention: this._humanIntervention,
       actions: this._actions,
       updatedAt: this._updatedAt

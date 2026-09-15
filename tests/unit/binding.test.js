@@ -8,7 +8,7 @@ import {
   resumeBinding
 } from '../../src/controller/binding.js';
 
-test('[unit] Binding: creates valid binding with default capabilities', () => {
+test('[单元测试] Binding: 成功创建具有默认能力的合法 binding 实例', () => {
   const binding = createBinding({
     binding_id: 'bind-001',
     binding_revision: 1,
@@ -31,7 +31,7 @@ test('[unit] Binding: creates valid binding with default capabilities', () => {
   assert.equal(binding.paused, false);
 });
 
-test('[unit] Binding: rejects invalid or missing fields', () => {
+test('[单元测试] Binding: 拒绝非法或缺失字段', () => {
   assert.throws(() => {
     createBinding({ binding_id: '' });
   }, /Invalid Binding creation/);
@@ -51,7 +51,7 @@ test('[unit] Binding: rejects invalid or missing fields', () => {
   }, /Invalid Binding creation/);
 });
 
-test('[unit] Binding: bumps revision correctly', () => {
+test('[单元测试] Binding: 正确递增版本号', () => {
   const binding = createBinding({
     binding_id: 'bind-001',
     browser: { provider: 'chatgpt', conversation_id: 'c1' },
@@ -63,7 +63,7 @@ test('[unit] Binding: bumps revision correctly', () => {
   assert.ok(typeof bumped.updated_at === 'string' && bumped.updated_at.length > 0);
 });
 
-test('[unit] Binding: pause and resume transitions', () => {
+test('[单元测试] Binding: 正确流转暂停与恢复状态', () => {
   const binding = createBinding({
     binding_id: 'bind-001',
     browser: { provider: 'chatgpt', conversation_id: 'c1' },

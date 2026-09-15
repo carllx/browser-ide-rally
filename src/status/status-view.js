@@ -9,11 +9,39 @@
  * 4. 出现 UNKNOWN 时显式 fail-closed 展示，严禁使用 IDLE。
  */
 
+import { deriveEndpointResult } from './status-core.js';
+
+/**
+ * 格式化单个端点的快照对象，消除端点间的重复结构映射
+ * @param {object} endpointFact - 端点规范事实
+ * @returns {object|null}
+ */
+export function formatEndpointSnapshot(endpointFact) {
+  if (!endpointFact) {
+    return null;
+  }
+  const isTrusted = Boolean(endpointFact.continuity?.trusted);
+  const unknownReason = isTrusted ? null : (endpointFact.continuity?.unknown_reason || null);
+  return {
+    endpoint: endpointFact.endpoint,
+    result_state: deriveEndpointResult(endpointFact),
+    latest_completed_cursor: endpointFact.latest_completed_cursor,
+    last_handled_cursor: endpointFact.last_handled_cursor,
+    completed_at: endpointFact.completed_at,
+    continuity: {
+      trusted: isTrusted,
+      unknown_reason: unknownReason
+    },
+    unknown_reason: unknownReason,
+    updated_at: endpointFact.updated_at
+  };
+}
+
 /**
  * 格式化规范机器可读项目快照
  * @param {object} params
  * @param {object} params.binding - Project Binding 对象
- * @param {object} params.endpoints - 端点状态事实集 { browser, ide }
+ * @param {object} params.endpoints - 端点原始规范事实集 { browser, ide }
  * @param {object} params.humanIntervention - 人工介入事实
  * @param {Array} params.actions - 动作事实列表
  * @param {string} params.updatedAt - 更新时间戳
@@ -43,8 +71,8 @@ export function formatStatusSnapshot({
       paused: Boolean(binding.paused)
     } : null,
     endpoints: {
-      browser: endpoints?.browser ? { ...endpoints.browser } : null,
-      ide: endpoints?.ide ? { ...endpoints.ide } : null
+      browser: formatEndpointSnapshot(endpoints?.browser),
+      ide: formatEndpointSnapshot(endpoints?.ide)
     },
     human_intervention: {
       active: Boolean(humanIntervention?.active),

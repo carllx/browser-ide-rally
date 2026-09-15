@@ -3,7 +3,7 @@
  *
  * 遵循最高测试缝隙（Highest test seam）原则：
  * canonical project facts in → externally visible Status Core snapshot/view out.
- * 验证所有领域不变式、验收条件以及 Browser Re-review (second pass) 指出的核心回归守卫。
+ * 验证所有领域不变式、验收条件以及两轮 Browser Review 与 Code Review 发现的核心回归守卫。
  */
 
 import test from 'node:test';
@@ -161,7 +161,7 @@ test('[Status Core] 5. UNKNOWN 优先级高于便利推断，严禁 IDLE', () =>
   assert.match(snapshot.endpoints.browser.unknown_reason, /disallowed_idle_state/);
 
   // 当处于 UNKNOWN 时，执行 markEndpointHandled 不能凭空推断为 NO_NEW_RESULT
-  const result = core.markEndpointHandled('browser');
+  const result = core.markEndpointHandled('browser', { expected_cursor: 'any' });
   assert.equal(result.success, false);
   assert.equal(core.getSnapshot().endpoints.browser.result_state, 'UNKNOWN');
 });
@@ -318,7 +318,7 @@ test('[Status Core] 10. 过期的 binding_revision 观察导致 UNKNOWN', () => 
 });
 
 /* =========================================================================
- * 核心回归守卫测试 (Regression Guard Tests - Passes 1 & 2)
+ * 核心回归守卫测试 (Regression Guard Tests - Passes 1 & 2 & Code Review)
  * ========================================================================= */
 
 test('[Regression 1] Endpoint Result 纯粹从底层规范事实确定性派生，不可写入伪造', () => {
@@ -376,7 +376,7 @@ test('[Regression 2] 旧的或不匹配的 cursor 调用 markEndpointHandled 绝
   assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NEW');
 
   // 2. 尝试使用完全不匹配的伪造游标 turn-unknown 进行推进
-  const fakeResult = core.markEndpointHandled('browser', { handled_turn_id: 'turn-unknown' });
+  const fakeResult = core.markEndpointHandled('browser', { expected_cursor: 'turn-unknown' });
   assert.equal(fakeResult.success, false);
   assert.equal(fakeResult.reason, 'cursor_mismatch');
   assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NEW');
@@ -493,4 +493,63 @@ test('[Regression 7] 显式 trusted 且确实无未处理完成时正确派生 N
   assert.equal(snapshot.endpoints.browser.result_state, 'NO_NEW_RESULT');
   assert.equal(snapshot.endpoints.browser.continuity.trusted, true);
   assert.equal(snapshot.endpoints.browser.unknown_reason, null);
+});
+
+test('[Regression 8] 未受信的 observation 绝不能将脏游标写入规范状态', () => {
+  const binding = createSampleBinding();
+  const core = createProjectStatusCore({ binding });
+
+  // 初始游标为 null
+  assert.equal(core.getSnapshot().endpoints.browser.latest_completed_cursor, null);
+
+  // 传入一个未受信的 observation（例如缺少 trusted 声明，或者归属不匹配），附带游标
+  core.recordEndpointObservation('browser', {
+    conversation_id: 'conv-browser-alpha',
+    // 缺少 trusted: true
+    latest_completed_cursor: 'dirty-cursor-999'
+  });
+
+  // 核心守卫：未受信观察的游标绝不被写入底层！
+  assert.equal(core.getSnapshot().endpoints.browser.latest_completed_cursor, null);
+  assert.equal(core.getSnapshot().endpoints.browser.result_state, 'UNKNOWN');
+});
+
+test('[Regression 9] 假值游标（如数字 0 或空字符串）能正确派生为 NEW 而非被错误漏判', () => {
+  assert.equal(
+    deriveEndpointResult({
+      continuity: { trusted: true },
+      latest_completed_cursor: 0,
+      last_handled_cursor: null
+    }),
+    'NEW'
+  );
+
+  assert.equal(
+    deriveEndpointResult({
+      continuity: { trusted: true },
+      latest_completed_cursor: '',
+      last_handled_cursor: null
+    }),
+    'NEW'
+  );
+});
+
+test('[Regression 10] 未提供 expected_cursor 时 markEndpointHandled 强制拒绝盲目推进', () => {
+  const binding = createSampleBinding();
+  const core = createProjectStatusCore({ binding });
+
+  core.recordEndpointObservation('browser', {
+    conversation_id: 'conv-browser-alpha',
+    trusted: true,
+    latest_completed_cursor: 'turn-999'
+  });
+
+  assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NEW');
+
+  // 未提供 expected_cursor，拒绝盲目推进
+  const result = core.markEndpointHandled('browser');
+  assert.equal(result.success, false);
+  assert.equal(result.reason, 'cursor_mismatch');
+  // NEW 完好无损
+  assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NEW');
 });
