@@ -112,6 +112,44 @@ export function matchesRepository(workspacePath, expectedRepository) {
 }
 
 /**
+ * 校验 transcript 物理路径是否确实属于指定 Antigravity 会话 (Transcript Provenance)
+ * 严格遵循官方 Antigravity 物理路径拓扑：
+ * .../.gemini/antigravity/brain/<conversationId>/.system_generated/logs/transcript.jsonl
+ *
+ * 规则：
+ * 1. 物理文件必须存在且为常规文件；
+ * 2. 规范化路径必须以 /.system_generated/logs/transcript.jsonl 精确结尾；
+ * 3. 紧邻上述固定后缀的父级目录段必须严格且全等匹配 expectedConversationId；
+ * 4. 严禁使用子串匹配、模糊包含或仅凭文件名猜测。
+ * @param {string} transcriptPath 
+ * @param {string} expectedConversationId 
+ * @returns {boolean}
+ */
+export function isProvenAntigravityTranscript(transcriptPath, expectedConversationId) {
+  if (typeof transcriptPath !== 'string' || !transcriptPath.trim()) return false;
+  if (typeof expectedConversationId !== 'string' || !expectedConversationId.trim()) return false;
+
+  const norm = normalizePath(transcriptPath);
+  const suffix = '/.system_generated/logs/transcript.jsonl';
+
+  if (!norm.endsWith(suffix)) {
+    return false;
+  }
+
+  const prefix = norm.slice(0, -suffix.length);
+  const conversationDirSegment = path.posix.basename(prefix);
+  if (!conversationDirSegment || conversationDirSegment !== expectedConversationId.trim()) {
+    return false;
+  }
+
+  try {
+    return fs.existsSync(norm) && fs.statSync(norm).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 从单条 transcript step 派生内容指纹 (16位十六进制)
  * @param {object} step 
  * @returns {string}
@@ -292,10 +330,10 @@ export class AntigravityIdeAdapter {
       };
     }
 
-    // 6. 从 transcript 提取最新完成游标（必须由 hookPayload 显式提供真实路径，绝不猜测）
-    if (!transcriptPath || typeof transcriptPath !== 'string' || !fs.existsSync(transcriptPath)) {
-      this._failClosedToUnknown('transcript_not_found: official transcriptPath missing or invalid');
-      return { accepted: false, reason: 'transcript_not_found' };
+    // 6. 从 transcript 提取最新完成游标（必须证明物理路径属于 bound conversationId，绝不猜测）
+    if (!isProvenAntigravityTranscript(transcriptPath, expectedIde.conversation_id)) {
+      this._failClosedToUnknown('transcript_provenance_unverified: official transcriptPath missing or does not prove ownership of bound conversation');
+      return { accepted: false, reason: 'transcript_provenance_unverified' };
     }
 
     const turns = parseTranscriptCompletedTurns(transcriptPath);
@@ -382,10 +420,14 @@ export class AntigravityIdeAdapter {
       };
     }
 
-    // 4. transcript 物理文件校验
-    if (!transcriptPath || typeof transcriptPath !== 'string' || !fs.existsSync(transcriptPath)) {
+    // 4. transcript 物理路径及其归属证明校验 (Transcript Provenance Guard)
+    // 拒绝“有效 identityProof + 错误会话 transcript”或 lookalike 路径，未证明归属坚决 fail-closed
+    if (!isProvenAntigravityTranscript(transcriptPath, expectedIde.conversation_id)) {
       this._failClosedToUnknown('UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION');
-      return { status: 'UNKNOWN', reason: 'transcript_unavailable' };
+      return {
+        status: 'UNKNOWN',
+        reason: 'transcript_provenance_unverified: transcript path does not prove ownership of bound conversation'
+      };
     }
 
     const currentSnapshot = this._statusCore.getSnapshot();

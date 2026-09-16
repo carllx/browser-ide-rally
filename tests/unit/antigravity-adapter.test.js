@@ -27,12 +27,19 @@ import { createBinding } from '../../src/controller/binding.js';
 import { createProjectRegistry } from '../../src/registry/project-registry.js';
 import { AntigravityIdeAdapter, decodeOpaqueCursor } from '../../src/adapters/ide/antigravity-adapter.js';
 
-function createTempDir(prefix = 'ag-ide-adapter-test') {
+function createTempDir(prefix = 'ag-ide-adapter-test', conversationId = 'conv-ag-001') {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const logDir = path.join(tmpDir, 'brain', conversationId, '.system_generated', 'logs');
+  fs.mkdirSync(logDir, { recursive: true });
   return {
     dir: tmpDir,
     registryFile: path.join(tmpDir, 'registry.json'),
-    transcriptFile: path.join(tmpDir, 'transcript.jsonl'),
+    transcriptFile: path.join(logDir, 'transcript.jsonl'),
+    makeTranscriptPath: (convId) => {
+      const p = path.join(tmpDir, 'brain', convId, '.system_generated', 'logs', 'transcript.jsonl');
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      return p;
+    },
     cleanup: () => {
       try {
         fs.rmSync(tmpDir, { recursive: true, force: true });
