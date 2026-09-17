@@ -224,14 +224,23 @@ export class AntigravityIdeAdapter {
     this._ideIdentity = ideEp;
   }
 
-  _failClosedToUnknown(reason = 'UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION') {
-    this._statusCore.recordEndpointObservation(this._endpointId, {
+  _buildObservation(payload) {
+    const obs = {
       conversation_id: this._ideIdentity.conversation_id,
-      endpoint_revision: this._ideIdentity.endpoint_revision || 1,
       binding_revision: this._binding.binding_revision,
-      continuity_lost: true,
-      reason
-    });
+      ...payload
+    };
+    if (this._ideIdentity.endpoint_revision !== undefined) {
+      obs.endpoint_revision = this._ideIdentity.endpoint_revision;
+    }
+    return obs;
+  }
+
+  _failClosedToUnknown(reason = 'UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION') {
+    this._statusCore.recordEndpointObservation(
+      this._endpointId,
+      this._buildObservation({ continuity_lost: true, reason })
+    );
   }
 
   updateBinding(nextBinding) {
@@ -309,14 +318,11 @@ export class AntigravityIdeAdapter {
     const latestTurn = turns[turns.length - 1];
     const opaqueCursor = encodeOpaqueCursor(latestTurn.stepIndex, latestTurn.fingerprint);
 
-    const observation = {
-      conversation_id: expectedIde.conversation_id,
-      endpoint_revision: expectedIde.endpoint_revision || 1,
-      binding_revision: this._binding.binding_revision,
+    const observation = this._buildObservation({
       trusted: true,
       latest_completed_cursor: opaqueCursor,
       completed_at: latestTurn.createdAt || new Date().toISOString()
-    };
+    });
 
     this._statusCore.recordEndpointObservation(this._endpointId, observation);
 
@@ -380,13 +386,10 @@ export class AntigravityIdeAdapter {
 
     if (!handledCursor) {
       if (turns.length === 0) {
-        this._statusCore.recordEndpointObservation(this._endpointId, {
-          conversation_id: expectedIde.conversation_id,
-          endpoint_revision: expectedIde.endpoint_revision || 1,
-          binding_revision: this._binding.binding_revision,
-          trusted: true,
-          latest_completed_cursor: null
-        });
+        this._statusCore.recordEndpointObservation(
+          this._endpointId,
+          this._buildObservation({ trusted: true, latest_completed_cursor: null })
+        );
         return { status: 'RECONCILED' };
       }
 
@@ -398,14 +401,14 @@ export class AntigravityIdeAdapter {
           const effectiveTurn = subsequentTurns.length > 0 ? subsequentTurns[subsequentTurns.length - 1] : matchingTurn;
           const effectiveCursor = encodeOpaqueCursor(effectiveTurn.stepIndex, effectiveTurn.fingerprint);
 
-          this._statusCore.recordEndpointObservation(this._endpointId, {
-            conversation_id: expectedIde.conversation_id,
-            endpoint_revision: expectedIde.endpoint_revision || 1,
-            binding_revision: this._binding.binding_revision,
-            trusted: true,
-            latest_completed_cursor: effectiveCursor,
-            completed_at: effectiveTurn.createdAt || ideFact.completed_at
-          });
+          this._statusCore.recordEndpointObservation(
+            this._endpointId,
+            this._buildObservation({
+              trusted: true,
+              latest_completed_cursor: effectiveCursor,
+              completed_at: effectiveTurn.createdAt || ideFact.completed_at
+            })
+          );
           return { status: 'RECONCILED' };
         }
       }
@@ -428,28 +431,28 @@ export class AntigravityIdeAdapter {
 
     const subsequentTurns = turns.filter(t => t.stepIndex > decodedHandled.stepIndex);
     if (subsequentTurns.length === 0) {
-      this._statusCore.recordEndpointObservation(this._endpointId, {
-        conversation_id: expectedIde.conversation_id,
-        endpoint_revision: expectedIde.endpoint_revision || 1,
-        binding_revision: this._binding.binding_revision,
-        trusted: true,
-        latest_completed_cursor: handledCursor,
-        completed_at: handledTurn.createdAt || ideFact.completed_at
-      });
+      this._statusCore.recordEndpointObservation(
+        this._endpointId,
+        this._buildObservation({
+          trusted: true,
+          latest_completed_cursor: handledCursor,
+          completed_at: handledTurn.createdAt || ideFact.completed_at
+        })
+      );
       return { status: 'RECONCILED' };
     }
 
     const latestTurn = subsequentTurns[subsequentTurns.length - 1];
     const newOpaqueCursor = encodeOpaqueCursor(latestTurn.stepIndex, latestTurn.fingerprint);
 
-    this._statusCore.recordEndpointObservation(this._endpointId, {
-      conversation_id: expectedIde.conversation_id,
-      endpoint_revision: expectedIde.endpoint_revision || 1,
-      binding_revision: this._binding.binding_revision,
-      trusted: true,
-      latest_completed_cursor: newOpaqueCursor,
-      completed_at: latestTurn.createdAt || new Date().toISOString()
-    });
+    this._statusCore.recordEndpointObservation(
+      this._endpointId,
+      this._buildObservation({
+        trusted: true,
+        latest_completed_cursor: newOpaqueCursor,
+        completed_at: latestTurn.createdAt || new Date().toISOString()
+      })
+    );
 
     return { status: 'RECONCILED' };
   }

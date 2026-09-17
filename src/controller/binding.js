@@ -155,7 +155,7 @@ export function createBinding({
   } else if (ide && typeof ide === 'object') {
     normalizedIdeEndpoints = [{
       endpoint_id: ide.endpoint_id || 'ide',
-      endpoint_revision: ide.endpoint_revision || 1,
+      endpoint_revision: ide.endpoint_revision,
       conversation_id: ide.conversation_id || '',
       workspace_identity: ide.workspace_identity || '',
       repository_identity: ide.repository_identity || ''

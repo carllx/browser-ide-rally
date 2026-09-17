@@ -419,3 +419,121 @@ test('[Multi-IDE Adapter] 8. 多 IDE 项目下构造 AntigravityIdeAdapter 若�
   }, /AntigravityIdeAdapter requires explicit endpointId when project has multiple IDE endpoints/);
 });
 
+test('[Multi-IDE Lifecycle] 9. A only -> add B -> remove B -> Adapter A 旧 binding 快照观察凭有效 endpoint_revision 成功推进', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-sibling-bounce-test-'));
+  try {
+    // 1. 初始状态：仅有 IDE-A 单端点，包含明确的 endpoint_revision: 1 与 binding_revision: 1
+    const initialBinding = createBinding({
+      binding_id: 'proj-lifecycle-bounce',
+      binding_revision: 1,
+      browser: { provider: 'chatgpt', conversation_id: 'conv-browser-001' },
+      ide_endpoints: [{
+        endpoint_id: 'ide-a',
+        endpoint_revision: 1,
+        conversation_id: 'conv-ide-a',
+        workspace_identity: '/Users/yamlam/Documents/GitHub/browser-ide-rally',
+        repository_identity: 'carllx/browser-ide-rally'
+      }]
+    });
+    const core = createProjectStatusCore({ binding: initialBinding });
+
+    // 2. 构造真实的 Adapter A（持有最初的 binding 快照）
+    const logDirA = path.join(tmpDir, 'brain', 'conv-ide-a', '.system_generated', 'logs');
+    fs.mkdirSync(logDirA, { recursive: true });
+    const transcriptFileA = path.join(logDirA, 'transcript.jsonl');
+
+    fs.writeFileSync(transcriptFileA, JSON.stringify({
+      step_index: 1,
+      type: 'PLANNER_RESPONSE',
+      status: 'DONE',
+      content: 'Turn 1 from Adapter A'
+    }) + '\n');
+
+    const adapterA = new AntigravityIdeAdapter({
+      binding: initialBinding,
+      statusCore: core,
+      endpointId: 'ide-a'
+    });
+
+    // 3. 动态添加 Sibling 端点 IDE-B -> 项目版本增加到 2，端点 A 的 endpoint_revision 依然是 1
+    core.addIdeEndpoint({
+      endpoint_id: 'ide-b',
+      identity: {
+        conversation_id: 'conv-ide-b',
+        workspace_identity: '/Users/yamlam/Documents/GitHub/browser-ide-rally',
+        repository_identity: 'carllx/browser-ide-rally'
+      }
+    });
+    assert.equal(core.getSnapshot().binding.binding_revision, 2);
+
+    // 4. 动态移除 Sibling 端点 IDE-B -> 项目回到仅有 1 个 IDE 端点，项目版本增加到 3，端点 A 的 endpoint_revision 仍是 1
+    core.removeIdeEndpoint('ide-b', { confirm_replace_unknown: true });
+    let snap = core.getSnapshot();
+    assert.equal(snap.binding.binding_revision, 3);
+    assert.equal(Object.keys(snap.endpoints.ide_endpoints).length, 1);
+    const boundEpA = snap.binding.ide_endpoints.find(e => e.endpoint_id === 'ide-a');
+    assert.equal(boundEpA?.endpoint_revision, 1);
+
+    // 5. Adapter A（持有旧的 binding_revision: 1 快照与仍然合法的 endpoint_revision: 1）发射观察
+    const hookRes = adapterA.handleStopHook({
+      conversationId: 'conv-ide-a',
+      workspacePaths: ['/Users/yamlam/Documents/GitHub/browser-ide-rally'],
+      fullyIdle: true,
+      terminationReason: 'NO_TOOL_CALL',
+      transcriptPath: transcriptFileA
+    });
+
+    // 必须成功接受，绝不能因为项目回到了单端点且 binding_revision 不一致而把 A 误拒收为 stale_revision
+    assert.equal(hookRes.accepted, true);
+    snap = core.getSnapshot();
+    const factA = snap.endpoints.ide_endpoints['ide-a'];
+    assert.equal(factA.result_state, 'NEW');
+    assert.equal(factA.continuity.trusted, true);
+    assert.equal(factA.continuity.unknown_reason, null);
+    assert.ok(factA.latest_completed_cursor.startsWith('ag-step:1:'));
+
+    // 6. 证明：stale pre-rebind 代际依然会被严格拦截
+    // 6a. 伪造过时的 endpoint_revision: 0
+    core.recordEndpointObservation('ide-a', {
+      conversation_id: 'conv-ide-a',
+      endpoint_revision: 0,
+      trusted: true,
+      latest_completed_cursor: 'ag-step:999:fake'
+    });
+    snap = core.getSnapshot();
+    assert.equal(snap.endpoints.ide_endpoints['ide-a'].result_state, 'UNKNOWN');
+    assert.match(snap.endpoints.ide_endpoints['ide-a'].unknown_reason, /stale_endpoint_revision/);
+
+    // 6b. 重绑 ide-a 导致其 endpoint_revision 递增为 2，Adapter A 持有的旧 revision 1 观察此时被严格拦截
+    core.rebindEndpoint({
+      endpoint_id: 'ide-a',
+      identity: {
+        conversation_id: 'conv-ide-a',
+        workspace_identity: '/Users/yamlam/Documents/GitHub/browser-ide-rally',
+        repository_identity: 'carllx/browser-ide-rally'
+      },
+      confirm_replace_unhandled_new: true,
+      confirm_replace_unknown: true
+    });
+    snap = core.getSnapshot();
+    const boundEpAfterRebind = snap.binding.ide_endpoints.find(e => e.endpoint_id === 'ide-a');
+    assert.equal(boundEpAfterRebind?.endpoint_revision, 2);
+
+    adapterA.handleStopHook({
+      conversationId: 'conv-ide-a',
+      workspacePaths: ['/Users/yamlam/Documents/GitHub/browser-ide-rally'],
+      fullyIdle: true,
+      terminationReason: 'NO_TOOL_CALL',
+      transcriptPath: transcriptFileA
+    });
+    snap = core.getSnapshot();
+    assert.equal(snap.endpoints.ide_endpoints['ide-a'].result_state, 'UNKNOWN');
+    assert.match(snap.endpoints.ide_endpoints['ide-a'].unknown_reason, /stale_endpoint_revision: expected ep_rev 2, got ep_rev 1/);
+  } finally {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {}
+  }
+});
+
+

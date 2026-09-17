@@ -162,21 +162,23 @@ export function verifyObservationContinuity({
     }
   } else {
     // IDE 端点
-    if (ideCount > 1) {
-      // 多 IDE 模式下：必须显式提供 endpoint_revision，禁止 fallback 到 binding_revision！
-      if (observation.endpoint_revision === undefined) {
-        return { trusted: false, unknownReason: 'missing_endpoint_revision: multi-IDE observation requires explicit endpoint_revision' };
-      }
-      if (observation.endpoint_revision !== targetEpRev) {
-        return { trusted: false, unknownReason: `stale_endpoint_revision: expected ep_rev ${targetEpRev}, got ep_rev ${observation.endpoint_revision}` };
+    if (observation.endpoint_revision !== undefined) {
+      // 1. 显式提供 endpoint_revision 时：具有端点本地绝对权威 (endpoint-local authority)
+      // 无论项目当前有 1 个还是 N 个 IDE，严格根据 targetEpRev 校验；
+      // 若匹配，绝不因 binding_revision 不一致而拒收！
+      const expectedRev = targetEpRev !== undefined ? targetEpRev : 1;
+      if (observation.endpoint_revision !== expectedRev) {
+        return { trusted: false, unknownReason: `stale_endpoint_revision: expected ep_rev ${expectedRev}, got ep_rev ${observation.endpoint_revision}` };
       }
     } else {
-      // 单 IDE 模式（保持既有 #16 测试契约完全兼容）
+      // 2. 缺省 endpoint_revision
+      if (ideCount > 1) {
+        // 多端点模式下严格 Fail-Closed
+        return { trusted: false, unknownReason: 'missing_endpoint_revision: multi-IDE observation requires explicit endpoint_revision' };
+      }
+      // 恰好单端点模式下：作为 pre-#21 单 IDE 遗留调用者的 fallback
       if (observation.binding_revision !== undefined && observation.binding_revision !== bindingRevision) {
         return { trusted: false, unknownReason: `stale_revision: expected rev ${bindingRevision}, got rev ${observation.binding_revision}` };
-      }
-      if (observation.endpoint_revision !== undefined && observation.endpoint_revision !== targetEpRev) {
-        return { trusted: false, unknownReason: `stale_endpoint_revision: expected ep_rev ${targetEpRev}, got ep_rev ${observation.endpoint_revision}` };
       }
     }
   }
