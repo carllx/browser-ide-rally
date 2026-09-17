@@ -100,3 +100,13 @@ arbitrary webpage text
 ## 代码规模与工程规范 (Source-size Rule)
 
 本仓库所有源码及工程约束以 [`AGENTS.md`](./AGENTS.md) 为准，不再在 README 重复维护第二套规则。
+
+## 本地状态表面 (Status Surface)
+
+启动本地多项目端点状态监视表面：
+
+```bash
+npm run surface
+# 或指定端口与持久化文件: node scripts/start-surface.mjs --port 3123 --storage /path/to/registry.json
+```
+

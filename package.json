@@ -4,7 +4,8 @@
   "description": "Rally Status Core and Browser/IDE collaboration companion",
   "type": "module",
   "scripts": {
-    "test": "node scripts/run-tests.mjs"
+    "test": "node scripts/run-tests.mjs",
+    "surface": "node scripts/start-surface.mjs"
   },
   "repository": {
     "type": "git",

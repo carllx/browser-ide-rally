@@ -91,6 +91,15 @@ export class ProjectRegistry {
     return snapshot;
   }
 
+  markProjectEndpointHandled(bindingId, endpointId, { expected_cursor } = {}) {
+    const core = this.getProject(bindingId);
+    const result = core.markEndpointHandled(endpointId, { expected_cursor });
+    if (result.success && this._storagePath) {
+      this.saveToFile(this._storagePath);
+    }
+    return result;
+  }
+
   exportRegistryData() {
     const projectsObj = {};
     for (const [bindingId, core] of this._projects.entries()) {
