@@ -1,12 +1,13 @@
 /**
  * 多项目持久化注册表 (Durable Multi-Project Registry)
  *
- * 核心设计原则 (Core Principles):
+ * 核心设计原则 (#14, #21):
  * 1. 多项目隔离：支持管理多个互不干扰的 Project Binding 及其 Status Core；
- * 2. 原子化与版本化持久化：使用 schema_version: 1，通过临时文件加原子重命名 (fs.renameSync) 确保写入安全；
- * 3. 故障关闭 (Fail-Closed)：数据损坏、版本不匹配或格式不完整时拒绝静默恢复，直接抛出明确错误；
- * 4. 独立受信任恢复：通过专用 hydration 缝隙还原底层规范事实，绝不混淆 live observation；
- * 5. 安全端点重绑：代理调用 Core 的安全 rebindEndpoint()，守卫未处理 NEW 并强制 UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION。
+ * 2. 原子化与版本化持久化：使用 schema_version: 2，通过临时文件加原子重命名确保写入安全；
+ * 3. v1 确定性迁移：对于已有 schema_version: 1 数据，执行严格确定性的单槽位迁移 (ide-default)，
+ *    保持 handled/latest/continuity 事实完整还原；不支持或损坏的 schema 一律 fail-closed；
+ * 4. 专有受信 Hydration 缝隙：底层规范事实安全还原，绝不混淆 live observation；
+ * 5. 安全端点生命周期编排：由 Registry 代理 Core 的安全 rebindEndpoint、addIdeEndpoint、removeIdeEndpoint。
  */
 
 import fs from 'node:fs';
@@ -14,14 +15,9 @@ import path from 'node:path';
 import { validateBinding } from '../controller/binding.js';
 import { createProjectStatusCore } from '../status/status-core.js';
 
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
+export const DETERMINISTIC_MIGRATED_IDE_ID = 'ide-default';
 
-/**
- * 创建多项目注册表实例
- * @param {object} [options]
- * @param {string} [options.storagePath] - 可选的持久化文件路径
- * @returns {ProjectRegistry}
- */
 export function createProjectRegistry({ storagePath = null } = {}) {
   const registry = new ProjectRegistry({ storagePath });
   if (storagePath && fs.existsSync(storagePath)) {
@@ -31,23 +27,12 @@ export function createProjectRegistry({ storagePath = null } = {}) {
 }
 
 export class ProjectRegistry {
-  /**
-   * @param {object} [options]
-   * @param {string} [options.storagePath]
-   */
   constructor({ storagePath = null } = {}) {
     this._storagePath = storagePath;
     /** @type {Map<string, import('../status/status-core.js').ProjectStatusCore>} */
     this._projects = new Map();
   }
 
-  /**
-   * 注册并托管新项目
-   * @param {object} params
-   * @param {object} params.binding - Project Binding 实例
-   * @param {object} [params.initial_endpoints] - 可选的初始/已持久化端点事实
-   * @returns {import('../status/status-core.js').ProjectStatusCore}
-   */
   registerProject({ binding, initial_endpoints = null }) {
     const validation = validateBinding(binding);
     if (!validation.valid) {
@@ -63,11 +48,6 @@ export class ProjectRegistry {
     return core;
   }
 
-  /**
-   * 获取指定 binding_id 的 Status Core
-   * @param {string} bindingId 
-   * @returns {import('../status/status-core.js').ProjectStatusCore}
-   */
   getProject(bindingId) {
     const core = this._projects.get(bindingId);
     if (!core) {
@@ -76,29 +56,14 @@ export class ProjectRegistry {
     return core;
   }
 
-  /**
-   * 判断是否存在指定 binding_id
-   * @param {string} bindingId 
-   * @returns {boolean}
-   */
   hasProject(bindingId) {
     return this._projects.has(bindingId);
   }
 
-  /**
-   * 列出所有已注册项目的规范快照
-   * @returns {Array<object>}
-   */
   listProjects() {
     return Array.from(this._projects.values()).map(core => core.getSnapshot());
   }
 
-  /**
-   * 安全重绑指定项目的某个端点 (#14)
-   * @param {string} bindingId 项目 ID
-   * @param {object} rebindOptions 重绑参数（含 endpoint, identity, 确认标志等）
-   * @returns {object} 更新后的快照
-   */
   rebindProjectEndpoint(bindingId, rebindOptions) {
     const core = this.getProject(bindingId);
     const snapshot = core.rebindEndpoint(rebindOptions);
@@ -108,10 +73,24 @@ export class ProjectRegistry {
     return snapshot;
   }
 
-  /**
-   * 导出当前全部项目的持久化数据结构
-   * @returns {object}
-   */
+  addProjectIdeEndpoint(bindingId, { endpoint_id, identity }) {
+    const core = this.getProject(bindingId);
+    const snapshot = core.addIdeEndpoint({ endpoint_id, identity });
+    if (this._storagePath) {
+      this.saveToFile(this._storagePath);
+    }
+    return snapshot;
+  }
+
+  removeProjectIdeEndpoint(bindingId, endpointId, options = {}) {
+    const core = this.getProject(bindingId);
+    const snapshot = core.removeIdeEndpoint(endpointId, options);
+    if (this._storagePath) {
+      this.saveToFile(this._storagePath);
+    }
+    return snapshot;
+  }
+
   exportRegistryData() {
     const projectsObj = {};
     for (const [bindingId, core] of this._projects.entries()) {
@@ -124,11 +103,6 @@ export class ProjectRegistry {
     };
   }
 
-  /**
-   * 原子写入保存到文件
-   * 先写入临时文件再通过 fs.renameSync 原子替换，防止中途断电或写入损坏
-   * @param {string} filePath 
-   */
   saveToFile(filePath) {
     if (!filePath || typeof filePath !== 'string') {
       throw new Error('Valid storage filePath is required for saveToFile');
@@ -148,10 +122,6 @@ export class ProjectRegistry {
     this._storagePath = filePath;
   }
 
-  /**
-   * 从持久化文件恢复多项目状态 (Fail-Closed 校验)
-   * @param {string} filePath 
-   */
   loadFromFile(filePath) {
     if (!filePath || typeof filePath !== 'string') {
       throw new Error('Valid storage filePath is required for loadFromFile');
@@ -168,19 +138,18 @@ export class ProjectRegistry {
       throw new Error(`Corrupt durable registry storage: ${err.message}`);
     }
 
-    // 1. 版本严格校验：不支持的版本一律 Fail-Closed
-    if (!parsed || parsed.schema_version !== CURRENT_SCHEMA_VERSION) {
+    if (!parsed || (parsed.schema_version !== 1 && parsed.schema_version !== CURRENT_SCHEMA_VERSION)) {
       throw new Error(
-        `Unsupported registry storage schema_version: expected ${CURRENT_SCHEMA_VERSION}, got ${parsed?.schema_version}`
+        `Unsupported registry storage schema_version: expected ${CURRENT_SCHEMA_VERSION} or 1, got ${parsed?.schema_version}`
       );
     }
 
-    // 2. 结构校验
+    const isV1Migration = parsed.schema_version === 1;
+
     if (!parsed.projects || typeof parsed.projects !== 'object' || Array.isArray(parsed.projects)) {
       throw new Error('Invalid registry storage format: "projects" must be an object');
     }
 
-    // 3. 受信反序列化每个项目（全量原子化：先构建到临时 Map，全部验证通过才替换）
     const nextProjects = new Map();
     const seenBindingIds = new Set();
 
@@ -190,27 +159,59 @@ export class ProjectRegistry {
       }
 
       const internalId = projData.binding.binding_id;
-      // 强制校验外层 project key 必须精确等于内部 binding.binding_id
       if (bindingId !== internalId) {
         throw new Error(
           `Durable project key mismatch: outer key "${bindingId}" does not match internal binding_id "${internalId}"`
         );
       }
 
-      // 强制校验内部 binding_id 唯一性，防止间接别名重复
       if (seenBindingIds.has(internalId)) {
         throw new Error(`Duplicate internal binding_id "${internalId}" detected in durable storage`);
       }
       seenBindingIds.add(internalId);
 
-      // 端点事实对象校验
       if (projData.endpoints && typeof projData.endpoints !== 'object') {
         throw new Error(`Corrupt endpoints ledger for binding_id "${bindingId}"`);
       }
 
+      let bindingToLoad = projData.binding;
+      let endpointsToLoad = projData.endpoints || {};
+
+      // 若为 v1 数据，执行确定性单槽位迁移
+      if (isV1Migration) {
+        const legacyIde = projData.binding.ide;
+        if (!legacyIde || typeof legacyIde !== 'object') {
+          throw new Error(`Corrupt v1 project data: missing ide identity for "${bindingId}"`);
+        }
+        bindingToLoad = {
+          ...projData.binding,
+          ide_endpoints: [{
+            endpoint_id: DETERMINISTIC_MIGRATED_IDE_ID,
+            endpoint_revision: 1,
+            conversation_id: legacyIde.conversation_id,
+            workspace_identity: legacyIde.workspace_identity,
+            repository_identity: legacyIde.repository_identity
+          }]
+        };
+
+        const migratedIdeEndpoints = {};
+        if (endpointsToLoad.ide) {
+          migratedIdeEndpoints[DETERMINISTIC_MIGRATED_IDE_ID] = {
+            ...endpointsToLoad.ide,
+            endpoint: DETERMINISTIC_MIGRATED_IDE_ID,
+            role: 'ide',
+            endpoint_revision: 1
+          };
+        }
+        endpointsToLoad = {
+          browser: endpointsToLoad.browser,
+          ide_endpoints: migratedIdeEndpoints
+        };
+      }
+
       const core = createProjectStatusCore({
-        binding: projData.binding,
-        initial_endpoints: projData.endpoints
+        binding: bindingToLoad,
+        initial_endpoints: endpointsToLoad
       });
 
       if (projData.human_intervention) {
@@ -226,7 +227,6 @@ export class ProjectRegistry {
       nextProjects.set(bindingId, core);
     }
 
-    // 全部项目验证与实例化成功后，一次性原子替换已有状态
     this._projects = nextProjects;
     this._storagePath = filePath;
   }

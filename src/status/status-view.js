@@ -5,43 +5,20 @@
  * 领域不变式 (Domain Invariants):
  * 1. 机器可读快照与紧凑视图源自同一规范真实数据源；
  * 2. 绝不持久化或推断唯一 owner、Baton、next actor 或 "whose turn"；
- * 3. 独立呈现 Browser 与 IDE 的 Endpoint Result（支持 Dual NEW 并存）；
- * 4. 出现 UNKNOWN 时显式 fail-closed 展示，严禁使用 IDLE。
+ * 3. 独立呈现 Browser 与每个 IDE 的 Endpoint Result（支持多端 NEW 并存）；
+ * 4. 出现 UNKNOWN 时显式 fail-closed 展示，严禁使用 IDLE；
+ * 5. 消除与 status-core 的循环依赖，纯事实派生由 endpoint-ledger 提供。
  */
 
-import { deriveEndpointResult } from './status-core.js';
+import { deriveEndpointResult, formatEndpointSnapshot } from './endpoint-ledger.js';
 
-/**
- * 格式化单个端点的快照对象，消除端点间的重复结构映射
- * @param {object} endpointFact - 端点规范事实
- * @returns {object|null}
- */
-export function formatEndpointSnapshot(endpointFact) {
-  if (!endpointFact) {
-    return null;
-  }
-  const isTrusted = Boolean(endpointFact.continuity?.trusted);
-  const unknownReason = isTrusted ? null : (endpointFact.continuity?.unknown_reason || null);
-  return {
-    endpoint: endpointFact.endpoint,
-    result_state: deriveEndpointResult(endpointFact),
-    latest_completed_cursor: endpointFact.latest_completed_cursor,
-    last_handled_cursor: endpointFact.last_handled_cursor,
-    completed_at: endpointFact.completed_at,
-    continuity: {
-      trusted: isTrusted,
-      unknown_reason: unknownReason
-    },
-    unknown_reason: unknownReason,
-    updated_at: endpointFact.updated_at
-  };
-}
+export { formatEndpointSnapshot };
 
 /**
  * 格式化规范机器可读项目快照
  * @param {object} params
  * @param {object} params.binding - Project Binding 对象
- * @param {object} params.endpoints - 端点原始规范事实集 { browser, ide }
+ * @param {object} params.endpoints - 端点原始规范事实集，包含 browser 以及 Map 或 Object 形式的 ide_endpoints
  * @param {object} params.humanIntervention - 人工介入事实
  * @param {Array} params.actions - 动作事实列表
  * @param {string} params.updatedAt - 更新时间戳
@@ -54,25 +31,69 @@ export function formatStatusSnapshot({
   actions = [],
   updatedAt
 }) {
-  return {
-    binding: binding ? {
+  const browserFact = endpoints?.browser || null;
+  const ideEndpointsMap = {};
+  let primaryIdeSnapshot = null;
+
+  if (endpoints?.ide_endpoints) {
+    const entries = endpoints.ide_endpoints instanceof Map
+      ? endpoints.ide_endpoints.entries()
+      : Object.entries(endpoints.ide_endpoints);
+    for (const [id, fact] of entries) {
+      ideEndpointsMap[id] = formatEndpointSnapshot(fact);
+    }
+    const ids = Object.keys(ideEndpointsMap);
+    if (ids.length === 1) {
+      // 恰好 1 个 IDE 端点时，为兼容现有单端读取表面导出 endpoints.ide
+      primaryIdeSnapshot = ideEndpointsMap[ids[0]];
+    }
+  } else if (endpoints?.ide) {
+    // 兼容旧形态
+    const legacySnapshot = formatEndpointSnapshot(endpoints.ide);
+    primaryIdeSnapshot = legacySnapshot;
+    if (endpoints.ide.endpoint) {
+      ideEndpointsMap[endpoints.ide.endpoint] = legacySnapshot;
+    }
+  }
+
+  // 格式化 binding 快照
+  let bindingSnapshot = null;
+  if (binding) {
+    const rawIdeList = Array.isArray(binding.ide_endpoints)
+      ? binding.ide_endpoints
+      : (binding.ide ? [{ endpoint_id: 'ide', endpoint_revision: 1, ...binding.ide }] : []);
+
+    bindingSnapshot = {
       binding_id: binding.binding_id,
       binding_revision: binding.binding_revision,
       browser: {
         provider: binding.browser?.provider || null,
         conversation_id: binding.browser?.conversation_id || null
       },
-      ide: {
-        conversation_id: binding.ide?.conversation_id || null,
-        workspace_identity: binding.ide?.workspace_identity || null,
-        repository_identity: binding.ide?.repository_identity || null
-      },
+      ide_endpoints: rawIdeList.map(ep => ({
+        endpoint_id: ep.endpoint_id,
+        endpoint_revision: ep.endpoint_revision || 1,
+        conversation_id: ep.conversation_id || null,
+        workspace_identity: ep.workspace_identity || null,
+        repository_identity: ep.repository_identity || null
+      })),
+      // 恰好 1 个 IDE 端点时派生只读兼容字段
+      ide: rawIdeList.length === 1 ? {
+        conversation_id: rawIdeList[0].conversation_id || null,
+        workspace_identity: rawIdeList[0].workspace_identity || null,
+        repository_identity: rawIdeList[0].repository_identity || null
+      } : null,
       capabilities: Array.isArray(binding.capabilities) ? [...binding.capabilities] : [],
       paused: Boolean(binding.paused)
-    } : null,
+    };
+  }
+
+  return {
+    binding: bindingSnapshot,
     endpoints: {
-      browser: formatEndpointSnapshot(endpoints?.browser),
-      ide: formatEndpointSnapshot(endpoints?.ide)
+      browser: formatEndpointSnapshot(browserFact),
+      ide: primaryIdeSnapshot,
+      ide_endpoints: ideEndpointsMap
     },
     human_intervention: {
       active: Boolean(humanIntervention?.active),
@@ -99,7 +120,17 @@ export function formatCompactStatus(snapshot) {
   const pausedStr = snapshot.binding.paused ? ' (PAUSED)' : '';
 
   const browserState = snapshot.endpoints?.browser?.result_state || 'UNKNOWN';
-  const ideState = snapshot.endpoints?.ide?.result_state || 'UNKNOWN';
+
+  // 多 IDE 展示
+  let idePart = 'IDE: UNKNOWN';
+  const ideEndpoints = snapshot.endpoints?.ide_endpoints || {};
+  const ideIds = Object.keys(ideEndpoints);
+  if (ideIds.length === 1 && snapshot.endpoints?.ide) {
+    idePart = `IDE: ${snapshot.endpoints.ide.result_state || 'UNKNOWN'}`;
+  } else if (ideIds.length > 0) {
+    const segments = ideIds.map(id => `${id}:${ideEndpoints[id]?.result_state || 'UNKNOWN'}`);
+    idePart = `IDEs: [${segments.join(', ')}]`;
+  }
 
   let humanStr = 'Human: NONE';
   if (snapshot.human_intervention?.active) {
@@ -113,5 +144,5 @@ export function formatCompactStatus(snapshot) {
     actionStr = `Actions: ${activeActions.length} (${latest.action_type || 'action'}: ${latest.stage || 'UNKNOWN'})`;
   }
 
-  return `Project [${bId}@rev${bRev}${pausedStr}] Browser: ${browserState} | IDE: ${ideState} | ${humanStr} | ${actionStr}`;
+  return `Project [${bId}@rev${bRev}${pausedStr}] Browser: ${browserState} | ${idePart} | ${humanStr} | ${actionStr}`;
 }
