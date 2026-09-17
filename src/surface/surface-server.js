@@ -134,6 +134,22 @@ export function createStatusSurfaceRequestHandler({ registry, browserAdapter = n
       }
     }
 
+function handleControlError(res, err) {
+  const msg = err?.message || String(err);
+  const isBlocked = msg.includes('STALE_OR_MISSING_BINDING_REVISION') ||
+                    msg.includes('BLOCKED') ||
+                    msg.includes('unhandled NEW') ||
+                    msg.includes('UNKNOWN') ||
+                    msg.includes('SECURITY_REJECT') ||
+                    msg.includes('IDE_ENDPOINT_NOT_FOUND') ||
+                    msg.includes('TARGET_LOOKUP_FAIL');
+  return sendJson(res, isBlocked ? 409 : 400, {
+    success: false,
+    stage: 'BLOCKED',
+    reason: msg
+  });
+}
+
     // 4. POST /api/projects/:bindingId/controls/rebind: 安全端点 Rebind
     const rebindMatch = pathname.match(/^\/api\/projects\/([^/]+)\/controls\/rebind$/);
     if (method === 'POST' && rebindMatch) {
@@ -163,15 +179,7 @@ export function createStatusSurfaceRequestHandler({ registry, browserAdapter = n
           new_binding_revision: result.snapshot?.binding?.binding_revision
         });
       } catch (err) {
-        const isBlocked = err.message.includes('STALE_OR_MISSING_BINDING_REVISION') ||
-                          err.message.includes('BLOCKED') ||
-                          err.message.includes('unhandled NEW') ||
-                          err.message.includes('UNKNOWN');
-        return sendJson(res, isBlocked ? 409 : 400, {
-          success: false,
-          stage: 'BLOCKED',
-          reason: err.message
-        });
+        return handleControlError(res, err);
       }
     }
 
@@ -202,16 +210,7 @@ export function createStatusSurfaceRequestHandler({ registry, browserAdapter = n
           stage: result.action?.stage || 'TARGET_COMPLETED'
         });
       } catch (err) {
-        const isBlocked = err.message.includes('STALE_OR_MISSING_BINDING_REVISION') ||
-                          err.message.includes('BLOCKED') ||
-                          err.message.includes('TARGET_LOOKUP_FAIL') ||
-                          err.message.includes('SECURITY_REJECT') ||
-                          err.message.includes('IDE_ENDPOINT_NOT_FOUND');
-        return sendJson(res, isBlocked ? 409 : 400, {
-          success: false,
-          stage: 'BLOCKED',
-          reason: err.message
-        });
+        return handleControlError(res, err);
       }
     }
 
@@ -234,28 +233,17 @@ export function createStatusSurfaceRequestHandler({ registry, browserAdapter = n
           expectedBindingRevision: body.expected_binding_revision,
           envelope: body.envelope,
           browserAdapter,
-          ideAdapters,
-          options: {
-            confirm_delivery: true
-          }
+          ideAdapters
         });
 
         return sendJson(res, 200, {
           success: true,
           action_id: result.action?.action_id,
-          stage: result.action?.stage || 'ACCEPTED_OR_DELIVERED',
+          stage: result.action?.stage,
           nonce: result.envelope?.nonce
         });
       } catch (err) {
-        const isBlocked = err.message.includes('STALE_OR_MISSING_BINDING_REVISION') ||
-                          err.message.includes('BLOCKED') ||
-                          err.message.includes('SECURITY_REJECT') ||
-                          err.message.includes('IDE_ENDPOINT_NOT_FOUND');
-        return sendJson(res, isBlocked ? 409 : 400, {
-          success: false,
-          stage: 'BLOCKED',
-          reason: err.message
-        });
+        return handleControlError(res, err);
       }
     }
 

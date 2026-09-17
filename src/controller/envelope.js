@@ -11,6 +11,7 @@
 
 export const SUPPORTED_ENVELOPE_VERSION = 1;
 export const ALLOWED_OPERATIONS = ['rally.echo', 'rally.prompt', 'rally.inspect'];
+export const MAX_PAYLOAD_BYTES = 64 * 1024; // 64KB bounded payload
 
 /**
  * 提取并校验结构化 Envelope
@@ -107,9 +108,14 @@ export function extractAndValidateEnvelope(rawText, options = {}) {
     throw new Error(`SECURITY_REJECT: Unsupported or unauthorized operation "${parsed.operation}"`);
   }
 
-  // 8. Payload 校验
+  // 8. Payload 校验 (必须为有界对象)
   if (!parsed.payload || typeof parsed.payload !== 'object') {
     throw new Error('VALIDATION_FAIL: Missing or non-object payload');
+  }
+
+  const payloadByteLength = Buffer.byteLength(JSON.stringify(parsed.payload), 'utf8');
+  if (payloadByteLength > MAX_PAYLOAD_BYTES) {
+    throw new Error(`VALIDATION_FAIL: Payload size ${payloadByteLength} bytes exceeds bound of ${MAX_PAYLOAD_BYTES} bytes`);
   }
 
   if (parsed.operation === 'rally.echo') {
@@ -127,5 +133,22 @@ export function extractAndValidateEnvelope(rawText, options = {}) {
  * @returns {string}
  */
 export function formatEnvelopeBlock(envelope) {
-  return `<RALLY_HANDOFF>\n${JSON.stringify(envelope, null, 2)}\n</RALLY_HANDOFF>`;
+  let normalizedPayload = envelope.payload;
+  if (typeof normalizedPayload === 'string') {
+    normalizedPayload = { text: normalizedPayload };
+  } else if (!normalizedPayload || typeof normalizedPayload !== 'object') {
+    normalizedPayload = { text: String(normalizedPayload || '') };
+  }
+
+  const payloadByteLength = Buffer.byteLength(JSON.stringify(normalizedPayload), 'utf8');
+  if (payloadByteLength > MAX_PAYLOAD_BYTES) {
+    throw new Error(`PAYLOAD_TOO_LARGE: Payload size ${payloadByteLength} bytes exceeds bound of ${MAX_PAYLOAD_BYTES} bytes`);
+  }
+
+  const normalized = {
+    ...envelope,
+    payload: normalizedPayload
+  };
+
+  return `<RALLY_HANDOFF>\n${JSON.stringify(normalized, null, 2)}\n</RALLY_HANDOFF>`;
 }

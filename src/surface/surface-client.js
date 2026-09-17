@@ -88,9 +88,6 @@ export const SURFACE_CLIENT_JS = `
           showToast('聚焦失败 [' + (result.stage || 'BLOCKED') + ']: ' + (result.reason || '版本失配或目标异常'), true);
           btn.disabled = false;
           btn.textContent = originalText;
-          if (resp.status === 409) {
-            setTimeout(() => window.location.reload(), 1200);
-          }
         }
       } catch (err) {
         showToast('请求异常: ' + err.message, true);
@@ -236,7 +233,7 @@ export const SURFACE_CLIENT_JS = `
               target_endpoint: endpointId,
               envelope: {
                 op: op,
-                body: bodyText
+                payload: { text: bodyText }
               }
             })
           });

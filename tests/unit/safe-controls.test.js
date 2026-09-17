@@ -306,6 +306,25 @@ test('[Safe Controls] 5. Safe Rebind 严格继承 #14/#21 NEW / UNKNOWN 确认�
   assert.equal(rebindRes.success, true);
   assert.equal(rebindRes.snapshot.binding.binding_revision, 2);
   assert.equal(rebindRes.action.stage, 'TARGET_COMPLETED');
+
+  // 针对泛化 'bound_ide' 重绑必须 Fail-Closed 拦截并记录 BLOCKED
+  assert.throws(() => {
+    executeSafeRebind({
+      registry,
+      bindingId,
+      expected_binding_revision: 2,
+      target_endpoint: 'bound_ide',
+      identity: {
+        conversation_id: 'conv-generic',
+        workspace_identity: '/ws/shared',
+        repository_identity: 'org/shared-repo'
+      }
+    });
+  }, /SECURITY_REJECT: Generic "bound_ide" target is prohibited/);
+
+  const blockedAction = core.getSnapshot().actions.find(a => a.reason === 'generic_bound_ide_prohibited' || a.evidence === 'generic_bound_ide_prohibited');
+  assert.ok(blockedAction);
+  assert.equal(blockedAction.stage, 'BLOCKED');
 });
 
 test('[Safe Controls] 6. Action 事实生命周期：REQUESTED -> SUBMITTED_LOCALLY -> ACCEPTED_OR_DELIVERED，不擅自推断后续阶段', () => {

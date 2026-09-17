@@ -60,6 +60,26 @@ function resolveIdeAdapter(ideAdapters, targetEndpoint) {
   return null;
 }
 
+function recordBlockedAction(registry, bindingId, { actionId, actionType, targetEndpoint, expectedRevision, reason }) {
+  if (registry?.hasProject && registry.hasProject(bindingId)) {
+    const core = registry.getProject(bindingId);
+    const action = core.recordActionFact({
+      action_id: actionId,
+      action_type: actionType,
+      target_endpoint: targetEndpoint || null,
+      stage: 'REQUESTED',
+      binding_revision: expectedRevision ?? 0,
+      evidence: reason
+    });
+    core.advanceActionStage(action.action_id, {
+      next_stage: 'BLOCKED',
+      evidence: reason
+    });
+    return { core, action };
+  }
+  return {};
+}
+
 /**
  * 安全端点重绑 (Safe Rebind Control)
  */
@@ -88,22 +108,26 @@ export function executeSafeRebind(params) {
     const res = resolveProjectAndValidateRevision(registry, bindingId, expected_binding_revision);
     core = res.core;
   } catch (err) {
-    if (registry.hasProject && registry.hasProject(bindingId)) {
-      core = registry.getProject(bindingId);
-      const action = core.recordActionFact({
-        action_id: actionId,
-        action_type: 'rebind',
-        target_endpoint: target_endpoint || null,
-        stage: 'REQUESTED',
-        binding_revision: expected_binding_revision ?? 0,
-        evidence: 'stale_or_missing_binding_revision'
-      });
-      core.advanceActionStage(action.action_id, {
-        next_stage: 'BLOCKED',
-        evidence: 'stale_or_missing_binding_revision'
-      });
-    }
+    recordBlockedAction(registry, bindingId, {
+      actionId,
+      actionType: 'rebind',
+      targetEndpoint: target_endpoint,
+      expectedRevision: expected_binding_revision,
+      reason: 'stale_or_missing_binding_revision'
+    });
     throw err;
+  }
+
+  // 严禁 generic bound_ide
+  if (target_endpoint === 'bound_ide') {
+    recordBlockedAction(registry, bindingId, {
+      actionId,
+      actionType: 'rebind',
+      targetEndpoint: target_endpoint,
+      expectedRevision: expected_binding_revision,
+      reason: 'generic_bound_ide_prohibited'
+    });
+    throw new Error('IDE_ENDPOINT_NOT_FOUND: SECURITY_REJECT: Generic "bound_ide" target is prohibited, specify exact endpoint_id');
   }
 
   const action = core.recordActionFact({
@@ -163,21 +187,13 @@ export function executeSafeOpenFocus(params) {
     core = res.core;
     currentBinding = res.currentBinding;
   } catch (err) {
-    if (registry.hasProject && registry.hasProject(bindingId)) {
-      core = registry.getProject(bindingId);
-      const action = core.recordActionFact({
-        action_id: actionId,
-        action_type: 'open_focus',
-        target_endpoint: target_endpoint || null,
-        stage: 'REQUESTED',
-        binding_revision: expected_binding_revision ?? 0,
-        evidence: 'stale_or_missing_binding_revision'
-      });
-      core.advanceActionStage(action.action_id, {
-        next_stage: 'BLOCKED',
-        evidence: 'stale_or_missing_binding_revision'
-      });
-    }
+    recordBlockedAction(registry, bindingId, {
+      actionId,
+      actionType: 'open_focus',
+      targetEndpoint: target_endpoint,
+      expectedRevision: expected_binding_revision,
+      reason: 'stale_or_missing_binding_revision'
+    });
     throw err;
   }
 
@@ -223,7 +239,13 @@ export function executeSafeOpenFocus(params) {
     }
   } else {
     if (target_endpoint === 'bound_ide') {
-      core.advanceActionStage(action.action_id, { next_stage: 'BLOCKED', evidence: 'generic_bound_ide_prohibited' });
+      recordBlockedAction(registry, bindingId, {
+        actionId,
+        actionType: 'open_focus',
+        targetEndpoint: target_endpoint,
+        expectedRevision: expected_binding_revision,
+        reason: 'generic_bound_ide_prohibited'
+      });
       throw new Error('IDE_ENDPOINT_NOT_FOUND: SECURITY_REJECT: Generic "bound_ide" target is prohibited, specify exact endpoint_id');
     }
 
@@ -293,54 +315,36 @@ export function executeSafeSend(params) {
     core = res.core;
     currentBinding = res.currentBinding;
   } catch (err) {
-    if (registry.hasProject && registry.hasProject(bindingId)) {
-      core = registry.getProject(bindingId);
-      const action = core.recordActionFact({
-        action_id: actionId,
-        action_type: 'send',
-        target_endpoint: target_endpoint || null,
-        stage: 'REQUESTED',
-        binding_revision: expected_binding_revision ?? 0,
-        evidence: 'stale_or_missing_binding_revision'
-      });
-      core.advanceActionStage(action.action_id, {
-        next_stage: 'BLOCKED',
-        evidence: 'stale_or_missing_binding_revision'
-      });
-    }
+    recordBlockedAction(registry, bindingId, {
+      actionId,
+      actionType: 'send',
+      targetEndpoint: target_endpoint,
+      expectedRevision: expected_binding_revision,
+      reason: 'stale_or_missing_binding_revision'
+    });
     throw err;
   }
 
   // 1. 操作白名单校验
   if (!ALLOWED_OPERATIONS.includes(operation)) {
-    const action = core.recordActionFact({
-      action_id: actionId,
-      action_type: 'send',
-      target_endpoint,
-      stage: 'REQUESTED',
-      binding_revision: expected_binding_revision,
-      evidence: 'unauthorized_operation'
-    });
-    core.advanceActionStage(action.action_id, {
-      next_stage: 'BLOCKED',
-      evidence: `SECURITY_REJECT: Unsupported operation "${operation}"`
+    recordBlockedAction(registry, bindingId, {
+      actionId,
+      actionType: 'send',
+      targetEndpoint: target_endpoint,
+      expectedRevision: expected_binding_revision,
+      reason: `SECURITY_REJECT: Unsupported operation "${operation}"`
     });
     throw new Error(`SECURITY_REJECT: Unsupported or unauthorized operation "${operation}"`);
   }
 
   // 2. bound_ide 泛化拦截
   if (target_endpoint === 'bound_ide') {
-    const action = core.recordActionFact({
-      action_id: actionId,
-      action_type: 'send',
-      target_endpoint,
-      stage: 'REQUESTED',
-      binding_revision: expected_binding_revision,
-      evidence: 'generic_bound_ide_prohibited'
-    });
-    core.advanceActionStage(action.action_id, {
-      next_stage: 'BLOCKED',
-      evidence: 'Generic "bound_ide" target is prohibited, specify exact endpoint_id'
+    recordBlockedAction(registry, bindingId, {
+      actionId,
+      actionType: 'send',
+      targetEndpoint: target_endpoint,
+      expectedRevision: expected_binding_revision,
+      reason: 'generic_bound_ide_prohibited'
     });
     throw new Error('IDE_ENDPOINT_NOT_FOUND: SECURITY_REJECT: Generic "bound_ide" target is prohibited, specify exact endpoint_id');
   }
@@ -389,11 +393,12 @@ export function executeSafeSend(params) {
     }
 
     // 本地提交 (DOM click) -> 至多证明 SUBMITTED_LOCALLY
+    let sendResult = null;
     try {
       try {
-        browserAdapter.sendTextPrompt(currentBinding.browser?.conversation_id, envelopeText);
+        sendResult = browserAdapter.sendTextPrompt(currentBinding.browser?.conversation_id, envelopeText);
       } catch {
-        browserAdapter.sendTextPrompt(tab.windowIndex, tab.tabIndex, envelopeText);
+        sendResult = browserAdapter.sendTextPrompt(tab.windowIndex, tab.tabIndex, envelopeText);
       }
       core.advanceActionStage(action.action_id, {
         next_stage: 'SUBMITTED_LOCALLY',
@@ -404,19 +409,27 @@ export function executeSafeSend(params) {
       throw err;
     }
 
-    // 投递确认检查 (Delivery Verification)
-    if (options.simulate_delivery_unknown) {
+    // 投递确认检查 (仅当目标适配器有受控接收证据且未被显式禁用时推进，或未确认时推进至 UNKNOWN)
+    const isBrowserUnknown = sendResult?.delivery_state === 'UNKNOWN' ||
+                            sendResult?.unknown === true ||
+                            options?.simulate_delivery_unknown === true ||
+                            options?.delivery_state === 'UNKNOWN';
+    const isBrowserAccepted = options?.confirm_delivery !== false && (
+                              sendResult?.accepted === true ||
+                              options?.confirm_delivery === true
+                            );
+
+    if (isBrowserUnknown) {
       core.advanceActionStage(action.action_id, {
         next_stage: 'UNKNOWN',
-        evidence: 'Delivery unconfirmed within timeout'
+        evidence: sendResult?.reason || 'Delivery unconfirmed within timeout'
       });
-    } else if (options.confirm_delivery === true) {
+    } else if (isBrowserAccepted) {
       core.advanceActionStage(action.action_id, {
         next_stage: 'ACCEPTED_OR_DELIVERED',
-        evidence: 'Browser DOM submission confirmed'
+        evidence: 'Browser prompt delivery verified'
       });
     }
-    // 若 confirm_delivery 缺省为 false/未提供，则严格停留在 SUBMITTED_LOCALLY
 
     return { success: true, action, envelope };
   } else {
@@ -444,9 +457,10 @@ export function executeSafeSend(params) {
       throw err;
     }
 
+    let ideResult = null;
     try {
       if (typeof effectiveIdeAdapter.dispatchControlledTask === 'function') {
-        effectiveIdeAdapter.dispatchControlledTask({
+        ideResult = effectiveIdeAdapter.dispatchControlledTask({
           conversationId: ep.conversation_id,
           envelope,
           targetEndpoint: target_endpoint
@@ -461,12 +475,21 @@ export function executeSafeSend(params) {
       throw err;
     }
 
-    if (options.simulate_delivery_unknown) {
+    const isIdeUnknown = ideResult?.delivery_state === 'UNKNOWN' ||
+                         ideResult?.unknown === true ||
+                         options?.simulate_delivery_unknown === true ||
+                         options?.delivery_state === 'UNKNOWN';
+    const isIdeAccepted = options?.confirm_delivery !== false && (
+                          ideResult?.accepted === true ||
+                          options?.confirm_delivery === true
+                        );
+
+    if (isIdeUnknown) {
       core.advanceActionStage(action.action_id, {
         next_stage: 'UNKNOWN',
-        evidence: 'Delivery unconfirmed within timeout'
+        evidence: ideResult?.reason || 'Delivery unconfirmed within timeout'
       });
-    } else if (options.confirm_delivery === true) {
+    } else if (isIdeAccepted) {
       core.advanceActionStage(action.action_id, {
         next_stage: 'ACCEPTED_OR_DELIVERED',
         evidence: 'IDE target accepted task'

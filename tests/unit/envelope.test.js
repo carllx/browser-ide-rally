@@ -123,3 +123,22 @@ test('[Envelope] 5. 单轮次中存在多个或歧义 Envelope 时 Fail-Closed',
     });
   }, /AMBIGUOUS_ENVELOPE/);
 });
+
+test('[Envelope] 6. 严格校验有界负载 (Bounded Payload Guard: 超出上限 Fail-Closed)', () => {
+  const hugePayload = {
+    text: 'A'.repeat(70 * 1024) // 70KB，超过 64KB
+  };
+  const oversizedEnvelope = {
+    version: 1,
+    nonce: 'nonce-big',
+    binding_id: 'proj-alpha',
+    binding_revision: 1,
+    target_endpoint: 'ide-a',
+    operation: 'rally.echo',
+    payload: hugePayload
+  };
+
+  assert.throws(() => {
+    formatEnvelopeBlock(oversizedEnvelope);
+  }, /PAYLOAD_TOO_LARGE/);
+});

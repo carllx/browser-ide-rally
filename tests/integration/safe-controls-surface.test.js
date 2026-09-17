@@ -70,14 +70,14 @@ describe('Safe Controls Surface 集成测试', () => {
     mockBrowserAdapter = {
       focusCalls: [],
       sendCalls: [],
-      async focusConversationTab(convId) {
+      focusConversationTab(convId) {
         this.focusCalls.push(convId);
         return { focused: true, windowIndex: 1, tabIndex: 2 };
       },
-      async checkComposerPreflight(convId) {
+      checkComposerPreflight(convId) {
         return { ready: true };
       },
-      async sendTextPrompt(convId, text) {
+      sendTextPrompt(convId, text) {
         this.sendCalls.push({ convId, text });
         return { accepted: true, textLength: text.length };
       }
@@ -86,25 +86,25 @@ describe('Safe Controls Surface 集成测试', () => {
     const ideCalls = [];
     mockIdeAdapters = new Map([
       ['ide-a', {
-        async verifyTargetIdentity(expected) {
+        verifyTargetIdentity(expected) {
           return { verified: true };
         },
-        async focusWindow() {
+        focusWindow() {
           return { focused: true, ide: 'ide-a' };
         },
-        async dispatchControlledTask(task) {
+        dispatchControlledTask(task) {
           ideCalls.push({ ide: 'ide-a', task });
           return { accepted: true, taskId: 'task-001' };
         }
       }],
       ['ide-b', {
-        async verifyTargetIdentity(expected) {
+        verifyTargetIdentity(expected) {
           return { verified: true };
         },
-        async focusWindow() {
+        focusWindow() {
           return { focused: true, ide: 'ide-b' };
         },
-        async dispatchControlledTask(task) {
+        dispatchControlledTask(task) {
           ideCalls.push({ ide: 'ide-b', task });
           return { accepted: true, taskId: 'task-002' };
         }
