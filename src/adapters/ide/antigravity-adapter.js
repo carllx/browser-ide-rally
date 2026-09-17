@@ -198,14 +198,19 @@ export class AntigravityIdeAdapter {
 
   _resolveIdeIdentity() {
     let ideEp = null;
+    const ideEndpoints = this._binding.ide_endpoints;
+    const ideCount = Array.isArray(ideEndpoints) ? ideEndpoints.length : 0;
+
     if (this._endpointId) {
-      ideEp = (this._binding.ide_endpoints || []).find(e => e.endpoint_id === this._endpointId);
+      ideEp = (ideEndpoints || []).find(e => e.endpoint_id === this._endpointId);
       if (!ideEp && this._binding.ide?.endpoint_id === this._endpointId) {
         ideEp = this._binding.ide;
       }
     } else {
-      if (this._binding.ide_endpoints && this._binding.ide_endpoints.length === 1) {
-        ideEp = this._binding.ide_endpoints[0];
+      if (ideCount > 1) {
+        throw new Error('AntigravityIdeAdapter requires explicit endpointId when project has multiple IDE endpoints');
+      } else if (ideCount === 1) {
+        ideEp = ideEndpoints[0];
       } else if (this._binding.ide) {
         ideEp = this._binding.ide;
       }

@@ -404,3 +404,18 @@ test('[Multi-IDE Hydration] 7. 持久化端点代际失配 (stale endpoint_revis
     cleanup();
   }
 });
+
+test('[Multi-IDE Adapter] 8. 多 IDE 项目下构造 AntigravityIdeAdapter 若缺省 endpointId 则严格拒绝', () => {
+  const binding = makeMultiIdeBinding('proj-missing-id-guard');
+  const registry = createProjectRegistry();
+  const core = registry.registerProject({ binding });
+
+  assert.throws(() => {
+    new AntigravityIdeAdapter({
+      binding,
+      statusCore: core
+      // 故意省略 endpointId
+    });
+  }, /AntigravityIdeAdapter requires explicit endpointId when project has multiple IDE endpoints/);
+});
+
