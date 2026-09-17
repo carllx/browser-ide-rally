@@ -150,7 +150,8 @@ export function verifyObservationContinuity({
   targetEpRev,
   isBrowser = false,
   bindingRevision,
-  ideCount = 1
+  ideCount = 1,
+  isLegacySingleIdeAuthority = false
 }) {
   if (observation.result_state === 'IDLE') {
     return { trusted: false, unknownReason: 'disallowed_idle_state: IDLE is not canonical Endpoint Result truth' };
@@ -162,23 +163,43 @@ export function verifyObservationContinuity({
     }
   } else {
     // IDE 端点
-    if (observation.endpoint_revision !== undefined) {
-      // 1. 显式提供 endpoint_revision 时：具有端点本地绝对权威 (endpoint-local authority)
-      // 无论项目当前有 1 个还是 N 个 IDE，严格根据 targetEpRev 校验；
-      // 若匹配，绝不因 binding_revision 不一致而拒收！
-      const expectedRev = targetEpRev !== undefined ? targetEpRev : 1;
-      if (observation.endpoint_revision !== expectedRev) {
-        return { trusted: false, unknownReason: `stale_endpoint_revision: expected ep_rev ${expectedRev}, got ep_rev ${observation.endpoint_revision}` };
-      }
-    } else {
-      // 2. 缺省 endpoint_revision
-      if (ideCount > 1) {
-        // 多端点模式下严格 Fail-Closed
-        return { trusted: false, unknownReason: 'missing_endpoint_revision: multi-IDE observation requires explicit endpoint_revision' };
-      }
-      // 恰好单端点模式下：作为 pre-#21 单 IDE 遗留调用者的 fallback
+    if (isLegacySingleIdeAuthority) {
+      // 真正运行在 legacy single-IDE authority 之下（项目未发生 multi-IDE transition）
+      // 保留 pre-#21 项目 binding_revision stale guard
       if (observation.binding_revision !== undefined && observation.binding_revision !== bindingRevision) {
         return { trusted: false, unknownReason: `stale_revision: expected rev ${bindingRevision}, got rev ${observation.binding_revision}` };
+      }
+      if (observation.endpoint_revision !== undefined && observation.endpoint_revision !== targetEpRev) {
+        return {
+          trusted: false,
+          unknownReason: `stale_endpoint_revision: expected ep_rev ${targetEpRev}, got ep_rev ${observation.endpoint_revision}`,
+          staleGeneration: true
+        };
+      }
+    } else {
+      // 已建立 Endpoint-Local Revision Authority（multi-IDE 或已发生 transition）
+      if (observation.endpoint_revision !== undefined) {
+        // 1. 显式提供 endpoint_revision 时：具有端点本地绝对权威 (endpoint-local authority)
+        // 无论项目当前有 1 个还是 N 个 IDE，严格根据 targetEpRev 校验；
+        // 若匹配，绝不因 binding_revision 不一致而拒收！
+        const expectedRev = targetEpRev !== undefined ? targetEpRev : 1;
+        if (observation.endpoint_revision !== expectedRev) {
+          return {
+            trusted: false,
+            unknownReason: `stale_endpoint_revision: expected ep_rev ${expectedRev}, got ep_rev ${observation.endpoint_revision}`,
+            staleGeneration: true
+          };
+        }
+      } else {
+        // 2. 缺省 endpoint_revision
+        if (ideCount > 1) {
+          // 多端点模式下严格 Fail-Closed
+          return { trusted: false, unknownReason: 'missing_endpoint_revision: multi-IDE observation requires explicit endpoint_revision' };
+        }
+        // 恰好单端点模式下：作为 pre-#21 单 IDE 遗留调用者的 fallback
+        if (observation.binding_revision !== undefined && observation.binding_revision !== bindingRevision) {
+          return { trusted: false, unknownReason: `stale_revision: expected rev ${bindingRevision}, got rev ${observation.binding_revision}` };
+        }
       }
     }
   }

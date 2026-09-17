@@ -46,6 +46,9 @@ export class ProjectStatusCore {
 
     this._binding = { ...binding };
     this._updatedAt = new Date().toISOString();
+    this._isLegacySingleIdeAuthority = Boolean(
+      binding.is_legacy_single_ide ?? (binding.ide && (!Array.isArray(binding.ide_endpoints) || binding.ide_endpoints.length <= 1))
+    );
 
     this._browserEndpoint = createInitialEndpointFact({
       endpoint: 'browser',
@@ -181,7 +184,15 @@ export class ProjectStatusCore {
     };
   }
 
+  isLegacySingleIdeAuthority() {
+    return Boolean(this._isLegacySingleIdeAuthority && this._ideEndpoints.size === 1);
+  }
+
   addIdeEndpoint({ endpoint_id, identity }) {
+    this._isLegacySingleIdeAuthority = false;
+    if (this._binding) {
+      this._binding.is_legacy_single_ide = false;
+    }
     const res = executeAddIdeEndpoint({
       binding: this._binding,
       ideEndpointsMap: this._ideEndpoints,
@@ -253,15 +264,27 @@ export class ProjectStatusCore {
     const current = resolved.fact;
     const now = new Date().toISOString();
     const targetEpRev = resolved.config?.endpoint_revision || current.endpoint_revision || 1;
+    const isLegacySingleIdeAuthority = Boolean(
+      this._isLegacySingleIdeAuthority && this._ideEndpoints.size === 1
+    );
 
-    const { trusted, unknownReason } = verifyObservationContinuity({
+    const continuityRes = verifyObservationContinuity({
       observation,
       expectedConfig: resolved.config,
       targetEpRev,
       isBrowser: resolved.role === 'browser',
       bindingRevision: this._binding.binding_revision,
-      ideCount: this._ideEndpoints.size
+      ideCount: this._ideEndpoints.size,
+      isLegacySingleIdeAuthority
     });
+
+    // 1. 如果是确凿过时的端点代际观察 (conclusively stale endpoint-generation observation)，
+    // 绝不能篡改当前规范端点事实，直接拒绝并作为 NO-OP 返回
+    if (continuityRes.staleGeneration) {
+      return;
+    }
+
+    const { trusted, unknownReason } = continuityRes;
 
     let latestCursor = current.latest_completed_cursor;
     let completedAt = current.completed_at;

@@ -492,7 +492,7 @@ test('[Multi-IDE Lifecycle] 9. A only -> add B -> remove B -> Adapter A 旧 bind
     assert.equal(factA.continuity.unknown_reason, null);
     assert.ok(factA.latest_completed_cursor.startsWith('ag-step:1:'));
 
-    // 6. 证明：stale pre-rebind 代际依然会被严格拦截
+    // 6. 证明：stale pre-rebind 代际依然会被严格拦截为 NO-OP，不篡改当前端点事实
     // 6a. 伪造过时的 endpoint_revision: 0
     core.recordEndpointObservation('ide-a', {
       conversation_id: 'conv-ide-a',
@@ -501,10 +501,11 @@ test('[Multi-IDE Lifecycle] 9. A only -> add B -> remove B -> Adapter A 旧 bind
       latest_completed_cursor: 'ag-step:999:fake'
     });
     snap = core.getSnapshot();
-    assert.equal(snap.endpoints.ide_endpoints['ide-a'].result_state, 'UNKNOWN');
-    assert.match(snap.endpoints.ide_endpoints['ide-a'].unknown_reason, /stale_endpoint_revision/);
+    // 验证端点 A 保持原有的 NEW 事实不变（NO-OP）
+    assert.equal(snap.endpoints.ide_endpoints['ide-a'].result_state, 'NEW');
+    assert.equal(snap.endpoints.ide_endpoints['ide-a'].latest_completed_cursor, factA.latest_completed_cursor);
 
-    // 6b. 重绑 ide-a 导致其 endpoint_revision 递增为 2，Adapter A 持有的旧 revision 1 观察此时被严格拦截
+    // 6b. 重绑 ide-a 导致其 endpoint_revision 递增为 2，此时端点 A 处于 clean UNKNOWN 状态
     core.rebindEndpoint({
       endpoint_id: 'ide-a',
       identity: {
@@ -519,6 +520,7 @@ test('[Multi-IDE Lifecycle] 9. A only -> add B -> remove B -> Adapter A 旧 bind
     const boundEpAfterRebind = snap.binding.ide_endpoints.find(e => e.endpoint_id === 'ide-a');
     assert.equal(boundEpAfterRebind?.endpoint_revision, 2);
 
+    // 6c. 旧 Adapter A（持有旧 revision 1）再次发出观察
     adapterA.handleStopHook({
       conversationId: 'conv-ide-a',
       workspacePaths: ['/Users/yamlam/Documents/GitHub/browser-ide-rally'],
@@ -527,8 +529,9 @@ test('[Multi-IDE Lifecycle] 9. A only -> add B -> remove B -> Adapter A 旧 bind
       transcriptPath: transcriptFileA
     });
     snap = core.getSnapshot();
+    // 验证端点 A 保持重绑后的干净 UNKNOWN 状态，未被旧观察篡改游标（NO-OP）
     assert.equal(snap.endpoints.ide_endpoints['ide-a'].result_state, 'UNKNOWN');
-    assert.match(snap.endpoints.ide_endpoints['ide-a'].unknown_reason, /stale_endpoint_revision: expected ep_rev 2, got ep_rev 1/);
+    assert.equal(snap.endpoints.ide_endpoints['ide-a'].latest_completed_cursor, null);
   } finally {
     try {
       fs.rmSync(tmpDir, { recursive: true, force: true });

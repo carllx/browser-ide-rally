@@ -155,16 +155,19 @@ export function createBinding({
   } else if (ide && typeof ide === 'object') {
     normalizedIdeEndpoints = [{
       endpoint_id: ide.endpoint_id || 'ide',
-      endpoint_revision: ide.endpoint_revision,
+      endpoint_revision: ide.endpoint_revision !== undefined ? ide.endpoint_revision : 1,
       conversation_id: ide.conversation_id || '',
       workspace_identity: ide.workspace_identity || '',
       repository_identity: ide.repository_identity || ''
     }];
   }
 
+  const isLegacySingleIde = Boolean(ide && (!Array.isArray(ide_endpoints) || ide_endpoints.length === 0));
+
   const binding = {
     binding_id,
     binding_revision,
+    is_legacy_single_ide: isLegacySingleIde,
     browser: {
       provider: browser?.provider || 'chatgpt',
       conversation_id: browser?.conversation_id || ''

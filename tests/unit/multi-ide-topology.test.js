@@ -345,11 +345,11 @@ test('[Multi-IDE] 8. NEW / UNKNOWN 端点移除与重绑守卫（显式确认且
   assert.equal(snapA.last_handled_cursor, null); // 绝不伪装 handled！
 });
 
-test('[Multi-IDE] 9. 过时 pre-rebind IDE-B 观察不污染 IDE-A，且被 IDE-B 拒绝', () => {
+test('[Multi-IDE] 9. 过时 pre-rebind IDE-B 观察被拒绝为 NO-OP，不篡改当前 NEW/游标/连续性事实', () => {
   const binding = makeMultiIdeBinding();
   const core = createProjectStatusCore({ binding });
 
-  // IDE-B 当前处于 endpoint_revision 1，现重绑至 endpoint_revision 2
+  // 1. IDE-B 当前处于 endpoint_revision 1，现重绑至 endpoint_revision 2
   core.rebindEndpoint({
     endpoint_id: 'ide-b',
     identity: {
@@ -360,18 +360,40 @@ test('[Multi-IDE] 9. 过时 pre-rebind IDE-B 观察不污染 IDE-A，且被 IDE-
     confirm_replace_unknown: true
   });
 
-  // 旧的 IDE-B 观察尝试提交（携带旧的 endpoint_revision 1）
+  // 2. 新代际 revision-2 的 B 产生受信任的 NEW 观察并推进
   core.recordEndpointObservation('ide-b', {
     conversation_id: 'conv-ide-b-v2',
-    endpoint_revision: 1, // 旧版本
+    endpoint_revision: 2,
     trusted: true,
-    latest_completed_cursor: 'stale-cursor-b'
+    latest_completed_cursor: 'turn-ib-rev2-new'
   });
 
-  const snap = core.getSnapshot();
-  assert.equal(snap.endpoints.ide_endpoints['ide-b'].result_state, 'UNKNOWN');
-  assert.match(snap.endpoints.ide_endpoints['ide-b'].unknown_reason, /stale_endpoint_revision: expected ep_rev 2, got ep_rev 1/);
-  // IDE-A 仍然完全干净
+  // 3. 完整捕获此时 canonical B fact 快照
+  let snap = core.getSnapshot();
+  const canonicalBBeforeStale = { ...snap.endpoints.ide_endpoints['ide-b'] };
+  assert.equal(canonicalBBeforeStale.result_state, 'NEW');
+  assert.equal(canonicalBBeforeStale.latest_completed_cursor, 'turn-ib-rev2-new');
+  assert.equal(canonicalBBeforeStale.continuity.trusted, true);
+
+  // 4. 旧代际 revision-1 的 stale B 观察到达（试图提交旧版本数据）
+  core.recordEndpointObservation('ide-b', {
+    conversation_id: 'conv-ide-b-v2',
+    endpoint_revision: 1, // 确凿过时代际
+    continuity_lost: true,
+    reason: 'stale_pre_rebind_failure',
+    latest_completed_cursor: 'stale-cursor-b-rev1'
+  });
+
+  // 5. 验证 B 在语义上保持完全不变：still NEW, same latest cursor, same handled cursor, same trusted continuity
+  snap = core.getSnapshot();
+  const canonicalBAfterStale = snap.endpoints.ide_endpoints['ide-b'];
+  assert.equal(canonicalBAfterStale.result_state, 'NEW');
+  assert.equal(canonicalBAfterStale.latest_completed_cursor, canonicalBBeforeStale.latest_completed_cursor);
+  assert.equal(canonicalBAfterStale.last_handled_cursor, canonicalBBeforeStale.last_handled_cursor);
+  assert.equal(canonicalBAfterStale.continuity.trusted, true);
+  assert.equal(canonicalBAfterStale.continuity.unknown_reason, null);
+
+  // 6. IDE-A 保持不变
   assert.equal(snap.endpoints.ide_endpoints['ide-a'].result_state, 'UNKNOWN');
   assert.equal(snap.endpoints.ide_endpoints['ide-a'].latest_completed_cursor, null);
 });
