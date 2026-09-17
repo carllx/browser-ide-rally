@@ -127,20 +127,16 @@ export function hydrateEndpointFact(fact, expectedEndpoint, {
 
 /**
  * 校验 observation 对目标端点的连续性与归属事实
- * 核心设计：
- * - Browser 端点严格校验 binding_revision；
- * - IDE 端点优先校验 endpoint_revision：
- *   若显式提供 endpoint_revision，则要求严格匹配 targetEpRev；
- *   若显式提供 binding_revision：
- *     如果当前项目只有 1 个 IDE 端点，严格匹配 bindingRevision（完全兼容已有单端契约测试）；
- *     如果存在多个 IDE 端点，只有当 binding_revision < targetEpRev 时才判为 stale，
- *     确保同级 Sibling IDE 的增删改（仅 bump 了 binding_revision）不使有效的观察变为 stale；
- *     若显式提供了版本且不匹配，统一返回 `stale_revision: expected rev X, got rev Y`。
+ * 
+ * 强制约束（来自 Browser 修正与 Review 门禁）：
+ * 1. IDE observation stale safety 必须真正使用 endpoint_id + endpoint_revision + exact provider identity；
+ * 2. 多 IDE 模式下严格禁止使用 project-wide binding_revision 作为 fallback（必须显式提供 endpoint_revision）；
+ * 3. 严格校验 exact provider identity：conversation_id 必须完全一致，若 observation 携带 workspace/repository 亦必须精确匹配。
  * @returns {{ trusted: boolean, unknownReason: string|null }}
  */
 export function verifyObservationContinuity({
   observation,
-  expectedConvId,
+  expectedConfig,
   targetEpRev,
   isBrowser = false,
   bindingRevision,
@@ -156,16 +152,23 @@ export function verifyObservationContinuity({
     }
   } else {
     // IDE 端点
-    if (observation.endpoint_revision !== undefined && observation.endpoint_revision !== targetEpRev) {
-      return { trusted: false, unknownReason: `stale_endpoint_revision: expected ep_rev ${targetEpRev}, got ep_rev ${observation.endpoint_revision}` };
-    } else if (observation.binding_revision !== undefined && observation.endpoint_revision === undefined) {
-      if (ideCount === 1) {
+    if (ideCount > 1) {
+      // 多 IDE 模式下：必须显式提供 endpoint_revision，禁止 fallback 到 binding_revision！
+      if (observation.endpoint_revision === undefined) {
+        return { trusted: false, unknownReason: 'missing_endpoint_revision: multi-IDE observation requires explicit endpoint_revision' };
+      }
+      if (observation.endpoint_revision !== targetEpRev) {
+        return { trusted: false, unknownReason: `stale_endpoint_revision: expected ep_rev ${targetEpRev}, got ep_rev ${observation.endpoint_revision}` };
+      }
+    } else {
+      // 单 IDE 模式（完全保持既有 #16 测试契约兼容）
+      if (observation.endpoint_revision !== undefined) {
+        if (observation.endpoint_revision !== targetEpRev) {
+          return { trusted: false, unknownReason: `stale_endpoint_revision: expected ep_rev ${targetEpRev}, got ep_rev ${observation.endpoint_revision}` };
+        }
+      } else if (observation.binding_revision !== undefined) {
         if (observation.binding_revision !== bindingRevision) {
           return { trusted: false, unknownReason: `stale_revision: expected rev ${bindingRevision}, got rev ${observation.binding_revision}` };
-        }
-      } else {
-        if (observation.binding_revision < targetEpRev || observation.binding_revision === 0) {
-          return { trusted: false, unknownReason: `stale_revision: expected rev ${targetEpRev}, got rev ${observation.binding_revision}` };
         }
       }
     }
@@ -175,12 +178,30 @@ export function verifyObservationContinuity({
     return { trusted: false, unknownReason: observation.reason || observation.error || 'continuity_lost' };
   }
 
+  // Exact provider identity 校验
+  const expectedConvId = expectedConfig?.conversation_id;
   if (!observation.conversation_id || observation.conversation_id !== expectedConvId) {
     return {
       trusted: false,
       unknownReason: observation.conversation_id
         ? `attribution_mismatch: expected ${expectedConvId}, got ${observation.conversation_id}`
         : 'missing_conversation_identity: explicit conversation_id matching binding is required'
+    };
+  }
+
+  // 若 observation 携带 workspace_identity，要求与配置完全匹配
+  if (observation.workspace_identity && expectedConfig?.workspace_identity && observation.workspace_identity !== expectedConfig.workspace_identity) {
+    return {
+      trusted: false,
+      unknownReason: `workspace_mismatch: expected ${expectedConfig.workspace_identity}, got ${observation.workspace_identity}`
+    };
+  }
+
+  // 若 observation 携带 repository_identity，要求与配置完全匹配
+  if (observation.repository_identity && expectedConfig?.repository_identity && observation.repository_identity !== expectedConfig.repository_identity) {
+    return {
+      trusted: false,
+      unknownReason: `repository_mismatch: expected ${expectedConfig.repository_identity}, got ${observation.repository_identity}`
     };
   }
 

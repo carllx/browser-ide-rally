@@ -531,3 +531,44 @@ test('[Multi-IDE] 13. 禁止移除至 0 个 IDE 端点', () => {
     core.removeIdeEndpoint('ide-a', { confirm_replace_unknown: true });
   }, /Cannot remove the last IDE endpoint; Rally project requires at least one IDE endpoint slot/);
 });
+
+test('[Multi-IDE] 14. 校验 multi-IDE 强制要求 endpoint_revision 与 exact provider identity', () => {
+  const binding = makeMultiIdeBinding();
+  const core = createProjectStatusCore({ binding });
+
+  // 14a. 多 IDE 下若省略 endpoint_revision，必须严格 fail-closed 拒收
+  core.recordEndpointObservation('ide-a', {
+    conversation_id: 'conv-ide-a',
+    // 故意不传 endpoint_revision，传了 binding_revision: 1
+    binding_revision: 1,
+    trusted: true,
+    latest_completed_cursor: 'turn-ia-invalid'
+  });
+  let snap = core.getSnapshot();
+  assert.equal(snap.endpoints.ide_endpoints['ide-a'].result_state, 'UNKNOWN');
+  assert.match(snap.endpoints.ide_endpoints['ide-a'].unknown_reason, /missing_endpoint_revision/);
+
+  // 14b. 若携带了不匹配的 workspace_identity，必须严格 fail-closed 拒收
+  core.recordEndpointObservation('ide-a', {
+    conversation_id: 'conv-ide-a',
+    endpoint_revision: 1,
+    workspace_identity: '/wrong/workspace/path',
+    trusted: true,
+    latest_completed_cursor: 'turn-ia-invalid-ws'
+  });
+  snap = core.getSnapshot();
+  assert.equal(snap.endpoints.ide_endpoints['ide-a'].result_state, 'UNKNOWN');
+  assert.match(snap.endpoints.ide_endpoints['ide-a'].unknown_reason, /workspace_mismatch/);
+
+  // 14c. 若携带了不匹配的 repository_identity，必须严格 fail-closed 拒收
+  core.recordEndpointObservation('ide-a', {
+    conversation_id: 'conv-ide-a',
+    endpoint_revision: 1,
+    repository_identity: 'wrong/repo',
+    trusted: true,
+    latest_completed_cursor: 'turn-ia-invalid-repo'
+  });
+  snap = core.getSnapshot();
+  assert.equal(snap.endpoints.ide_endpoints['ide-a'].result_state, 'UNKNOWN');
+  assert.match(snap.endpoints.ide_endpoints['ide-a'].unknown_reason, /repository_mismatch/);
+});

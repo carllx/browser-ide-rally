@@ -7,11 +7,11 @@
  * 3. 严格布尔受信与连续性 fail-closed；显式推进防静默抹除；
  * 4. 独立端点寻址与同级隔离：采用 endpoint_id + endpoint_revision + exact provider identity；
  *    Sibling IDE 的增删改不导致未变动 IDE 的有效 observation 变为 stale；
- * 5. 安全生命周期守卫：NEW 与 UNKNOWN 移除/重绑必须显式确认，且绝不伪装为 Mark handled；
+ * 5. 安全生命周期守卫：委托 endpoint-lifecycle 执行；
  * 6. 禁止移除至 0 个 IDE 端点；绝不引入 Baton / Owner / Next Actor。
  */
 
-import { validateBinding, bumpRevision } from '../controller/binding.js';
+import { validateBinding } from '../controller/binding.js';
 import {
   deriveEndpointResult,
   createInitialEndpointFact,
@@ -23,6 +23,11 @@ import {
   createActionFact,
   transitionActionStage
 } from './action-ledger.js';
+import {
+  executeAddIdeEndpoint,
+  executeRemoveIdeEndpoint,
+  executeRebindEndpoint
+} from './endpoint-lifecycle.js';
 import { formatStatusSnapshot, formatCompactStatus } from './status-view.js';
 
 export { deriveEndpointResult, ALLOWED_ACTION_STAGES };
@@ -176,54 +181,19 @@ export class ProjectStatusCore {
   }
 
   addIdeEndpoint({ endpoint_id, identity }) {
-    if (!endpoint_id || typeof endpoint_id !== 'string' || !endpoint_id.trim()) {
-      throw new Error('Valid endpoint_id is required to add IDE endpoint');
-    }
-    const cleanId = endpoint_id.trim();
-    if (cleanId === 'browser') {
-      throw new Error('IDE endpoint_id cannot be "browser"');
-    }
-    if (this._ideEndpoints.has(cleanId)) {
-      throw new Error(`IDE endpoint "${cleanId}" already exists`);
-    }
-    if (!identity || !identity.conversation_id || !identity.workspace_identity || !identity.repository_identity) {
-      throw new Error('identity requires conversation_id, workspace_identity, and repository_identity');
-    }
-
-    const now = new Date().toISOString();
-    const nextBinding = bumpRevision(this._binding);
-    const newEp = {
-      endpoint_id: cleanId,
-      endpoint_revision: 1,
-      conversation_id: identity.conversation_id,
-      workspace_identity: identity.workspace_identity,
-      repository_identity: identity.repository_identity
-    };
-    nextBinding.ide_endpoints.push(newEp);
-
-    const validation = validateBinding(nextBinding);
-    if (!validation.valid) {
-      throw new Error(`Invalid Add IDE configuration: ${validation.errors.join('; ')}`);
-    }
-
-    this._binding = nextBinding;
-    this._ideEndpoints.set(cleanId, createInitialEndpointFact({
-      endpoint: cleanId,
-      role: 'ide',
-      endpoint_revision: 1,
-      updated_at: now
-    }));
-
-    this._updatedAt = now;
+    const res = executeAddIdeEndpoint({
+      binding: this._binding,
+      ideEndpointsMap: this._ideEndpoints,
+      endpoint_id,
+      identity
+    });
+    this._binding = res.nextBinding;
+    this._ideEndpoints.set(res.cleanId, res.newFact);
+    this._updatedAt = res.now;
     return this.getSnapshot();
   }
 
-  removeIdeEndpoint(endpointId, {
-    allow_discard_unhandled = false,
-    confirm_replace_unhandled_new = false,
-    confirm_replace_unknown = false,
-    confirm_replace = false
-  } = {}) {
+  removeIdeEndpoint(endpointId, options = {}) {
     if (endpointId === 'browser') {
       throw new Error('Cannot remove canonical browser endpoint');
     }
@@ -232,146 +202,40 @@ export class ProjectStatusCore {
       throw new Error(`IDE endpoint "${endpointId}" not found`);
     }
 
-    if (this._ideEndpoints.size <= 1) {
-      throw new Error('Cannot remove the last IDE endpoint; Rally project requires at least one IDE endpoint slot');
-    }
+    const res = executeRemoveIdeEndpoint({
+      binding: this._binding,
+      ideEndpointsMap: this._ideEndpoints,
+      resolvedEndpoint: resolved,
+      options
+    });
 
-    const derivedState = deriveEndpointResult(resolved.fact);
-    if (derivedState === 'NEW') {
-      const confirmed = allow_discard_unhandled || confirm_replace_unhandled_new || confirm_replace;
-      if (!confirmed) {
-        throw new Error(
-          `Cannot remove IDE endpoint "${resolved.id}" with unhandled NEW result without explicit confirmation (allow_discard_unhandled: true).`
-        );
-      }
-    } else if (derivedState === 'UNKNOWN') {
-      const confirmed = allow_discard_unhandled || confirm_replace_unknown || confirm_replace;
-      if (!confirmed) {
-        throw new Error(
-          `Cannot remove IDE endpoint "${resolved.id}" in UNKNOWN state without explicit confirmation (confirm_replace_unknown: true or allow_discard_unhandled: true).`
-        );
-      }
-    }
-
-    const now = new Date().toISOString();
-    const nextBinding = bumpRevision(this._binding);
-    nextBinding.ide_endpoints = nextBinding.ide_endpoints.filter(ep => ep.endpoint_id !== resolved.id);
-
-    const validation = validateBinding(nextBinding);
-    if (!validation.valid) {
-      throw new Error(`Invalid Remove IDE configuration: ${validation.errors.join('; ')}`);
-    }
-
-    this._binding = nextBinding;
-    this._ideEndpoints.delete(resolved.id);
-    this._updatedAt = now;
+    this._binding = res.nextBinding;
+    this._ideEndpoints.delete(res.removedId);
+    this._updatedAt = res.now;
     return this.getSnapshot();
   }
 
-  rebindEndpoint({
-    endpoint,
-    endpoint_id,
-    identity,
-    allow_discard_unhandled = false,
-    confirm_replace_unhandled_new = false,
-    confirm_replace_unknown = false,
-    confirm_replace = false
-  }) {
-    const targetIdentifier = endpoint_id || endpoint;
+  rebindEndpoint(rebindParams) {
+    const targetIdentifier = rebindParams.endpoint_id || rebindParams.endpoint;
     const resolved = this._resolveEndpoint(targetIdentifier);
     if (!resolved) {
       throw new Error(`Invalid endpoint identifier "${targetIdentifier}".`);
     }
 
-    if (!identity || typeof identity !== 'object') {
-      throw new Error('New endpoint identity must be a valid object');
-    }
+    const res = executeRebindEndpoint({
+      binding: this._binding,
+      resolvedEndpoint: resolved,
+      identity: rebindParams.identity,
+      options: rebindParams
+    });
 
-    const currentFact = resolved.fact;
-    const currentDerivedState = deriveEndpointResult(currentFact);
-
-    if (currentDerivedState === 'NEW') {
-      const confirmed = allow_discard_unhandled || confirm_replace_unhandled_new || confirm_replace;
-      if (!confirmed) {
-        throw new Error(
-          `Cannot replace ${resolved.id} endpoint with unhandled NEW result without explicit confirmation (allow_discard_unhandled: true).`
-        );
-      }
-    } else if (currentDerivedState === 'UNKNOWN') {
-      const confirmed = allow_discard_unhandled || confirm_replace_unknown || confirm_replace;
-      if (!confirmed) {
-        throw new Error(
-          `Cannot replace ${resolved.id} endpoint in UNKNOWN state without explicit confirmation (allow_discard_unhandled: true or confirm_replace_unknown: true).`
-        );
-      }
-    }
-
-    const now = new Date().toISOString();
-    const nextBinding = bumpRevision(this._binding);
-
-    if (resolved.role === 'browser') {
-      if (!identity.conversation_id || typeof identity.conversation_id !== 'string') {
-        throw new Error('New browser identity requires valid conversation_id');
-      }
-      nextBinding.browser = {
-        provider: identity.provider || this._binding.browser?.provider || 'chatgpt',
-        conversation_id: identity.conversation_id
-      };
-      this._binding = nextBinding;
-      this._browserEndpoint = {
-        endpoint: 'browser',
-        role: 'browser',
-        endpoint_revision: 1,
-        latest_completed_cursor: null,
-        last_handled_cursor: null,
-        completed_at: null,
-        continuity: {
-          trusted: false,
-          unknown_reason: 'UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION'
-        },
-        updated_at: now
-      };
+    this._binding = res.nextBinding;
+    if (res.targetRole === 'browser') {
+      this._browserEndpoint = res.newBrowserFact;
     } else {
-      if (!identity.conversation_id || !identity.workspace_identity || !identity.repository_identity) {
-        throw new Error('New ide identity requires conversation_id, workspace_identity, and repository_identity');
-      }
-      const targetEpIndex = nextBinding.ide_endpoints.findIndex(e => e.endpoint_id === resolved.id);
-      if (targetEpIndex === -1) {
-        throw new Error(`Target IDE endpoint "${resolved.id}" not found in binding`);
-      }
-      const oldEp = nextBinding.ide_endpoints[targetEpIndex];
-      const nextEpRev = (oldEp.endpoint_revision || 1) + 1;
-
-      nextBinding.ide_endpoints[targetEpIndex] = {
-        endpoint_id: resolved.id,
-        endpoint_revision: nextEpRev,
-        conversation_id: identity.conversation_id,
-        workspace_identity: identity.workspace_identity,
-        repository_identity: identity.repository_identity
-      };
-
-      const validation = validateBinding(nextBinding);
-      if (!validation.valid) {
-        throw new Error(`Invalid Rebind configuration: ${validation.errors.join('; ')}`);
-      }
-
-      this._binding = nextBinding;
-      this._ideEndpoints.set(resolved.id, {
-        endpoint: resolved.id,
-        role: 'ide',
-        endpoint_revision: nextEpRev,
-        latest_completed_cursor: null,
-        last_handled_cursor: null,
-        completed_at: null,
-        continuity: {
-          trusted: false,
-          unknown_reason: 'UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION'
-        },
-        updated_at: now
-      });
+      this._ideEndpoints.set(res.targetId, res.newIdeFact);
     }
-
-    this._updatedAt = now;
+    this._updatedAt = res.now;
     return this.getSnapshot();
   }
 
@@ -387,12 +251,11 @@ export class ProjectStatusCore {
 
     const current = resolved.fact;
     const now = new Date().toISOString();
-    const expectedConvId = resolved.config?.conversation_id;
     const targetEpRev = resolved.config?.endpoint_revision || current.endpoint_revision || 1;
 
     const { trusted, unknownReason } = verifyObservationContinuity({
       observation,
-      expectedConvId,
+      expectedConfig: resolved.config,
       targetEpRev,
       isBrowser: resolved.role === 'browser',
       bindingRevision: this._binding.binding_revision,
