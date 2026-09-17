@@ -169,6 +169,16 @@ export function createBinding({
 
   const isLegacySingleIde = Boolean(ide && (!Array.isArray(ide_endpoints) || ide_endpoints.length === 0));
 
+  let normalizedBrowserBranch = null;
+  const rawBrowserBranch = browser?.branch !== undefined ? browser?.branch : browser?.branch_name;
+  if (rawBrowserBranch !== undefined && rawBrowserBranch !== null) {
+    if (typeof rawBrowserBranch !== 'string' || !rawBrowserBranch.trim()) {
+      normalizedBrowserBranch = rawBrowserBranch;
+    } else {
+      normalizedBrowserBranch = rawBrowserBranch.trim();
+    }
+  }
+
   const binding = {
     binding_id,
     binding_revision,
@@ -176,7 +186,7 @@ export function createBinding({
     browser: {
       provider: browser?.provider || 'chatgpt',
       conversation_id: browser?.conversation_id || '',
-      branch: (browser?.branch || browser?.branch_name)?.trim?.() || null
+      branch: normalizedBrowserBranch
     },
     ide_endpoints: normalizedIdeEndpoints,
     capabilities: [...capabilities],

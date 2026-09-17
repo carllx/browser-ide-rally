@@ -49,6 +49,23 @@ test('[单元测试] Binding: 拒绝非法或缺失字段', () => {
       browser: { provider: 'chatgpt', conversation_id: '' }
     });
   }, /Invalid Binding creation/);
+
+  // 严格拒绝非法的 browser.branch（非空字符串或非法类型必须 Fail-Closed）
+  assert.throws(() => {
+    createBinding({
+      binding_id: 'b1',
+      browser: { provider: 'chatgpt', conversation_id: 'c1', branch: 123 },
+      ide: { conversation_id: 'c2', workspace_identity: 'w1', repository_identity: 'r1' }
+    });
+  }, /browser\.branch must be a non-empty string when supplied/);
+
+  assert.throws(() => {
+    createBinding({
+      binding_id: 'b1',
+      browser: { provider: 'chatgpt', conversation_id: 'c1', branch: '   ' },
+      ide: { conversation_id: 'c2', workspace_identity: 'w1', repository_identity: 'r1' }
+    });
+  }, /browser\.branch must be a non-empty string when supplied/);
 });
 
 test('[单元测试] Binding: 正确递增版本号', () => {

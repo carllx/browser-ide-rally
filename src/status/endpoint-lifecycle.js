@@ -144,14 +144,39 @@ export function executeRebindEndpoint({
   const nextBinding = bumpRevision(binding);
 
   if (resolvedEndpoint.role === 'browser') {
-    if (!identity.conversation_id || typeof identity.conversation_id !== 'string') {
+    if (!identity.conversation_id || typeof identity.conversation_id !== 'string' || !identity.conversation_id.trim()) {
       throw new Error('New browser identity requires valid conversation_id');
     }
+
+    const cleanConversationId = identity.conversation_id.trim();
+    const isSameConversation = cleanConversationId === binding.browser?.conversation_id;
+    const rawBranch = identity.branch !== undefined ? identity.branch : identity.branch_name;
+
+    let nextBranch = null;
+    if (rawBranch !== undefined && rawBranch !== null) {
+      if (typeof rawBranch !== 'string' || !rawBranch.trim()) {
+        throw new Error('New browser identity branch must be a non-empty string when supplied');
+      }
+      nextBranch = rawBranch.trim();
+    } else if (rawBranch === null) {
+      nextBranch = null;
+    } else if (isSameConversation) {
+      nextBranch = binding.browser?.branch || null;
+    } else {
+      nextBranch = null;
+    }
+
     nextBinding.browser = {
       provider: identity.provider || binding.browser?.provider || 'chatgpt',
-      conversation_id: identity.conversation_id,
-      branch: (identity.branch || identity.branch_name)?.trim?.() || (identity.branch === null ? null : (binding.browser?.branch || null))
+      conversation_id: cleanConversationId,
+      branch: nextBranch
     };
+
+    const validation = validateBinding(nextBinding);
+    if (!validation.valid) {
+      throw new Error(`Invalid Rebind configuration: ${validation.errors.join('; ')}`);
+    }
+
     const newBrowserFact = {
       endpoint: 'browser',
       role: 'browser',

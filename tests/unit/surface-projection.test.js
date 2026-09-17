@@ -373,5 +373,126 @@ describe('Surface Projection 单元测试', () => {
       }
     }
   });
+
+  it('13. 规范生命周期 rebindEndpoint: Browser branch 严格跟随 conversation 身份生命周期', () => {
+    // 1. 初始化绑定：Browser conv A + branch A, IDE-A unhandled NEW
+    const binding = createBinding({
+      binding_id: 'proj-rebind-branch-lifecycle',
+      browser: {
+        provider: 'chatgpt',
+        conversation_id: 'conv-browser-A',
+        branch: 'feat/branch-A'
+      },
+      ide_endpoints: [{
+        endpoint_id: 'ide-a',
+        endpoint_revision: 1,
+        conversation_id: 'conv-ide-a',
+        workspace_identity: '/ws/proj',
+        repository_identity: 'github.com/org/proj'
+      }]
+    });
+
+    const reg = createProjectRegistry();
+    reg.registerProject({ binding });
+    const core = reg.getProject('proj-rebind-branch-lifecycle');
+
+    // 让 IDE-A 推进到 unhandled NEW 状态
+    core.recordEndpointObservation('ide-a', {
+      conversation_id: 'conv-ide-a',
+      endpoint_revision: 1,
+      trusted: true,
+      latest_completed_cursor: 'cursor-ide-1'
+    });
+
+    // 验证初始状态：Browser=UNKNOWN (branch A), IDE-A=NEW
+    const initialSurface = projectStatusSurface(core.getSnapshot());
+    assert.equal(initialSurface.browser.conversation_id, 'conv-browser-A');
+    assert.equal(initialSurface.browser.branch, 'feat/branch-A');
+    assert.equal(initialSurface.ide_endpoints[0].result_state, 'NEW');
+    assert.equal(initialSurface.ide_endpoints[0].latest_completed_cursor, 'cursor-ide-1');
+
+    // 2. 核心场景：rebind 切换到 conv B，但未提供 branch (omitted/undefined)
+    // 语义：跨会话时 branch 绝不继承旧 conv A 的 branch A，必须置为 null
+    reg.rebindProjectEndpoint('proj-rebind-branch-lifecycle', {
+      endpoint: 'browser',
+      identity: {
+        conversation_id: 'conv-browser-B'
+      },
+      confirm_replace_unknown: true
+    });
+
+    const surfaceAfterB = projectStatusSurface(core.getSnapshot());
+    assert.equal(surfaceAfterB.browser.conversation_id, 'conv-browser-B');
+    assert.equal(surfaceAfterB.browser.branch, null, '跨会话未提供 branch 时必须清空为 null，绝不继承旧分支');
+    // IDE-A 事实与未处理 NEW 状态毫发无损
+    assert.equal(surfaceAfterB.ide_endpoints[0].result_state, 'NEW');
+    assert.equal(surfaceAfterB.ide_endpoints[0].latest_completed_cursor, 'cursor-ide-1');
+
+    // 3. rebind 切换到 conv C，显式提供有效新 branch C
+    reg.rebindProjectEndpoint('proj-rebind-branch-lifecycle', {
+      endpoint: 'browser',
+      identity: {
+        conversation_id: 'conv-browser-C',
+        branch: 'feat/branch-C'
+      },
+      confirm_replace_unknown: true
+    });
+    const surfaceAfterC = projectStatusSurface(core.getSnapshot());
+    assert.equal(surfaceAfterC.browser.conversation_id, 'conv-browser-C');
+    assert.equal(surfaceAfterC.browser.branch, 'feat/branch-C');
+
+    // 4. 同会话 (conv C -> conv C) rebind，omitted branch 允许保留已有分支
+    reg.rebindProjectEndpoint('proj-rebind-branch-lifecycle', {
+      endpoint: 'browser',
+      identity: {
+        conversation_id: 'conv-browser-C'
+      },
+      confirm_replace_unknown: true
+    });
+    const surfaceSameConv = projectStatusSurface(core.getSnapshot());
+    assert.equal(surfaceSameConv.browser.conversation_id, 'conv-browser-C');
+    assert.equal(surfaceSameConv.browser.branch, 'feat/branch-C', '同一会话且未指定 branch 时允许保留');
+
+    // 5. 显式 branch: null 必须清空分支
+    reg.rebindProjectEndpoint('proj-rebind-branch-lifecycle', {
+      endpoint: 'browser',
+      identity: {
+        conversation_id: 'conv-browser-C',
+        branch: null
+      },
+      confirm_replace_unknown: true
+    });
+    const surfaceNullBranch = projectStatusSurface(core.getSnapshot());
+    assert.equal(surfaceNullBranch.browser.conversation_id, 'conv-browser-C');
+    assert.equal(surfaceNullBranch.browser.branch, null, '显式 branch: null 必须清空分支');
+
+    // 6. 非法/畸形 branch（非字符串、空串、纯空白串）必须 Fail-Closed 抛错
+    assert.throws(() => {
+      reg.rebindProjectEndpoint('proj-rebind-branch-lifecycle', {
+        endpoint: 'browser',
+        identity: {
+          conversation_id: 'conv-browser-D',
+          branch: 12345
+        },
+        confirm_replace_unknown: true
+      });
+    }, /New browser identity branch must be a non-empty string when supplied/);
+
+    assert.throws(() => {
+      reg.rebindProjectEndpoint('proj-rebind-branch-lifecycle', {
+        endpoint: 'browser',
+        identity: {
+          conversation_id: 'conv-browser-D',
+          branch: '   '
+        },
+        confirm_replace_unknown: true
+      });
+    }, /New browser identity branch must be a non-empty string when supplied/);
+
+    // 7. 再次确认 IDE-A 事实与未处理 NEW 游标依然毫发无损
+    const finalSurface = projectStatusSurface(core.getSnapshot());
+    assert.equal(finalSurface.ide_endpoints[0].result_state, 'NEW');
+    assert.equal(finalSurface.ide_endpoints[0].latest_completed_cursor, 'cursor-ide-1');
+  });
 });
 
