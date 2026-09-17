@@ -1,13 +1,12 @@
 /**
  * Antigravity IDE 端点适配器 (Antigravity IDE Endpoint Adapter)
  *
- * 核心设计契约 (#16):
+ * 核心设计契约 (#16, #21):
  * 1. 适配器本地拥有 Antigravity Stop Hook、Transcript、step_index、fingerprint 解析细节；
  * 2. 向上游 Core / Registry 仅产出规范化的端点事实 (recordEndpointObservation 格式)，不泄露 provider-specific 字段；
  * 3. 严格身份归属：必须满足 exact conversationId、workspace_identity、repository_identity 匹配；
- * 4. 完成判定守卫：Stop Hook 必须满足 exact conversation、fullyIdle: true 且具备 final terminationReason；
- * 5. 中间步骤过滤：多步工具调用（中间步骤）不生成完成信号；
- * 6. 连续性守卫：历史截断、漂移、损坏或游标不可对齐时，必须 fail-closed 到 UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION。
+ * 4. 支持多 IDE 寻址：绑定特定的 endpointId 与 endpoint_revision；
+ * 5. 连续性守卫：历史截断、漂移、损坏或游标不可对齐时，必须 fail-closed 到 UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION。
  */
 
 import fs from 'node:fs';
@@ -15,19 +14,10 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 
-/**
- * 经过当前环境实测验证的终态完成原因 (#16 Review Gate)
- * 严格限制为已建立确凿证据的理由，不得比现有证据更宽
- */
 export const FINAL_TERMINATION_REASONS = [
   'NO_TOOL_CALL'
 ];
 
-/**
- * 标准化路径以消除末尾斜杠和大小写差异
- * @param {string} p 
- * @returns {string}
- */
 export function normalizePath(p) {
   if (typeof p !== 'string') return '';
   let norm = p.trim().replace(/\\/g, '/').replace(/\/+$/, '');
@@ -37,12 +27,6 @@ export function normalizePath(p) {
   return norm;
 }
 
-/**
- * 校验 workspace 身份是否匹配
- * @param {string[]|string} actualWorkspaces 
- * @param {string} expectedWorkspace 
- * @returns {boolean}
- */
 export function matchesWorkspace(actualWorkspaces, expectedWorkspace) {
   if (!expectedWorkspace || typeof expectedWorkspace !== 'string') return false;
   const expectedNorm = normalizePath(expectedWorkspace);
@@ -55,18 +39,10 @@ export function matchesWorkspace(actualWorkspaces, expectedWorkspace) {
   return actualList.some(w => normalizePath(w) === expectedNorm);
 }
 
-/**
- * 从本地 git 仓库探测或从路径校验 repository_identity (例如 carllx/browser-ide-rally)
- * @param {string} workspacePath 
- * @param {string} expectedRepository 
- * @returns {boolean}
- */
 export function parseCanonicalRepositoryIdentity(rawUrl) {
   if (typeof rawUrl !== 'string' || !rawUrl.trim()) return null;
   const cleaned = rawUrl.trim();
 
-  // 匹配 SSH: git@github.com:owner/repo.git 或 ssh://git@github.com/owner/repo.git
-  // 匹配 HTTPS/HTTP/GIT: https://github.com/owner/repo.git
   const match = cleaned.match(/^(?:(?:https?|git|ssh):\/\/(?:[^@\/]+@)?[^\/]+\/|(?:[^@\/]+@)?[^:]+:)([^\/\s]+)\/([^\/\s#?]+?)(?:\.git)?$/i);
   if (!match) return null;
 
@@ -111,70 +87,52 @@ export function matchesRepository(workspacePath, expectedRepository) {
   }
 }
 
-/**
- * 校验 transcript 物理路径是否确实属于指定 Antigravity 会话 (Transcript Provenance)
- * 严格遵循官方 Antigravity 物理路径拓扑：
- * .../.gemini/antigravity/brain/<conversationId>/.system_generated/logs/transcript.jsonl
- *
- * 规则：
- * 1. 物理文件必须存在且为常规文件；
- * 2. 规范化路径必须以 /.system_generated/logs/transcript.jsonl 精确结尾；
- * 3. 紧邻上述固定后缀的父级目录段必须严格且全等匹配 expectedConversationId；
- * 4. 严禁使用子串匹配、模糊包含或仅凭文件名猜测。
- * @param {string} transcriptPath 
- * @param {string} expectedConversationId 
- * @returns {boolean}
- */
-export function isProvenAntigravityTranscript(transcriptPath, expectedConversationId) {
-  if (typeof transcriptPath !== 'string' || !transcriptPath.trim()) return false;
-  if (typeof expectedConversationId !== 'string' || !expectedConversationId.trim()) return false;
+export function isProvenAntigravityTranscript(transcriptPath, conversationId) {
+  if (!transcriptPath || typeof transcriptPath !== 'string') return false;
+  if (!conversationId || typeof conversationId !== 'string' || !conversationId.trim()) return false;
 
-  const norm = normalizePath(transcriptPath);
-  const suffix = '/.system_generated/logs/transcript.jsonl';
-
-  if (!norm.endsWith(suffix)) {
-    return false;
-  }
-
-  const prefix = norm.slice(0, -suffix.length);
-  const conversationDirSegment = path.posix.basename(prefix);
-  if (!conversationDirSegment || conversationDirSegment !== expectedConversationId.trim()) {
+  const normPath = normalizePath(transcriptPath);
+  if (!normPath || !fs.existsSync(normPath)) {
     return false;
   }
 
   try {
-    return fs.existsSync(norm) && fs.statSync(norm).isFile();
+    const stat = fs.statSync(normPath);
+    if (!stat.isFile()) return false;
   } catch {
     return false;
   }
+
+  const parts = normPath.split('/');
+  const len = parts.length;
+  if (len < 4) return false;
+
+  const fileName = parts[len - 1];
+  const logsDir = parts[len - 2];
+  const sysDir = parts[len - 3];
+  const convDir = parts[len - 4];
+
+  if (
+    fileName !== 'transcript.jsonl' ||
+    logsDir !== 'logs' ||
+    sysDir !== '.system_generated' ||
+    convDir !== conversationId.trim()
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
-/**
- * 从单条 transcript step 派生内容指纹 (16位十六进制)
- * @param {object} step 
- * @returns {string}
- */
 export function deriveStepFingerprint(step) {
   const content = typeof step.content === 'string' ? step.content : JSON.stringify(step.content || '');
   return crypto.createHash('sha256').update(content).digest('hex').slice(0, 16);
 }
 
-/**
- * 编码 adapter-local opaque completion cursor
- * Core / Registry 只需视为普通字符串，不解析内部结构
- * @param {number} stepIndex 
- * @param {string} fingerprint 
- * @returns {string}
- */
 export function encodeOpaqueCursor(stepIndex, fingerprint) {
   return `ag-step:${stepIndex}:${fingerprint}`;
 }
 
-/**
- * 解码 adapter-local opaque completion cursor
- * @param {string} cursor 
- * @returns {{ stepIndex: number, fingerprint: string } | null}
- */
 export function decodeOpaqueCursor(cursor) {
   if (typeof cursor !== 'string') return null;
   const match = cursor.match(/^ag-step:(\d+):([a-f0-9]+)$/);
@@ -185,12 +143,6 @@ export function decodeOpaqueCursor(cursor) {
   };
 }
 
-/**
- * 解析并筛选 transcript 中所有最终完成的 Assistant Turn
- * 仅 PLANNER_RESPONSE 且 status === 'DONE' 且无未完成 tool_calls 的步骤才构成完成候选
- * @param {string} transcriptPath 
- * @returns {Array<{ stepIndex: number, fingerprint: string, createdAt: string|null }>}
- */
 export function parseTranscriptCompletedTurns(transcriptPath) {
   if (!transcriptPath || typeof transcriptPath !== 'string' || !fs.existsSync(transcriptPath)) {
     return [];
@@ -207,7 +159,6 @@ export function parseTranscriptCompletedTurns(transcriptPath) {
     try {
       step = JSON.parse(trimmed);
     } catch {
-      // 损坏的行不计入有效步骤
       continue;
     }
 
@@ -226,54 +177,63 @@ export function parseTranscriptCompletedTurns(transcriptPath) {
     }
   }
 
-  return turns;
+  return turns.sort((a, b) => a.stepIndex - b.stepIndex);
 }
 
 export class AntigravityIdeAdapter {
-  /**
-   * @param {object} options
-   * @param {object} options.binding - Project Binding 快照
-   * @param {import('../../status/status-core.js').ProjectStatusCore} options.statusCore - 关联的 Status Core
-   */
-  constructor({ binding, statusCore }) {
-    if (!binding || !binding.ide) {
-      throw new Error('AntigravityIdeAdapter requires a valid binding with ide identity');
+  constructor({ binding, statusCore, endpointId = null }) {
+    if (!binding) {
+      throw new Error('AntigravityIdeAdapter requires a valid binding');
     }
     if (!statusCore) {
       throw new Error('AntigravityIdeAdapter requires a StatusCore instance');
     }
-    this._binding = binding;
+
     this._statusCore = statusCore;
+    this._binding = binding;
+    this._endpointId = endpointId;
+
+    this._resolveIdeIdentity();
   }
 
-  /**
-   * 统一向 Status Core 记录 UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION 观察
-   * @param {string} reason 
-   */
+  _resolveIdeIdentity() {
+    let ideEp = null;
+    if (this._endpointId) {
+      ideEp = (this._binding.ide_endpoints || []).find(e => e.endpoint_id === this._endpointId);
+      if (!ideEp && this._binding.ide?.endpoint_id === this._endpointId) {
+        ideEp = this._binding.ide;
+      }
+    } else {
+      if (this._binding.ide_endpoints && this._binding.ide_endpoints.length === 1) {
+        ideEp = this._binding.ide_endpoints[0];
+      } else if (this._binding.ide) {
+        ideEp = this._binding.ide;
+      }
+    }
+
+    if (!ideEp) {
+      throw new Error('AntigravityIdeAdapter requires a valid binding with ide identity');
+    }
+
+    this._endpointId = ideEp.endpoint_id || 'ide';
+    this._ideIdentity = ideEp;
+  }
+
   _failClosedToUnknown(reason = 'UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION') {
-    this._statusCore.recordEndpointObservation('ide', {
-      conversation_id: this._binding.ide?.conversation_id,
+    this._statusCore.recordEndpointObservation(this._endpointId, {
+      conversation_id: this._ideIdentity.conversation_id,
+      endpoint_revision: this._ideIdentity.endpoint_revision || 1,
       binding_revision: this._binding.binding_revision,
       continuity_lost: true,
       reason
     });
   }
 
-  /**
-   * 更新当前绑定的快照引用（如发生安全 rebind 或版本 bump）
-   * @param {object} nextBinding 
-   */
   updateBinding(nextBinding) {
     this._binding = nextBinding;
+    this._resolveIdeIdentity();
   }
 
-  /**
-   * 处理 Antigravity 官方 Stop Lifecycle Hook 载荷
-   * 严格按事实核验：exact conversation + workspace + repository + fullyIdle + final termination
-   * 核验通过后，提取最新完成步骤游标并向 Core 提交规范 observation
-   * @param {object} hookPayload Stop Hook 接收到的 payload
-   * @returns {{ accepted: boolean, reason?: string, observation?: object }}
-   */
   handleStopHook(hookPayload) {
     if (!hookPayload || typeof hookPayload !== 'object') {
       this._failClosedToUnknown('malformed_hook_payload: payload must be a non-null object');
@@ -288,32 +248,33 @@ export class AntigravityIdeAdapter {
       transcriptPath
     } = hookPayload;
 
-    const expectedIde = this._binding.ide;
+    const expectedIde = this._ideIdentity;
 
-    // 1. exact conversationId 核验
     if (!conversationId || conversationId !== expectedIde.conversation_id) {
-      // 严格归属隔离：如果是完全其他会话的 Hook，不污染当前 Binding，仅拒收
       return {
         accepted: false,
         reason: `attribution_mismatch: expected conversation ${expectedIde.conversation_id}, got ${conversationId}`
       };
     }
 
-    // 2. workspace identity 归属核验
     if (!matchesWorkspace(workspacePaths, expectedIde.workspace_identity)) {
       this._failClosedToUnknown(`workspace_mismatch: expected ${expectedIde.workspace_identity}`);
-      return { accepted: false, reason: 'workspace_mismatch' };
+      return {
+        accepted: false,
+        reason: `workspace_mismatch: expected ${expectedIde.workspace_identity}`
+      };
     }
 
-    // 3. repository identity 归属核验
-    const matchedWs = (Array.isArray(workspacePaths) ? workspacePaths : [workspacePaths])
+    const matchedWorkspace = (Array.isArray(workspacePaths) ? workspacePaths : [workspacePaths])
       .find(w => normalizePath(w) === normalizePath(expectedIde.workspace_identity));
-    if (!matchesRepository(matchedWs, expectedIde.repository_identity)) {
+    if (!matchesRepository(matchedWorkspace, expectedIde.repository_identity)) {
       this._failClosedToUnknown(`repository_mismatch: expected ${expectedIde.repository_identity}`);
-      return { accepted: false, reason: 'repository_mismatch' };
+      return {
+        accepted: false,
+        reason: `repository_mismatch: expected ${expectedIde.repository_identity}`
+      };
     }
 
-    // 4. fullyIdle 最终性核验：中间步骤 / 仍有未完成后台任务时不产生完成事实
     if (fullyIdle !== true) {
       return {
         accepted: false,
@@ -321,7 +282,6 @@ export class AntigravityIdeAdapter {
       };
     }
 
-    // 5. final terminationReason 核验：未验证的原因或 Hook 漂移必须 fail closed 到 UNKNOWN
     if (!terminationReason || !FINAL_TERMINATION_REASONS.includes(terminationReason)) {
       this._failClosedToUnknown(`non_final_termination_reason: got ${terminationReason}`);
       return {
@@ -330,7 +290,6 @@ export class AntigravityIdeAdapter {
       };
     }
 
-    // 6. 从 transcript 提取最新完成游标（必须证明物理路径属于 bound conversationId，绝不猜测）
     if (!isProvenAntigravityTranscript(transcriptPath, expectedIde.conversation_id)) {
       this._failClosedToUnknown('transcript_provenance_unverified: official transcriptPath missing or does not prove ownership of bound conversation');
       return { accepted: false, reason: 'transcript_provenance_unverified' };
@@ -347,36 +306,18 @@ export class AntigravityIdeAdapter {
 
     const observation = {
       conversation_id: expectedIde.conversation_id,
+      endpoint_revision: expectedIde.endpoint_revision || 1,
       binding_revision: this._binding.binding_revision,
       trusted: true,
       latest_completed_cursor: opaqueCursor,
       completed_at: latestTurn.createdAt || new Date().toISOString()
     };
 
-    // 提交给 Status Core
-    this._statusCore.recordEndpointObservation('ide', observation);
+    this._statusCore.recordEndpointObservation(this._endpointId, observation);
 
     return { accepted: true, observation };
   }
 
-  /**
-   * 重启或重新连接时的游标协调 (Reconciliation)
-   * 比对当前持久化账本（handled / latest）与物理 transcript 历史：
-   * - 若 handled 游标在物理 transcript 中精确匹配，且无后续新 turn -> caught-up (NO_NEW_RESULT)
-   * - 若 handled 游标精确匹配，且存在后续新 turn -> NEW (最新 turn 游标)
-   * - 若无 handled 游标但从未产生过完成 -> NO_NEW_RESULT
-   * - 若存在未 handled 的 latest 游标，且后续出现新轮次 -> 正确推进至最新轮次
-   * - 若历史截断、指纹不匹配、游标漂移或文件丢失 -> 坚决 fail-closed 到 UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION
-   * 
-   * 严格核验约束：在允许 transcript 建立 trusted / NEW / NO_NEW_RESULT 前，必须验证当前 Antigravity identity 与 Binding 一致：
-   * - exact conversation；
-   * - expected workspace；
-   * - expected repository。
-   * 若未提供可靠凭据或身份不匹配，fail-closed 到 UNKNOWN / UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION。
-   * @param {string|object} transcriptPathOrOptions 官方 transcript 路径或包含凭据的选项对象
-   * @param {object} [identityProof] 身份证明凭据，包含 conversationId 和 workspacePaths
-   * @returns {{ status: 'RECONCILED' | 'UNKNOWN', reason?: string }}
-   */
   reconcileOnStartup(transcriptPathOrOptions, identityProof = {}) {
     let transcriptPath;
     let identity;
@@ -388,9 +329,8 @@ export class AntigravityIdeAdapter {
       identity = identityProof;
     }
 
-    const expectedIde = this._binding.ide;
+    const expectedIde = this._ideIdentity;
 
-    // 1. exact conversationId 归属核验（必须显式提供且完全一致）
     if (!identity?.conversationId || identity.conversationId !== expectedIde.conversation_id) {
       this._failClosedToUnknown('UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION');
       return {
@@ -399,7 +339,6 @@ export class AntigravityIdeAdapter {
       };
     }
 
-    // 2. workspace identity 归属核验
     const actualWorkspaces = identity.workspacePaths || identity.workspacePath;
     if (!matchesWorkspace(actualWorkspaces, expectedIde.workspace_identity)) {
       this._failClosedToUnknown('UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION');
@@ -409,7 +348,6 @@ export class AntigravityIdeAdapter {
       };
     }
 
-    // 3. repository identity 归属核验（canonical owner/repo 精确比较）
     const matchedWs = (Array.isArray(actualWorkspaces) ? actualWorkspaces : [actualWorkspaces])
       .find(w => normalizePath(w) === normalizePath(expectedIde.workspace_identity));
     if (!matchesRepository(matchedWs, expectedIde.repository_identity)) {
@@ -420,8 +358,6 @@ export class AntigravityIdeAdapter {
       };
     }
 
-    // 4. transcript 物理路径及其归属证明校验 (Transcript Provenance Guard)
-    // 拒绝“有效 identityProof + 错误会话 transcript”或 lookalike 路径，未证明归属坚决 fail-closed
     if (!isProvenAntigravityTranscript(transcriptPath, expectedIde.conversation_id)) {
       this._failClosedToUnknown('UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION');
       return {
@@ -431,16 +367,17 @@ export class AntigravityIdeAdapter {
     }
 
     const currentSnapshot = this._statusCore.getSnapshot();
-    const ideFact = currentSnapshot.endpoints?.ide || {};
+    const ideFact = (currentSnapshot.endpoints?.ide_endpoints && currentSnapshot.endpoints.ide_endpoints[this._endpointId])
+      || currentSnapshot.endpoints?.ide
+      || {};
     const handledCursor = ideFact.last_handled_cursor;
     const turns = parseTranscriptCompletedTurns(transcriptPath);
 
-    // 1. 如果此前从未处理过任何完成 (handledCursor 为空)
     if (!handledCursor) {
       if (turns.length === 0) {
-        // 无历史完成记录，且 transcript 确实没有任何完成轮次：处于干净初始状态
-        this._statusCore.recordEndpointObservation('ide', {
+        this._statusCore.recordEndpointObservation(this._endpointId, {
           conversation_id: expectedIde.conversation_id,
+          endpoint_revision: expectedIde.endpoint_revision || 1,
           binding_revision: this._binding.binding_revision,
           trusted: true,
           latest_completed_cursor: null
@@ -448,18 +385,17 @@ export class AntigravityIdeAdapter {
         return { status: 'RECONCILED' };
       }
 
-      // 如果已有持久化的 latest_completed_cursor，检查在 transcript 中的位置与指纹
       if (ideFact.latest_completed_cursor) {
         const decodedLatest = decodeOpaqueCursor(ideFact.latest_completed_cursor);
         const matchingTurn = turns.find(t => t.stepIndex === decodedLatest?.stepIndex);
         if (matchingTurn && matchingTurn.fingerprint === decodedLatest.fingerprint) {
-          // 检查 latest 之后是否又有新完成轮次产生
           const subsequentTurns = turns.filter(t => t.stepIndex > decodedLatest.stepIndex);
           const effectiveTurn = subsequentTurns.length > 0 ? subsequentTurns[subsequentTurns.length - 1] : matchingTurn;
           const effectiveCursor = encodeOpaqueCursor(effectiveTurn.stepIndex, effectiveTurn.fingerprint);
 
-          this._statusCore.recordEndpointObservation('ide', {
+          this._statusCore.recordEndpointObservation(this._endpointId, {
             conversation_id: expectedIde.conversation_id,
+            endpoint_revision: expectedIde.endpoint_revision || 1,
             binding_revision: this._binding.binding_revision,
             trusted: true,
             latest_completed_cursor: effectiveCursor,
@@ -469,32 +405,27 @@ export class AntigravityIdeAdapter {
         }
       }
 
-      // 无法建立历史基线：必须 fail-closed 到 UNKNOWN
       this._failClosedToUnknown('UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION');
       return { status: 'UNKNOWN', reason: 'cannot_align_unhandled_history' };
     }
 
-    // 2. 已有 handledCursor，解码核验
     const decodedHandled = decodeOpaqueCursor(handledCursor);
     if (!decodedHandled) {
       this._failClosedToUnknown('UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION');
       return { status: 'UNKNOWN', reason: 'malformed_handled_cursor' };
     }
 
-    // 在当前 transcript 中寻找对应的 handled 步骤
     const handledTurn = turns.find(t => t.stepIndex === decodedHandled.stepIndex);
     if (!handledTurn || handledTurn.fingerprint !== decodedHandled.fingerprint) {
-      // 历史截断、step_index 漂移或内容篡改：fail-closed 到 UNKNOWN
       this._failClosedToUnknown('UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION');
       return { status: 'UNKNOWN', reason: 'handled_cursor_drift_or_truncated' };
     }
 
-    // 检查 handled 之后是否存在新的完成轮次
     const subsequentTurns = turns.filter(t => t.stepIndex > decodedHandled.stepIndex);
     if (subsequentTurns.length === 0) {
-      // 历史已完全处理，恢复 caught-up 事实（latest === handled）
-      this._statusCore.recordEndpointObservation('ide', {
+      this._statusCore.recordEndpointObservation(this._endpointId, {
         conversation_id: expectedIde.conversation_id,
+        endpoint_revision: expectedIde.endpoint_revision || 1,
         binding_revision: this._binding.binding_revision,
         trusted: true,
         latest_completed_cursor: handledCursor,
@@ -503,12 +434,12 @@ export class AntigravityIdeAdapter {
       return { status: 'RECONCILED' };
     }
 
-    // 存在新轮次：取最新的 turn 产出 NEW
     const latestTurn = subsequentTurns[subsequentTurns.length - 1];
     const newOpaqueCursor = encodeOpaqueCursor(latestTurn.stepIndex, latestTurn.fingerprint);
 
-    this._statusCore.recordEndpointObservation('ide', {
+    this._statusCore.recordEndpointObservation(this._endpointId, {
       conversation_id: expectedIde.conversation_id,
+      endpoint_revision: expectedIde.endpoint_revision || 1,
       binding_revision: this._binding.binding_revision,
       trusted: true,
       latest_completed_cursor: newOpaqueCursor,

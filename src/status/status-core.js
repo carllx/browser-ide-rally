@@ -8,7 +8,8 @@
  * 4. 独立端点寻址与同级隔离：采用 endpoint_id + endpoint_revision + exact provider identity；
  *    Sibling IDE 的增删改不导致未变动 IDE 的有效 observation 变为 stale；
  * 5. 安全生命周期守卫：委托 endpoint-lifecycle 执行；
- * 6. 禁止移除至 0 个 IDE 端点；绝不引入 Baton / Owner / Next Actor。
+ * 6. 禁止移除至 0 个 IDE 端点；绝不引入 Baton / Owner / Next Actor；
+ * 7. updateBinding 严格守卫：禁止变更任何 IDE 拓扑、端点成员、provider 身份或版本，堵死绕过漏洞。
  */
 
 import { validateBinding } from '../controller/binding.js';
@@ -131,7 +132,7 @@ export class ProjectStatusCore {
     for (const [epId, fact] of Object.entries(ideFactsSource)) {
       if (this._ideEndpoints.has(epId)) {
         const boundEp = (this._binding.ide_endpoints || []).find(e => e.endpoint_id === epId);
-        const epRev = boundEp?.endpoint_revision || fact.endpoint_revision || 1;
+        const epRev = boundEp?.endpoint_revision || 1;
         this._ideEndpoints.set(
           epId,
           hydrateEndpointFact(fact, epId, { role: 'ide', endpoint_revision: epRev, fallbackUpdatedAt: this._updatedAt })
@@ -142,7 +143,7 @@ export class ProjectStatusCore {
     if (endpointsFactMap.ide && this._ideEndpoints.size === 1) {
       const onlyId = Array.from(this._ideEndpoints.keys())[0];
       const boundEp = (this._binding.ide_endpoints || []).find(e => e.endpoint_id === onlyId);
-      const epRev = boundEp?.endpoint_revision || endpointsFactMap.ide.endpoint_revision || 1;
+      const epRev = boundEp?.endpoint_revision || 1;
       this._ideEndpoints.set(
         onlyId,
         hydrateEndpointFact(endpointsFactMap.ide, onlyId, { role: 'ide', endpoint_revision: epRev, fallbackUpdatedAt: this._updatedAt })
@@ -378,12 +379,38 @@ export class ProjectStatusCore {
       throw new Error(`Cannot change binding_id from "${this._binding.binding_id}" to "${nextBinding.binding_id}".`);
     }
 
+    // 1. Browser 身份守卫
     const browserChanged =
       nextBinding.browser?.provider !== this._binding.browser?.provider ||
       nextBinding.browser?.conversation_id !== this._binding.browser?.conversation_id;
 
     if (browserChanged) {
       throw new Error('Identity-changing rebind is prohibited in Status Core; use rebindEndpoint() for safe rebind (#14).');
+    }
+
+    // 2. IDE 拓扑与身份守卫 (Blocker 2)
+    // 禁止通过 updateBinding 绕过生命周期守卫修改 IDE 数量、端点 ID、会话、工作区、仓库或 endpoint_revision
+    const currIdeList = this._binding.ide_endpoints || [];
+    const nextIdeList = nextBinding.ide_endpoints || [];
+
+    if (currIdeList.length !== nextIdeList.length) {
+      throw new Error('Topology-changing add/remove of IDE endpoints is prohibited in updateBinding; use addIdeEndpoint() or removeIdeEndpoint().');
+    }
+
+    for (let i = 0; i < currIdeList.length; i++) {
+      const curr = currIdeList[i];
+      const next = nextIdeList.find(e => e.endpoint_id === curr.endpoint_id);
+      if (!next) {
+        throw new Error(`IDE endpoint membership change ("${curr.endpoint_id}" missing) is prohibited in updateBinding; use removeIdeEndpoint().`);
+      }
+      if (
+        next.conversation_id !== curr.conversation_id ||
+        next.workspace_identity !== curr.workspace_identity ||
+        next.repository_identity !== curr.repository_identity ||
+        next.endpoint_revision !== curr.endpoint_revision
+      ) {
+        throw new Error(`IDE endpoint identity or revision mutation for "${curr.endpoint_id}" is prohibited in updateBinding; use rebindEndpoint().`);
+      }
     }
 
     this._binding = { ...nextBinding };
