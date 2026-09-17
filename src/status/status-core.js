@@ -367,6 +367,9 @@ export class ProjectStatusCore {
     target_endpoint,
     stage = 'REQUESTED',
     binding_revision,
+    payload = null,
+    nonce = null,
+    correlation_id = null,
     evidence = null
   }) {
     const fact = createActionFact({
@@ -375,6 +378,9 @@ export class ProjectStatusCore {
       target_endpoint,
       stage,
       binding_revision: binding_revision ?? this._binding.binding_revision,
+      payload,
+      nonce,
+      correlation_id,
       evidence
     });
 

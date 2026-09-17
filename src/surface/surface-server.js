@@ -12,6 +12,7 @@
 import http from 'node:http';
 import { projectRegistrySurface } from './surface-projection.js';
 import { renderStatusSurfaceHtml } from './surface-template.js';
+import { executeSafeRebind, executeSafeOpenFocus, executeSafeSend } from '../controller/safe-controls.js';
 
 function sendJson(res, statusCode, data) {
   const payload = JSON.stringify(data);
@@ -58,8 +59,10 @@ function parseBody(req) {
  * 创建状态表面 HTTP 处理器
  * @param {object} params
  * @param {import('../registry/project-registry.js').ProjectRegistry} params.registry
+ * @param {object} [params.browserAdapter]
+ * @param {object|Map} [params.ideAdapters]
  */
-export function createStatusSurfaceRequestHandler({ registry }) {
+export function createStatusSurfaceRequestHandler({ registry, browserAdapter = null, ideAdapters = null }) {
   if (!registry || typeof registry.listProjects !== 'function') {
     throw new Error('Valid ProjectRegistry instance is required for Status Surface Server');
   }
@@ -131,7 +134,132 @@ export function createStatusSurfaceRequestHandler({ registry }) {
       }
     }
 
-    // 4. 其他路由 Fail-Closed 404
+    // 4. POST /api/projects/:bindingId/controls/rebind: 安全端点 Rebind
+    const rebindMatch = pathname.match(/^\/api\/projects\/([^/]+)\/controls\/rebind$/);
+    if (method === 'POST' && rebindMatch) {
+      const bindingId = decodeURIComponent(rebindMatch[1]);
+      let body = {};
+      try {
+        body = await parseBody(req);
+      } catch (err) {
+        return sendJson(res, 400, { success: false, reason: err.message });
+      }
+
+      try {
+        const result = executeSafeRebind({
+          registry,
+          projectBindingId: bindingId,
+          targetEndpoint: body.target_endpoint,
+          expectedBindingRevision: body.expected_binding_revision,
+          newIdentity: body.new_identity,
+          allowReplaceUnhandled: body.allow_replace_unhandled === true,
+          allowReplaceUnknown: body.allow_replace_unknown === true
+        });
+
+        return sendJson(res, 200, {
+          success: true,
+          action_id: result.action?.action_id,
+          stage: result.action?.stage || 'TARGET_COMPLETED',
+          new_binding_revision: result.snapshot?.binding?.binding_revision
+        });
+      } catch (err) {
+        const isBlocked = err.message.includes('STALE_OR_MISSING_BINDING_REVISION') ||
+                          err.message.includes('BLOCKED') ||
+                          err.message.includes('unhandled NEW') ||
+                          err.message.includes('UNKNOWN');
+        return sendJson(res, isBlocked ? 409 : 400, {
+          success: false,
+          stage: 'BLOCKED',
+          reason: err.message
+        });
+      }
+    }
+
+    // 5. POST /api/projects/:bindingId/controls/open-focus: 安全打开 / 聚焦
+    const openFocusMatch = pathname.match(/^\/api\/projects\/([^/]+)\/controls\/open-focus$/);
+    if (method === 'POST' && openFocusMatch) {
+      const bindingId = decodeURIComponent(openFocusMatch[1]);
+      let body = {};
+      try {
+        body = await parseBody(req);
+      } catch (err) {
+        return sendJson(res, 400, { success: false, reason: err.message });
+      }
+
+      try {
+        const result = executeSafeOpenFocus({
+          registry,
+          projectBindingId: bindingId,
+          targetEndpoint: body.target_endpoint,
+          expectedBindingRevision: body.expected_binding_revision,
+          browserAdapter,
+          ideAdapters
+        });
+
+        return sendJson(res, 200, {
+          success: true,
+          action_id: result.action?.action_id,
+          stage: result.action?.stage || 'TARGET_COMPLETED'
+        });
+      } catch (err) {
+        const isBlocked = err.message.includes('STALE_OR_MISSING_BINDING_REVISION') ||
+                          err.message.includes('BLOCKED') ||
+                          err.message.includes('TARGET_LOOKUP_FAIL') ||
+                          err.message.includes('SECURITY_REJECT') ||
+                          err.message.includes('IDE_ENDPOINT_NOT_FOUND');
+        return sendJson(res, isBlocked ? 409 : 400, {
+          success: false,
+          stage: 'BLOCKED',
+          reason: err.message
+        });
+      }
+    }
+
+    // 6. POST /api/projects/:bindingId/controls/send: 安全发送受限 Envelope
+    const sendMatch = pathname.match(/^\/api\/projects\/([^/]+)\/controls\/send$/);
+    if (method === 'POST' && sendMatch) {
+      const bindingId = decodeURIComponent(sendMatch[1]);
+      let body = {};
+      try {
+        body = await parseBody(req);
+      } catch (err) {
+        return sendJson(res, 400, { success: false, reason: err.message });
+      }
+
+      try {
+        const result = executeSafeSend({
+          registry,
+          projectBindingId: bindingId,
+          targetEndpoint: body.target_endpoint,
+          expectedBindingRevision: body.expected_binding_revision,
+          envelope: body.envelope,
+          browserAdapter,
+          ideAdapters,
+          options: {
+            confirm_delivery: true
+          }
+        });
+
+        return sendJson(res, 200, {
+          success: true,
+          action_id: result.action?.action_id,
+          stage: result.action?.stage || 'ACCEPTED_OR_DELIVERED',
+          nonce: result.envelope?.nonce
+        });
+      } catch (err) {
+        const isBlocked = err.message.includes('STALE_OR_MISSING_BINDING_REVISION') ||
+                          err.message.includes('BLOCKED') ||
+                          err.message.includes('SECURITY_REJECT') ||
+                          err.message.includes('IDE_ENDPOINT_NOT_FOUND');
+        return sendJson(res, isBlocked ? 409 : 400, {
+          success: false,
+          stage: 'BLOCKED',
+          reason: err.message
+        });
+      }
+    }
+
+    // 7. 其他路由 Fail-Closed 404
     sendJson(res, 404, { error: 'Not Found' });
   };
 }
@@ -140,12 +268,14 @@ export function createStatusSurfaceRequestHandler({ registry }) {
  * 启动状态表面本地服务
  * @param {object} params
  * @param {import('../registry/project-registry.js').ProjectRegistry} params.registry
+ * @param {object} [params.browserAdapter]
+ * @param {object|Map} [params.ideAdapters]
  * @param {number} [params.port=0]
  * @param {string} [params.host='127.0.0.1']
  * @returns {Promise<{ server: http.Server, port: number, url: string, close: () => Promise<void> }>}
  */
-export function startStatusSurfaceServer({ registry, port = 0, host = '127.0.0.1' }) {
-  const handler = createStatusSurfaceRequestHandler({ registry });
+export function startStatusSurfaceServer({ registry, browserAdapter = null, ideAdapters = null, port = 0, host = '127.0.0.1' }) {
+  const handler = createStatusSurfaceRequestHandler({ registry, browserAdapter, ideAdapters });
   const server = http.createServer(handler);
 
   return new Promise((resolve, reject) => {
@@ -164,3 +294,4 @@ export function startStatusSurfaceServer({ registry, port = 0, host = '127.0.0.1
     });
   });
 }
+

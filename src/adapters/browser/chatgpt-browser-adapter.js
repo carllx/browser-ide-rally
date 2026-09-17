@@ -355,4 +355,129 @@ export class ChatGPTBrowserAdapter {
     baseObservation.completed_at = new Date().toISOString();
     return baseObservation;
   }
+
+  /**
+   * 聚焦匹配该会话的唯一 Chrome 标签页并置顶窗口
+   * @param {string} conversationId
+   * @returns {{ focused: true, windowIndex: number, tabIndex: number, url: string }}
+   */
+  focusConversationTab(conversationId) {
+    const target = this.locateExactConversationTab(conversationId);
+    const script = `
+    tell application "Google Chrome"
+      set active tab index of window ${target.windowIndex} to ${target.tabIndex}
+      set index of window ${target.windowIndex} to 1
+      activate
+    end tell
+    `;
+    this._executor(script);
+    return {
+      focused: true,
+      windowIndex: target.windowIndex,
+      tabIndex: target.tabIndex,
+      url: target.url
+    };
+  }
+
+  /**
+   * 检查输入框准备情况（Preflight 检查）
+   * @param {string} conversationId
+   * @returns {{ ready: boolean, reason?: string }}
+   */
+  checkComposerPreflight(conversationId) {
+    const target = this.locateExactConversationTab(conversationId);
+    const checkCode = `(() => {
+      try {
+        const textarea = document.querySelector('#prompt-textarea');
+        const stopBtn = document.querySelector('button[data-testid="stop-button"], button[aria-label="Stop streaming"], button[aria-label="Stop generating"]');
+        return JSON.stringify({
+          hasComposer: !!textarea,
+          isGenerating: !!stopBtn,
+          disabled: textarea ? (textarea.disabled || textarea.getAttribute('aria-disabled') === 'true') : true
+        });
+      } catch (e) {
+        return JSON.stringify({ error: e.message });
+      }
+    })()`;
+    const raw = this.runTabJS(target.windowIndex, target.tabIndex, checkCode);
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      return { ready: false, reason: `preflight_parse_error: ${e.message}` };
+    }
+    if (parsed.error) {
+      return { ready: false, reason: `preflight_error: ${parsed.error}` };
+    }
+    if (parsed.isGenerating) {
+      return { ready: false, reason: 'generation_in_progress' };
+    }
+    if (!parsed.hasComposer) {
+      return { ready: false, reason: 'composer_not_found' };
+    }
+    if (parsed.disabled) {
+      return { ready: false, reason: 'composer_disabled' };
+    }
+    return { ready: true };
+  }
+
+  /**
+   * 安全地向目标会话输入文本并触发发送
+   * @param {string} conversationId
+   * @param {string} text
+   * @returns {{ accepted: true, textLength: number }}
+   */
+  sendTextPrompt(conversationId, text) {
+    if (typeof text !== 'string' || !text.trim()) {
+      throw new Error('PROMPT_EMPTY: text must be non-empty string');
+    }
+    const target = this.locateExactConversationTab(conversationId);
+    const safeText = JSON.stringify(text);
+    const sendCode = `(() => {
+      try {
+        const textarea = document.querySelector('#prompt-textarea');
+        if (!textarea) return JSON.stringify({ success: false, reason: 'textarea_not_found' });
+        
+        textarea.focus();
+        if (textarea.tagName === 'DIV' || textarea.contentEditable === 'true') {
+          textarea.innerText = ${safeText};
+        } else {
+          textarea.value = ${safeText};
+        }
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        textarea.dispatchEvent(new Event('change', { bubbles: true }));
+        
+        const sendBtn = document.querySelector('button[data-testid="send-button"], button[aria-label="Send prompt"], button[aria-label="Send message"]');
+        if (sendBtn && !sendBtn.disabled) {
+          sendBtn.click();
+          return JSON.stringify({ success: true, method: 'button_click' });
+        }
+        
+        const enterEvent = new KeyboardEvent('keydown', {
+          bubbles: true,
+          cancelable: true,
+          key: 'Enter',
+          code: 'Enter',
+          keyCode: 13,
+          which: 13
+        });
+        textarea.dispatchEvent(enterEvent);
+        return JSON.stringify({ success: true, method: 'enter_key' });
+      } catch (e) {
+        return JSON.stringify({ success: false, reason: e.message });
+      }
+    })()`;
+    const raw = this.runTabJS(target.windowIndex, target.tabIndex, sendCode);
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      throw new Error(`SEND_PARSE_ERROR: ${e.message}`);
+    }
+    if (!parsed.success) {
+      throw new Error(`SEND_FAILED: ${parsed.reason || 'unknown send error'}`);
+    }
+    return { accepted: true, textLength: text.length };
+  }
 }
+

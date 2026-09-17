@@ -39,7 +39,7 @@ function renderBadge(state, unknownReason = null) {
   return `<span class="badge badge-other">${safeState}</span>`;
 }
 
-function renderEndpointCard(ep, bindingId, roleLabel) {
+function renderEndpointCard(ep, bindingId, bindingRevision, roleLabel) {
   const isBrowser = ep.role === 'browser';
   const headerTitle = isBrowser ? 'Browser 端点' : `IDE 端点 [${escapeHtml(ep.endpoint_id)}]`;
   const epRevBadge = `<span class="ep-rev-badge">rev ${escapeHtml(ep.endpoint_revision || 1)}</span>`;
@@ -85,21 +85,59 @@ function renderEndpointCard(ep, bindingId, roleLabel) {
     ? `data-expected-cursor-json="${escapeHtml(encodeURIComponent(JSON.stringify(ep.latest_completed_cursor)))}"`
     : '';
 
-  const handledButton = `
-    <div class="endpoint-action-bar">
+  const controlButtons = `
+    <div class="control-btn-group">
       <button
         type="button"
-        class="btn btn-handled"
-        data-action="mark-handled"
+        class="btn btn-control btn-focus"
+        data-action="open-focus"
         data-binding-id="${escapeHtml(bindingId)}"
+        data-binding-revision="${escapeHtml(bindingRevision)}"
         data-endpoint-id="${escapeHtml(ep.endpoint_id)}"
-        data-expected-cursor="${escapeHtml(ep.latest_completed_cursor ?? '')}"
-        ${cursorJsonAttr}
-        title="${handledBtnTitle}"
-        ${handledBtnDisabled ? 'disabled' : ''}>
-        Mark handled
+        title="聚焦/打开此目标端点">
+        Focus
+      </button>
+      <button
+        type="button"
+        class="btn btn-control btn-rebind"
+        data-action="rebind"
+        data-binding-id="${escapeHtml(bindingId)}"
+        data-binding-revision="${escapeHtml(bindingRevision)}"
+        data-endpoint-id="${escapeHtml(ep.endpoint_id)}"
+        data-role="${escapeHtml(ep.role)}"
+        data-conversation-id="${escapeHtml(ep.conversation_id || '')}"
+        data-branch="${escapeHtml(ep.branch || '')}"
+        data-workspace="${escapeHtml(ep.workspace_identity || '')}"
+        data-repo="${escapeHtml(ep.repository_identity || '')}"
+        title="安全重绑此端点 (需匹配版本)">
+        Rebind
+      </button>
+      <button
+        type="button"
+        class="btn btn-control btn-send"
+        data-action="safe-send"
+        data-binding-id="${escapeHtml(bindingId)}"
+        data-binding-revision="${escapeHtml(bindingRevision)}"
+        data-endpoint-id="${escapeHtml(ep.endpoint_id)}"
+        title="向此端点发送受控 Envelope">
+        Send
       </button>
     </div>
+  `;
+
+  const handledButton = `
+    <button
+      type="button"
+      class="btn btn-handled"
+      data-action="mark-handled"
+      data-binding-id="${escapeHtml(bindingId)}"
+      data-endpoint-id="${escapeHtml(ep.endpoint_id)}"
+      data-expected-cursor="${escapeHtml(ep.latest_completed_cursor ?? '')}"
+      ${cursorJsonAttr}
+      title="${handledBtnTitle}"
+      ${handledBtnDisabled ? 'disabled' : ''}>
+      Mark handled
+    </button>
   `;
 
   return `
@@ -116,7 +154,10 @@ function renderEndpointCard(ep, bindingId, roleLabel) {
       <div class="endpoint-body">
         ${identityDetails}
         ${cursorInfo}
-        ${handledButton}
+        <div class="endpoint-action-bar">
+          ${controlButtons}
+          ${handledButton}
+        </div>
       </div>
     </div>
   `;
@@ -154,35 +195,45 @@ function renderActionsSection(actions = []) {
     `;
   }
 
-  const rows = actions.map(act => `
-    <tr class="action-row">
+  const rows = actions.map(act => {
+    const reasonText = act.reason || (typeof act.evidence === 'string' ? act.evidence : act.evidence?.reason || act.evidence?.error) || '';
+    const nonceText = act.nonce ? `<code>${escapeHtml(act.nonce.slice(0, 8))}...</code>` : '-';
+    return `
+    <tr class="action-row stage-row-${escapeHtml(act.stage)}">
       <td><code>${escapeHtml(act.action_id)}</code></td>
       <td><span>${escapeHtml(act.action_type)}</span></td>
       <td><code>${escapeHtml(act.target_endpoint || '-')}</code></td>
       <td><span class="badge badge-stage stage-${escapeHtml(act.stage)}">${escapeHtml(act.stage)}</span></td>
+      <td>${nonceText}</td>
+      <td class="action-reason-cell">${reasonText ? `<span class="action-reason">${escapeHtml(reasonText)}</span>` : '<span class="text-muted">-</span>'}</td>
       <td class="text-muted">${escapeHtml(act.updated_at || act.created_at || '-')}</td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
 
   return `
     <div class="plane-section actions-plane">
       <div class="plane-header">
         <strong>Action 动作事实 (${actions.length})</strong>
       </div>
-      <table class="actions-table">
-        <thead>
-          <tr>
-            <th>Action ID</th>
-            <th>类型</th>
-            <th>目标端点</th>
-            <th>生命周期 Stage</th>
-            <th>更新时间</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows}
-        </tbody>
-      </table>
+      <div class="table-responsive">
+        <table class="actions-table">
+          <thead>
+            <tr>
+              <th>Action ID</th>
+              <th>类型</th>
+              <th>目标端点</th>
+              <th>生命周期 Stage</th>
+              <th>Nonce</th>
+              <th>附注 / 原因</th>
+              <th>更新时间</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows}
+          </tbody>
+        </table>
+      </div>
     </div>
   `;
 }
@@ -201,8 +252,8 @@ function renderProjectCard(proj) {
     disambiguationTags += `<span class="tag tag-anti-confusion" title="项目内 IDE 共用工作区，请依据 endpoint_id 及 conversation_id 精确区分">内部共用工作区</span>`;
   }
 
-  const browserCardHtml = renderEndpointCard(proj.browser, bindingId, 'Browser');
-  const ideCardsHtml = (proj.ide_endpoints || []).map(ide => renderEndpointCard(ide, bindingId, 'IDE')).join('');
+  const browserCardHtml = renderEndpointCard(proj.browser, bindingId, bRev, 'Browser');
+  const ideCardsHtml = (proj.ide_endpoints || []).map(ide => renderEndpointCard(ide, bindingId, bRev, 'IDE')).join('');
 
   return `
     <article class="project-card" data-binding-id="${escapeHtml(bindingId)}" id="card-${escapeHtml(bindingId)}">
@@ -283,6 +334,20 @@ export function renderStatusSurfaceHtml({ projects = [] } = {}) {
   </main>
 
   <div id="toast-msg"></div>
+
+  <div id="control-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="modal-title">安全控制操作</h3>
+        <button type="button" class="btn-close" id="modal-close">&times;</button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" id="modal-cancel">取消</button>
+        <button type="button" class="btn btn-primary" id="modal-submit">确认执行</button>
+      </div>
+    </div>
+  </div>
 
   <script>${SURFACE_CLIENT_JS}</script>
 </body>

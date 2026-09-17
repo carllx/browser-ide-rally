@@ -190,7 +190,42 @@ export const SURFACE_CSS = `
   .endpoint-action-bar {
     margin-top: 10px;
     display: flex;
-    justify-content: flex-end;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .control-btn-group {
+    display: inline-flex;
+    gap: 6px;
+  }
+
+  .btn-control {
+    padding: 3px 8px;
+    font-size: 0.78rem;
+    border-radius: 4px;
+  }
+  .btn-focus {
+    border-color: #388bfd;
+    color: #58a6ff;
+  }
+  .btn-focus:hover:not(:disabled) {
+    background: rgba(56, 139, 253, 0.15);
+  }
+  .btn-rebind {
+    border-color: #d29922;
+    color: #e3b341;
+  }
+  .btn-rebind:hover:not(:disabled) {
+    background: rgba(210, 153, 34, 0.15);
+  }
+  .btn-send {
+    border-color: #a371f7;
+    color: #d2a8ff;
+  }
+  .btn-send:hover:not(:disabled) {
+    background: rgba(163, 113, 247, 0.15);
   }
 
   .btn {
@@ -329,6 +364,94 @@ export const SURFACE_CSS = `
   .stage-SUBMITTED_LOCALLY { background: rgba(210, 153, 34, 0.15); color: #d29922; }
   .stage-ACCEPTED_OR_DELIVERED { background: rgba(46, 160, 67, 0.15); color: #3fb950; }
   .stage-TARGET_COMPLETED { background: rgba(163, 113, 247, 0.15); color: #d2a8ff; }
+  .stage-BLOCKED { background: rgba(248, 81, 73, 0.15); color: #f85149; border: 1px solid #da3633; }
+  .stage-FAILED { background: rgba(248, 81, 73, 0.25); color: #ff7b72; border: 1px solid #f85149; }
+  .stage-UNKNOWN { background: rgba(210, 153, 34, 0.15); color: #d29922; border: 1px solid #9e6a03; }
+
+  .action-reason {
+    font-size: 0.78rem;
+    color: #f85149;
+  }
+
+  .modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.75);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 2000;
+  }
+  .modal-card {
+    background: #161b22;
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    width: 480px;
+    max-width: 90vw;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+    overflow: hidden;
+  }
+  .modal-header {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--panel-border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .modal-header h3 {
+    font-size: 1rem;
+    color: var(--text-heading);
+  }
+  .btn-close {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 1.4rem;
+    cursor: pointer;
+    line-height: 1;
+  }
+  .modal-body {
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .modal-footer {
+    padding: 12px 18px;
+    border-top: 1px solid var(--panel-border);
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+  }
+  .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .form-group label {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+  }
+  .form-control {
+    background: #0d1117;
+    border: 1px solid var(--panel-border);
+    color: var(--text);
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 0.86rem;
+    font-family: inherit;
+  }
+  .form-control:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .form-hint {
+    font-size: 0.76rem;
+    color: var(--text-muted);
+  }
 
   #toast-msg {
     position: fixed;
