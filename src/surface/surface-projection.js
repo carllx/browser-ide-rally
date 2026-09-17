@@ -11,6 +11,21 @@
  */
 
 /**
+ * 计算端点是否具备调用 Mark Handled 的资格
+ * @param {object|null} fact - 端点规范事实
+ * @returns {boolean}
+ */
+export function canEndpointMarkHandled(fact) {
+  if (!fact || typeof fact !== 'object') return false;
+  return Boolean(
+    fact.continuity?.trusted &&
+    fact.result_state === 'NEW' &&
+    fact.latest_completed_cursor !== null &&
+    fact.latest_completed_cursor !== undefined
+  );
+}
+
+/**
  * 投影单个项目的状态表面数据
  * @param {object} snapshot - Status Core 导出的规范快照 (core.getSnapshot())
  * @returns {object} 只读状态表面投影模型
@@ -22,18 +37,20 @@ export function projectStatusSurface(snapshot) {
 
   const { binding, endpoints = {}, human_intervention = {}, actions = [], updated_at } = snapshot;
 
-  // 1. Browser 端点投影
+  // 1. Browser 端点投影（显式呈现会话与分支标识，不推断主线或 Baton）
   const browserFact = endpoints.browser || null;
   const browserState = browserFact?.result_state || 'UNKNOWN';
   const browserTrusted = Boolean(browserFact?.continuity?.trusted);
   const browserLatestCursor = browserFact?.latest_completed_cursor ?? null;
   const browserHandledCursor = browserFact?.last_handled_cursor ?? null;
+  const browserBranch = binding.browser?.branch || binding.browser?.branch_name || null;
 
   const browserSlot = {
     endpoint_id: 'browser',
     role: 'browser',
     provider: binding.browser?.provider || null,
     conversation_id: binding.browser?.conversation_id || null,
+    branch: browserBranch,
     result_state: browserState,
     latest_completed_cursor: browserLatestCursor,
     last_handled_cursor: browserHandledCursor,
@@ -42,12 +59,7 @@ export function projectStatusSurface(snapshot) {
       trusted: browserTrusted,
       unknown_reason: browserFact?.continuity?.unknown_reason ?? null
     },
-    can_mark_handled: Boolean(
-      browserTrusted &&
-      browserState === 'NEW' &&
-      browserLatestCursor !== null &&
-      browserLatestCursor !== undefined
-    )
+    can_mark_handled: canEndpointMarkHandled(browserFact)
   };
 
   // 2. 多 IDE 端点投影
@@ -96,12 +108,7 @@ export function projectStatusSurface(snapshot) {
         trusted: epTrusted,
         unknown_reason: epFact?.continuity?.unknown_reason ?? null
       },
-      can_mark_handled: Boolean(
-        epTrusted &&
-        epState === 'NEW' &&
-        epLatestCursor !== null &&
-        epLatestCursor !== undefined
-      )
+      can_mark_handled: canEndpointMarkHandled(epFact)
     };
   });
 

@@ -1,6 +1,6 @@
 /**
- * 状态表面样式与客户端脚本资源模块 (Surface Styles & Client Script)
- * 提供紧凑现代的暗色主题样式及无状态纯客户端交互脚本
+ * 状态表面样式模块 (Surface Styles)
+ * 提供紧凑现代的暗色主题样式定义
  */
 
 export const SURFACE_CSS = `
@@ -343,84 +343,4 @@ export const SURFACE_CSS = `
     box-shadow: 0 4px 12px rgba(0,0,0,0.5);
     z-index: 1000;
   }
-`;
-
-export const SURFACE_CLIENT_JS = `
-  (function() {
-    // 1. Mark handled 点击事件监听与 API 调用
-    document.addEventListener('click', async function(e) {
-      const btn = e.target.closest('button[data-action="mark-handled"]');
-      if (!btn || btn.disabled) return;
-
-      const bindingId = btn.getAttribute('data-binding-id');
-      const endpointId = btn.getAttribute('data-endpoint-id');
-      const expectedCursor = btn.getAttribute('data-expected-cursor');
-
-      btn.disabled = true;
-      btn.textContent = '处理中...';
-
-      try {
-        const resp = await fetch('/api/projects/' + encodeURIComponent(bindingId) + '/endpoints/' + encodeURIComponent(endpointId) + '/handled', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ expected_cursor: expectedCursor })
-        });
-        const result = await resp.json();
-        if (resp.ok && result.success) {
-          showToast('已成功标记处理: ' + bindingId + ' / ' + endpointId);
-          setTimeout(() => window.location.reload(), 300);
-        } else {
-          showToast('标记失败: ' + (result.reason || '未知错误'), true);
-          btn.disabled = false;
-          btn.textContent = 'Mark handled';
-        }
-      } catch (err) {
-        showToast('请求异常: ' + err.message, true);
-        btn.disabled = false;
-        btn.textContent = 'Mark handled';
-      }
-    });
-
-    // 2. 纯客户端表现层控制：展开与折叠（绝不向后端发送请求）
-    document.addEventListener('click', function(e) {
-      const toggleBtn = e.target.closest('button[data-action="toggle-expand"]');
-      if (!toggleBtn) return;
-      const card = toggleBtn.closest('.project-card');
-      if (!card) return;
-      card.classList.toggle('is-collapsed');
-      const isCollapsed = card.classList.contains('is-collapsed');
-      toggleBtn.setAttribute('aria-expanded', !isCollapsed);
-    });
-
-    // 3. 纯客户端表现层控制：筛选器（绝不修改规范状态）
-    document.querySelectorAll('.filter-btn').forEach(btn => {
-      btn.addEventListener('click', function() {
-        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-        this.classList.add('active');
-        const filter = this.getAttribute('data-filter');
-        const cards = document.querySelectorAll('.project-card');
-
-        cards.forEach(card => {
-          if (filter === 'all') {
-            card.style.display = '';
-          } else if (filter === 'new') {
-            const hasNew = card.querySelector('.badge-new') !== null;
-            card.style.display = hasNew ? '' : 'none';
-          } else if (filter === 'unknown') {
-            const hasUnknown = card.querySelector('.badge-unknown') !== null;
-            card.style.display = hasUnknown ? '' : 'none';
-          }
-        });
-      });
-    });
-
-    function showToast(msg, isError) {
-      const toast = document.getElementById('toast-msg');
-      if (!toast) return;
-      toast.textContent = msg;
-      toast.style.background = isError ? '#da3633' : '#238636';
-      toast.style.display = 'block';
-      setTimeout(() => { toast.style.display = 'none'; }, 3000);
-    }
-  })();
 `;

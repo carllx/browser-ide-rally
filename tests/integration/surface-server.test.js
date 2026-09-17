@@ -179,4 +179,47 @@ describe('Surface Server 集成测试', () => {
     });
     assert.equal(res.status, 404);
   });
+
+  it('7. 数字游标（如 0 或整数）在 POST mark handled 中精确全等匹配，不因类型强制转换导致 mismatch', async () => {
+    // 注册一个包含数字游标的测试项目
+    const numBinding = {
+      binding_id: 'proj-numeric-cursor',
+      binding_revision: 1,
+      browser: { provider: 'chatgpt', conversation_id: 'conv-num-1' },
+      ide_endpoints: [{
+        endpoint_id: 'ide-num',
+        endpoint_revision: 1,
+        conversation_id: 'conv-ide-num',
+        workspace_identity: '/ws/num',
+        repository_identity: 'github.com/org/num'
+      }],
+      capabilities: ['read', 'write'],
+      paused: false
+    };
+    const numCore = registry.registerProject({ binding: numBinding });
+    numCore.recordEndpointObservation('ide-num', {
+      trusted: true,
+      latest_completed_cursor: 0, // 数字 0
+      endpoint_id: 'ide-num',
+      endpoint_revision: 1,
+      conversation_id: 'conv-ide-num',
+      workspace_identity: '/ws/num',
+      repository_identity: 'github.com/org/num'
+    });
+
+    const res = await fetch(`${baseUrl}/api/projects/proj-numeric-cursor/endpoints/ide-num/handled`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expected_cursor: 0 })
+    });
+
+    assert.equal(res.status, 200);
+    const json = await res.json();
+    assert.equal(json.success, true);
+    assert.equal(json.handled_cursor, 0);
+
+    const snapshot = numCore.getSnapshot();
+    assert.equal(snapshot.endpoints.ide_endpoints['ide-num'].result_state, 'NO_NEW_RESULT');
+    assert.equal(snapshot.endpoints.ide_endpoints['ide-num'].last_handled_cursor, 0);
+  });
 });

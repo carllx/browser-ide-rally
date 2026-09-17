@@ -225,4 +225,61 @@ describe('Surface Projection 单元测试', () => {
     assert.equal(surfaces[0].disambiguation.shared_repo_with_other_projects, true);
     assert.equal(surfaces[1].disambiguation.shared_repo_with_other_projects, true);
   });
+
+  it('8. 浏览器分支 (branch) 可明确识别且不引入任何 mainline 推断', () => {
+    const branchBinding = {
+      ...baseBinding,
+      binding_id: 'proj-branch-test',
+      browser: {
+        provider: 'chatgpt',
+        conversation_id: 'conv-branch-1',
+        branch: 'feat/experiment-branch'
+      }
+    };
+    const core = createProjectStatusCore({ binding: branchBinding });
+    const surface = projectStatusSurface(core.getSnapshot());
+
+    assert.equal(surface.browser.conversation_id, 'conv-branch-1');
+    assert.equal(surface.browser.branch, 'feat/experiment-branch');
+    assert.equal('mainline' in surface.browser, false);
+    assert.equal('baton' in surface.browser, false);
+  });
+
+  it('9. canEndpointMarkHandled 纯函数严格校验受信、NEW 及有效游标', () => {
+    // 正常 NEW 且受信
+    const validFact = {
+      result_state: 'NEW',
+      latest_completed_cursor: 'c-1',
+      continuity: { trusted: true }
+    };
+    assert.equal(projectStatusSurface({
+      binding: baseBinding,
+      endpoints: { browser: validFact }
+    }).browser.can_mark_handled, true);
+
+    // 数字游标 (0 或 123) 亦为有效游标
+    assert.equal(projectStatusSurface({
+      binding: baseBinding,
+      endpoints: { browser: { ...validFact, latest_completed_cursor: 0 } }
+    }).browser.can_mark_handled, true);
+
+    // 未受信
+    assert.equal(projectStatusSurface({
+      binding: baseBinding,
+      endpoints: { browser: { ...validFact, continuity: { trusted: false } } }
+    }).browser.can_mark_handled, false);
+
+    // 游标为 null
+    assert.equal(projectStatusSurface({
+      binding: baseBinding,
+      endpoints: { browser: { ...validFact, latest_completed_cursor: null } }
+    }).browser.can_mark_handled, false);
+
+    // 非 NEW 状态 (NO_NEW_RESULT)
+    assert.equal(projectStatusSurface({
+      binding: baseBinding,
+      endpoints: { browser: { ...validFact, result_state: 'NO_NEW_RESULT' } }
+    }).browser.can_mark_handled, false);
+  });
 });
+

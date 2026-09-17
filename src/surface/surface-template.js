@@ -5,13 +5,14 @@
  * 1. 忠实呈现 Status Core 快照投影，不引入第二套可写状态；
  * 2. 独立呈现 Browser 与所有活跃 IDE 端点（支持 Triple NEW 同时可见）；
  * 3. UNKNOWN 显式警告展示（琥珀色/警告），严禁展示为 IDLE 或已同步；
- * 4. 防串台标识：精确可见 binding_id、会话 ID、工作区及仓库身份；
+ * 4. 防串台标识：精确可见 binding_id、会话与分支 ID、工作区及仓库身份，不推断主线或 Baton；
  * 5. 独立平面：Human Intervention 与 Action 事实作为独立卡片/区块呈现；
  * 6. Mark Handled 控件严格绑定 exact project 与 exact endpoint_id，仅在 NEW 且受信时可用；
  * 7. 表现层状态（折叠/展开、筛选等）纯粹在浏览器本地 DOM 流转，严禁向后端发起任何规范状态变更。
  */
 
-import { SURFACE_CSS, SURFACE_CLIENT_JS } from './surface-styles.js';
+import { SURFACE_CSS } from './surface-styles.js';
+import { SURFACE_CLIENT_JS } from './surface-client.js';
 
 function escapeHtml(str) {
   if (str === null || str === undefined) return '';
@@ -46,7 +47,7 @@ function renderEndpointCard(ep, bindingId, roleLabel) {
   const cursorInfo = `
     <div class="endpoint-meta-grid">
       <div><span class="meta-label">最新完成游标:</span> <code>${escapeHtml(ep.latest_completed_cursor ?? '(无)')}</code></div>
-      <div><span class="meta-label">已处理游标:</span> <code>${escapeHtml(ep.last_handled_cursor ?? '(无)')}</code></div>
+      <div><span class="meta-label">已处理游标:</span> <code class="meta-handled-cursor">${escapeHtml(ep.last_handled_cursor ?? '(无)')}</code></div>
       <div><span class="meta-label">完成时间:</span> <span>${escapeHtml(ep.completed_at ?? '-')}</span></div>
       <div><span class="meta-label">受信状态:</span> <span>${ep.continuity?.trusted ? '受信 (Trusted)' : '未受信 (Untrusted)'}</span></div>
     </div>
@@ -58,6 +59,7 @@ function renderEndpointCard(ep, bindingId, roleLabel) {
       <div class="identity-line">
         <span class="meta-label">Provider:</span> <code>${escapeHtml(ep.provider || 'chatgpt')}</code>
         <span class="meta-label" style="margin-left: 12px;">会话 ID:</span> <code>${escapeHtml(ep.conversation_id || '(未绑定)')}</code>
+        <span class="meta-label" style="margin-left: 12px;">分支:</span> <code>${escapeHtml(ep.branch || '(未指定分支)')}</code>
       </div>
     `;
   } else {
@@ -79,6 +81,10 @@ function renderEndpointCard(ep, bindingId, roleLabel) {
     ? (ep.result_state !== 'NEW' ? '仅在端点处于 NEW 时可处理' : '端点未受信或缺少有效游标')
     : '将当前完成游标标记为已处理';
 
+  const cursorJsonAttr = ep.latest_completed_cursor !== null && ep.latest_completed_cursor !== undefined
+    ? `data-expected-cursor-json="${escapeHtml(encodeURIComponent(JSON.stringify(ep.latest_completed_cursor)))}"`
+    : '';
+
   const handledButton = `
     <div class="endpoint-action-bar">
       <button
@@ -88,6 +94,7 @@ function renderEndpointCard(ep, bindingId, roleLabel) {
         data-binding-id="${escapeHtml(bindingId)}"
         data-endpoint-id="${escapeHtml(ep.endpoint_id)}"
         data-expected-cursor="${escapeHtml(ep.latest_completed_cursor ?? '')}"
+        ${cursorJsonAttr}
         title="${handledBtnTitle}"
         ${handledBtnDisabled ? 'disabled' : ''}>
         Mark handled

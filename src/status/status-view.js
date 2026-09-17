@@ -68,7 +68,8 @@ export function formatStatusSnapshot({
       binding_revision: binding.binding_revision,
       browser: {
         provider: binding.browser?.provider || null,
-        conversation_id: binding.browser?.conversation_id || null
+        conversation_id: binding.browser?.conversation_id || null,
+        branch: binding.browser?.branch || binding.browser?.branch_name || null
       },
       ide_endpoints: rawIdeList.map(ep => ({
         endpoint_id: ep.endpoint_id,
