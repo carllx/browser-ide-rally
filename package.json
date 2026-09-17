@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "test": "node scripts/run-tests.mjs",
-    "surface": "node scripts/start-surface.mjs"
+    "surface": "node scripts/start-surface.mjs",
+    "surface:demo": "node scripts/start-surface.mjs --demo"
   },
   "repository": {
     "type": "git",

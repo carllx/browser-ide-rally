@@ -12,7 +12,8 @@ import { startStatusSurfaceServer } from '../src/surface/surface-server.js';
 function parseArgs(args) {
   const options = {
     port: parseInt(process.env.PORT, 10) || 3123,
-    storage: null
+    storage: null,
+    demo: false
   };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--port' && args[i + 1]) {
@@ -21,6 +22,8 @@ function parseArgs(args) {
     } else if (args[i] === '--storage' && args[i + 1]) {
       options.storage = path.resolve(process.cwd(), args[i + 1]);
       i++;
+    } else if (args[i] === '--demo') {
+      options.demo = true;
     }
   }
   return options;
@@ -161,17 +164,39 @@ function populateDemoRegistry(registry) {
   });
 }
 
+export function initializeStartupRegistry(options = {}) {
+  // 1. 显式指定了 --storage 路径：严格 Fail-Closed，绝不静默伪造 demo 数据
+  if (options.storage) {
+    if (!fs.existsSync(options.storage)) {
+      throw new Error(`Storage file "${options.storage}" does not exist. Failing closed to prevent fabricating state.`);
+    }
+    if (options.demo) {
+      throw new Error('Cannot combine explicit --demo with an existing --storage file.');
+    }
+    return createProjectRegistry({ storagePath: options.storage });
+  }
+
+  // 2. 显式指定了 --demo 模式：在纯内存中装配演示事实
+  if (options.demo) {
+    const registry = createProjectRegistry();
+    populateDemoRegistry(registry);
+    return registry;
+  }
+
+  // 3. 默认生产模式：空注册表，绝不伪造任何 NEW、UNKNOWN、Human 或 Action 事实
+  return createProjectRegistry();
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  let registry;
+  const registry = initializeStartupRegistry(options);
 
-  if (options.storage && fs.existsSync(options.storage)) {
-    registry = createProjectRegistry({ storagePath: options.storage });
-    console.log(`[Rally] Loaded registry from ${options.storage} (${registry.listProjects().length} projects)`);
+  if (options.storage) {
+    console.log(`[Rally] Loaded production registry from ${options.storage} (${registry.listProjects().length} projects)`);
+  } else if (options.demo) {
+    console.log(`[Rally] Initialized in-memory demo registry with 3 sample projects (--demo mode)`);
   } else {
-    registry = createProjectRegistry({ storagePath: options.storage });
-    populateDemoRegistry(registry);
-    console.log(`[Rally] Initialized in-memory demo registry with 3 sample projects`);
+    console.log(`[Rally] Started clean production surface (0 registered projects)`);
   }
 
   const { url, close } = await startStatusSurfaceServer({
@@ -196,9 +221,9 @@ async function main() {
 // 仅在直接执行时启动
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname)) {
   main().catch(err => {
-    console.error(`[Rally] Failed to start status surface:`, err);
+    console.error(`[Rally] Failed to start status surface:`, err.message);
     process.exit(1);
   });
 }
 
-export { main, populateDemoRegistry };
+export { main, parseArgs, populateDemoRegistry };

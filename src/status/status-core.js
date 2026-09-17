@@ -162,6 +162,7 @@ export class ProjectStatusCore {
     return {
       binding: {
         ...this._binding,
+        browser: { ...this._binding.browser },
         ide_endpoints: (this._binding.ide_endpoints || []).map(ep => ({ ...ep }))
       },
       endpoints: {
@@ -405,7 +406,8 @@ export class ProjectStatusCore {
     // 1. Browser 身份守卫
     const browserChanged =
       nextBinding.browser?.provider !== this._binding.browser?.provider ||
-      nextBinding.browser?.conversation_id !== this._binding.browser?.conversation_id;
+      nextBinding.browser?.conversation_id !== this._binding.browser?.conversation_id ||
+      (nextBinding.browser?.branch || null) !== (this._binding.browser?.branch || null);
 
     if (browserChanged) {
       throw new Error('Identity-changing rebind is prohibited in Status Core; use rebindEndpoint() for safe rebind (#14).');

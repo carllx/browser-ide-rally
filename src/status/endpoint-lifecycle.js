@@ -149,7 +149,8 @@ export function executeRebindEndpoint({
     }
     nextBinding.browser = {
       provider: identity.provider || binding.browser?.provider || 'chatgpt',
-      conversation_id: identity.conversation_id
+      conversation_id: identity.conversation_id,
+      branch: (identity.branch || identity.branch_name)?.trim?.() || (identity.branch === null ? null : (binding.browser?.branch || null))
     };
     const newBrowserFact = {
       endpoint: 'browser',

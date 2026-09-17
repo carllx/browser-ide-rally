@@ -222,4 +222,95 @@ describe('Surface Server 集成测试', () => {
     assert.equal(snapshot.endpoints.ide_endpoints['ide-num'].result_state, 'NO_NEW_RESULT');
     assert.equal(snapshot.endpoints.ide_endpoints['ide-num'].last_handled_cursor, 0);
   });
+
+  it('8. Mark handled 后衍生状态真实刷新：顶部汇总更新、仅含 NEW 筛选下卡片不再作为 NEW 显示、同级与无关端点不被篡改', async () => {
+    // 1. 设置一个具有恰好 1 个 NEW 端点的独立项目 (Browser=NEW, IDE=NO_NEW_RESULT)
+    const soloBinding = {
+      binding_id: 'proj-solo-new',
+      binding_revision: 1,
+      browser: { provider: 'chatgpt', conversation_id: 'conv-solo-1' },
+      ide_endpoints: [{
+        endpoint_id: 'ide-solo',
+        endpoint_revision: 1,
+        conversation_id: 'conv-solo-ide',
+        workspace_identity: '/ws/solo',
+        repository_identity: 'github.com/org/solo'
+      }],
+      capabilities: ['read'],
+      paused: false
+    };
+    const soloCore = registry.registerProject({ binding: soloBinding });
+
+    // Browser 推进为 NEW
+    soloCore.recordEndpointObservation('browser', {
+      trusted: true,
+      latest_completed_cursor: 'cur-solo-browser',
+      provider: 'chatgpt',
+      conversation_id: 'conv-solo-1',
+      endpoint_revision: 1
+    });
+
+    // IDE 端点推进为 NO_NEW_RESULT
+    soloCore.recordEndpointObservation('ide-solo', {
+      trusted: true,
+      latest_completed_cursor: 'cur-solo-ide',
+      endpoint_id: 'ide-solo',
+      endpoint_revision: 1,
+      conversation_id: 'conv-solo-ide',
+      workspace_identity: '/ws/solo',
+      repository_identity: 'github.com/org/solo'
+    });
+    soloCore.markEndpointHandled('ide-solo', { expected_cursor: 'cur-solo-ide' });
+    assert.equal(soloCore.getSnapshot().endpoints.ide_endpoints['ide-solo'].result_state, 'NO_NEW_RESULT');
+
+    // 2. 基线检查：请求 GET /
+    const beforeRes = await fetch(`${baseUrl}/`);
+    const beforeHtml = await beforeRes.text();
+
+    // 提取基线中的 NEW 端点总数
+    const newSummaryMatchBefore = beforeHtml.match(/NEW 端点: <strong[^>]*>(\d+)<\/strong>/);
+    assert.equal(Boolean(newSummaryMatchBefore), true);
+    const initialNewCount = parseInt(newSummaryMatchBefore[1], 10);
+    assert.equal(initialNewCount >= 1, true);
+
+    // 此时 proj-solo-new 卡片内存在 .badge-new
+    const soloCardRegex = /<article class="project-card"[^>]*id="card-proj-solo-new"[\s\S]*?<\/article>/;
+    const soloCardBefore = beforeHtml.match(soloCardRegex)?.[0] || '';
+    assert.equal(soloCardBefore.includes('badge-new'), true);
+
+    // 3. 用户触发 Mark handled 该端点
+    const handledRes = await fetch(`${baseUrl}/api/projects/proj-solo-new/endpoints/browser/handled`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expected_cursor: 'cur-solo-browser' })
+    });
+    assert.equal(handledRes.status, 200);
+
+    // 4. 验证规范端点变为 NO_NEW_RESULT
+    const snapshotAfter = soloCore.getSnapshot();
+    assert.equal(snapshotAfter.endpoints.browser.result_state, 'NO_NEW_RESULT');
+    // 同级 IDE 端点保持不变
+    assert.equal(snapshotAfter.endpoints.ide_endpoints['ide-solo'].result_state, 'NO_NEW_RESULT');
+
+    // 5. 验证受影响的衍生呈现刷新（重新获取 GET / 规范表面）
+    const afterRes = await fetch(`${baseUrl}/`);
+    const afterHtml = await afterRes.text();
+
+    // 顶部 NEW 端点计数减 1
+    const newSummaryMatchAfter = afterHtml.match(/NEW 端点: <strong[^>]*>(\d+)<\/strong>/);
+    const updatedNewCount = parseInt(newSummaryMatchAfter[1], 10);
+    assert.equal(updatedNewCount, initialNewCount - 1);
+
+    // proj-solo-new 卡片内不再存在 badge-new
+    const soloCardAfter = afterHtml.match(soloCardRegex)?.[0] || '';
+    assert.equal(soloCardAfter.includes('badge-new'), false);
+
+    // 在“仅含 NEW”筛选逻辑下（即查找包含 .badge-new 的卡片），该项目不再被筛选为 NEW
+    const hasNewBadge = soloCardAfter.includes('badge-new');
+    assert.equal(hasNewBadge, false);
+
+    // 验证无关项目（如 proj-alpha 的 ide-b）未被篡改，依然保持独立状态
+    const alphaCore = registry.getProject('proj-alpha');
+    assert.equal(alphaCore.getSnapshot().endpoints.ide_endpoints['ide-b'].result_state, 'NEW');
+  });
 });

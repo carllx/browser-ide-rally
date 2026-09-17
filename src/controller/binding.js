@@ -69,6 +69,11 @@ export function validateBinding(binding) {
     if (typeof binding.browser.conversation_id !== 'string' || !binding.browser.conversation_id.trim()) {
       errors.push('browser.conversation_id must be a non-empty string');
     }
+    if (binding.browser.branch !== undefined && binding.browser.branch !== null) {
+      if (typeof binding.browser.branch !== 'string' || !binding.browser.branch.trim()) {
+        errors.push('browser.branch must be a non-empty string when supplied');
+      }
+    }
   }
 
   // IDE 端点集合校验 (支持 ide_endpoints 数组或旧 ide 单对象)
@@ -170,7 +175,8 @@ export function createBinding({
     is_legacy_single_ide: isLegacySingleIde,
     browser: {
       provider: browser?.provider || 'chatgpt',
-      conversation_id: browser?.conversation_id || ''
+      conversation_id: browser?.conversation_id || '',
+      branch: (browser?.branch || browser?.branch_name)?.trim?.() || null
     },
     ide_endpoints: normalizedIdeEndpoints,
     capabilities: [...capabilities],
@@ -198,6 +204,7 @@ export function bumpRevision(binding) {
   const next = {
     ...binding,
     binding_revision: binding.binding_revision + 1,
+    browser: binding.browser ? { ...binding.browser } : null,
     ide_endpoints: binding.ide_endpoints ? binding.ide_endpoints.map(ep => ({ ...ep })) : [],
     updated_at: new Date().toISOString()
   };

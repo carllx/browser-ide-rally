@@ -106,7 +106,14 @@ arbitrary webpage text
 启动本地多项目端点状态监视表面：
 
 ```bash
+# 生产模式（默认启动干净的空注册表，绝不预填伪造事实）
 npm run surface
-# 或指定端口与持久化文件: node scripts/start-surface.mjs --port 3123 --storage /path/to/registry.json
+
+# 生产模式（加载真实持久化注册表文件；文件不存在时严格 Fail-Closed）
+node scripts/start-surface.mjs --storage /path/to/registry.json
+
+# 演练展示模式（显式 --demo 选通，加载包含 Triple NEW、UNKNOWN 及人工介入的演示数据）
+npm run surface:demo
+# 或 node scripts/start-surface.mjs --demo
 ```
 

@@ -5,9 +5,11 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { createBinding } from '../../src/controller/binding.js';
 import { createProjectStatusCore } from '../../src/status/status-core.js';
 import { createProjectRegistry } from '../../src/registry/project-registry.js';
-import { projectStatusSurface, projectRegistrySurface } from '../../src/surface/surface-projection.js';
+import { projectStatusSurface, projectRegistrySurface, canEndpointMarkHandled } from '../../src/surface/surface-projection.js';
 
 describe('Surface Projection 单元测试', () => {
   const baseBinding = {
@@ -252,34 +254,124 @@ describe('Surface Projection 单元测试', () => {
       latest_completed_cursor: 'c-1',
       continuity: { trusted: true }
     };
-    assert.equal(projectStatusSurface({
-      binding: baseBinding,
-      endpoints: { browser: validFact }
-    }).browser.can_mark_handled, true);
+    assert.equal(canEndpointMarkHandled(validFact), true);
 
     // 数字游标 (0 或 123) 亦为有效游标
-    assert.equal(projectStatusSurface({
-      binding: baseBinding,
-      endpoints: { browser: { ...validFact, latest_completed_cursor: 0 } }
-    }).browser.can_mark_handled, true);
+    assert.equal(canEndpointMarkHandled({ ...validFact, latest_completed_cursor: 0 }), true);
 
     // 未受信
-    assert.equal(projectStatusSurface({
-      binding: baseBinding,
-      endpoints: { browser: { ...validFact, continuity: { trusted: false } } }
-    }).browser.can_mark_handled, false);
+    assert.equal(canEndpointMarkHandled({ ...validFact, continuity: { trusted: false } }), false);
 
     // 游标为 null
-    assert.equal(projectStatusSurface({
-      binding: baseBinding,
-      endpoints: { browser: { ...validFact, latest_completed_cursor: null } }
-    }).browser.can_mark_handled, false);
+    assert.equal(canEndpointMarkHandled({ ...validFact, latest_completed_cursor: null }), false);
 
     // 非 NEW 状态 (NO_NEW_RESULT)
-    assert.equal(projectStatusSurface({
-      binding: baseBinding,
-      endpoints: { browser: { ...validFact, result_state: 'NO_NEW_RESULT' } }
-    }).browser.can_mark_handled, false);
+    assert.equal(canEndpointMarkHandled({ ...validFact, result_state: 'NO_NEW_RESULT' }), false);
+  });
+
+  it('10. 规范链路：createBinding(...) -> ProjectRegistry -> Core -> snapshot -> surface 保证 conversation_id 与 branch 完整存活并渲染', () => {
+    const canonicalBinding = createBinding({
+      binding_id: 'proj-canonical-branch',
+      browser: {
+        provider: 'chatgpt',
+        conversation_id: 'conv-canonical-001',
+        branch: 'feat/canonical-branch-flow'
+      },
+      ide_endpoints: [{
+        endpoint_id: 'ide-agent',
+        endpoint_revision: 1,
+        conversation_id: 'conv-canonical-ide',
+        workspace_identity: '/ws/canonical',
+        repository_identity: 'github.com/org/canonical'
+      }]
+    });
+
+    // 确认 createBinding 保留了 branch
+    assert.equal(canonicalBinding.browser.branch, 'feat/canonical-branch-flow');
+    assert.equal(canonicalBinding.browser.conversation_id, 'conv-canonical-001');
+
+    // 经由 ProjectRegistry / Status Core 真实链路
+    const reg = createProjectRegistry();
+    const core = reg.registerProject({ binding: canonicalBinding });
+    const snapshot = core.getSnapshot();
+
+    assert.equal(snapshot.binding.browser.conversation_id, 'conv-canonical-001');
+    assert.equal(snapshot.binding.browser.branch, 'feat/canonical-branch-flow');
+
+    // 表面投影
+    const surface = projectStatusSurface(snapshot);
+    assert.equal(surface.browser.conversation_id, 'conv-canonical-001');
+    assert.equal(surface.browser.branch, 'feat/canonical-branch-flow');
+    assert.equal('mainline' in surface.browser, false);
+    assert.equal('baton' in surface.browser, false);
+  });
+
+  it('11. updateBinding 严格拦截对 browser.branch 的静默修改漏洞', () => {
+    const canonicalBinding = createBinding({
+      binding_id: 'proj-branch-guard',
+      browser: {
+        provider: 'chatgpt',
+        conversation_id: 'conv-guard-001',
+        branch: 'feat/initial-branch'
+      },
+      ide_endpoints: [{
+        endpoint_id: 'ide-agent',
+        endpoint_revision: 1,
+        conversation_id: 'conv-guard-ide',
+        workspace_identity: '/ws/guard',
+        repository_identity: 'github.com/org/guard'
+      }]
+    });
+
+    const core = createProjectStatusCore({ binding: canonicalBinding });
+
+    // 尝试通过 updateBinding 静默变更 branch
+    const tamperedBinding = {
+      ...canonicalBinding,
+      browser: {
+        ...canonicalBinding.browser,
+        branch: 'feat/tampered-branch'
+      }
+    };
+
+    assert.throws(() => {
+      core.updateBinding(tamperedBinding);
+    }, /Identity-changing rebind is prohibited in Status Core; use rebindEndpoint\(\)/);
+  });
+
+  it('12. 注册表 durable 持久化与重启恢复完整保留 browser.branch 事实', () => {
+    const tmpFile = `/tmp/rally-reg-branch-test-${Date.now()}.json`;
+    try {
+      const reg1 = createProjectRegistry({ storagePath: tmpFile });
+      const b = createBinding({
+        binding_id: 'proj-durable-branch',
+        browser: {
+          provider: 'chatgpt',
+          conversation_id: 'conv-durable-001',
+          branch: 'feat/durable-branch-persist'
+        },
+        ide_endpoints: [{
+          endpoint_id: 'ide-1',
+          conversation_id: 'conv-ide-1',
+          workspace_identity: '/ws/durable',
+          repository_identity: 'github.com/org/durable'
+        }]
+      });
+      reg1.registerProject({ binding: b });
+      reg1.saveToFile(tmpFile);
+
+      // 从文件重新载入
+      const reg2 = createProjectRegistry({ storagePath: tmpFile });
+      const reloadedCore = reg2.getProject('proj-durable-branch');
+      const surface = projectStatusSurface(reloadedCore.getSnapshot());
+
+      assert.equal(surface.browser.conversation_id, 'conv-durable-001');
+      assert.equal(surface.browser.branch, 'feat/durable-branch-persist');
+    } finally {
+      if (fs.existsSync(tmpFile)) {
+        fs.unlinkSync(tmpFile);
+      }
+    }
   });
 });
 

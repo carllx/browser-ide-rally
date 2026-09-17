@@ -1,6 +1,6 @@
 /**
  * 状态表面客户端交互脚本模块 (Surface Client Script)
- * 纯原生浏览器端交互逻辑，实现无重置就地更新与防类型丢失传参
+ * 纯原生浏览器端交互逻辑，实现规范状态重载刷新与筛选状态持久化
  */
 
 export const SURFACE_CLIENT_JS = `
@@ -36,22 +36,8 @@ export const SURFACE_CLIENT_JS = `
         const result = await resp.json();
         if (resp.ok && result.success) {
           showToast('已成功标记处理: ' + bindingId + ' / ' + endpointId);
-
-          // 就地更新对应端点 DOM，保持当前筛选和折叠状态不被重置
-          const card = btn.closest('.endpoint-card');
-          if (card) {
-            const badgeContainer = card.querySelector('.endpoint-header > div:last-child');
-            if (badgeContainer) {
-              badgeContainer.innerHTML = '<span class="badge badge-caught-up" role="status" aria-label="无新结果">NO_NEW_RESULT</span>';
-            }
-            const handledSpan = card.querySelector('.meta-handled-cursor');
-            if (handledSpan) {
-              handledSpan.textContent = String(result.handled_cursor ?? '(无)');
-            }
-            btn.disabled = true;
-            btn.textContent = 'Mark handled';
-            btn.title = '仅在端点处于 NEW 时可处理';
-          }
+          // 标记处理后重新加载全量规范表面，避免局部 DOM 补丁导致顶部汇总指标与视图筛选脱节
+          window.location.reload();
         } else {
           showToast('标记失败: ' + (result.reason || '未知错误'), true);
           btn.disabled = false;
@@ -76,26 +62,41 @@ export const SURFACE_CLIENT_JS = `
     });
 
     // 3. 纯客户端表现层控制：筛选器（绝不修改规范状态）
+    function applyFilter(filter) {
+      document.querySelectorAll('.filter-btn').forEach(b => {
+        b.classList.toggle('active', b.getAttribute('data-filter') === filter);
+      });
+      const cards = document.querySelectorAll('.project-card');
+      cards.forEach(card => {
+        if (filter === 'all') {
+          card.style.display = '';
+        } else if (filter === 'new') {
+          const hasNew = card.querySelector('.badge-new') !== null;
+          card.style.display = hasNew ? '' : 'none';
+        } else if (filter === 'unknown') {
+          const hasUnknown = card.querySelector('.badge-unknown') !== null;
+          card.style.display = hasUnknown ? '' : 'none';
+        }
+      });
+      try {
+        sessionStorage.setItem('rally_status_filter', filter);
+      } catch {}
+    }
+
     document.querySelectorAll('.filter-btn').forEach(btn => {
       btn.addEventListener('click', function() {
-        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-        this.classList.add('active');
         const filter = this.getAttribute('data-filter');
-        const cards = document.querySelectorAll('.project-card');
-
-        cards.forEach(card => {
-          if (filter === 'all') {
-            card.style.display = '';
-          } else if (filter === 'new') {
-            const hasNew = card.querySelector('.badge-new') !== null;
-            card.style.display = hasNew ? '' : 'none';
-          } else if (filter === 'unknown') {
-            const hasUnknown = card.querySelector('.badge-unknown') !== null;
-            card.style.display = hasUnknown ? '' : 'none';
-          }
-        });
+        applyFilter(filter);
       });
     });
+
+    // 页面载入时恢复先前的筛选偏好
+    try {
+      const savedFilter = sessionStorage.getItem('rally_status_filter');
+      if (savedFilter && savedFilter !== 'all') {
+        applyFilter(savedFilter);
+      }
+    } catch {}
 
     function showToast(msg, isError) {
       const toast = document.getElementById('toast-msg');
