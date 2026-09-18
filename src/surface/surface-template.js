@@ -12,7 +12,9 @@
  */
 
 import { SURFACE_CSS } from './surface-styles.js';
+import { ATTENTION_TRAY_CSS } from './attention-styles.js';
 import { SURFACE_CLIENT_JS } from './surface-client.js';
+import { renderAttentionTrayHtml } from './attention-template.js';
 
 function escapeHtml(str) {
   if (str === null || str === undefined) return '';
@@ -180,7 +182,7 @@ function renderEndpointCard(ep, bindingId, bindingRevision, roleLabel) {
   `;
 }
 
-function renderHumanInterventionSection(human) {
+function renderHumanInterventionSection(human, bindingId, bindingRevision) {
   if (human?.active) {
     return `
       <div class="plane-section human-intervention-active" role="alert">
@@ -191,13 +193,39 @@ function renderHumanInterventionSection(human) {
         <div class="plane-body">
           <strong>介入原因：</strong> ${escapeHtml(human.reason || '人工核验中')}
         </div>
+        <div class="plane-controls" style="margin-top: 8px;">
+          <button
+            type="button"
+            class="btn btn-control btn-clear-human"
+            data-action="clear-human-intervention"
+            data-binding-id="${escapeHtml(bindingId)}"
+            data-binding-revision="${escapeHtml(bindingRevision)}"
+            title="解决并清除人工介入标记">
+            清除介入 (Clear)
+          </button>
+        </div>
       </div>
     `;
   }
   return `
     <div class="plane-section human-intervention-inactive">
-      <span class="meta-label">人工介入平面：</span>
-      <span class="text-muted">无需介入 (None required)</span>
+      <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+        <div>
+          <span class="meta-label">人工介入平面：</span>
+          <span class="text-muted">无需介入 (None required)</span>
+        </div>
+        <div>
+          <button
+            type="button"
+            class="btn btn-control btn-assert-human"
+            data-action="assert-human-intervention"
+            data-binding-id="${escapeHtml(bindingId)}"
+            data-binding-revision="${escapeHtml(bindingRevision)}"
+            title="显式声明该项目需要人工决策介入">
+            声明介入 (Assert)
+          </button>
+        </div>
+      </div>
     </div>
   `;
 }
@@ -296,15 +324,16 @@ function renderProjectCard(proj) {
           </div>
         </section>
 
-        ${renderHumanInterventionSection(proj.human_intervention)}
+        ${renderHumanInterventionSection(proj.human_intervention, bindingId, bRev)}
         ${renderActionsSection(proj.actions)}
       </div>
     </article>
   `;
 }
 
-export function renderStatusSurfaceHtml({ projects = [] } = {}) {
+export function renderStatusSurfaceHtml({ projects = [], attentionTray = null } = {}) {
   const projectCards = projects.map(p => renderProjectCard(p)).join('\n');
+  const trayHtml = attentionTray ? renderAttentionTrayHtml(attentionTray) : '';
 
   // 统计 summary 指标
   let totalNew = 0;
@@ -324,7 +353,10 @@ export function renderStatusSurfaceHtml({ projects = [] } = {}) {
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Rally — Multi-Project Status Surface</title>
-  <style>${SURFACE_CSS}</style>
+  <style>
+    ${SURFACE_CSS}
+    ${ATTENTION_TRAY_CSS}
+  </style>
 </head>
 <body>
   <header class="app-header">
@@ -347,6 +379,7 @@ export function renderStatusSurfaceHtml({ projects = [] } = {}) {
   </nav>
 
   <main class="surface-container">
+    ${trayHtml}
     ${projectCards || '<div class="text-muted" style="padding: 40px; text-align: center;">当前无已注册项目</div>'}
   </main>
 

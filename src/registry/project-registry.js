@@ -108,6 +108,38 @@ export class ProjectRegistry {
     return result;
   }
 
+  setProjectHumanIntervention(bindingId, { active = true, reason = null, expected_binding_revision } = {}) {
+    const core = this.getProject(bindingId);
+    const snapshot = core.getSnapshot();
+    if (expected_binding_revision === undefined || expected_binding_revision === null) {
+      throw new Error('expected_binding_revision is required for setProjectHumanIntervention');
+    }
+    if (expected_binding_revision !== snapshot.binding.binding_revision) {
+      const err = new Error(
+        `STALE_OR_MISSING_BINDING_REVISION: expected ${expected_binding_revision}, actual ${snapshot.binding.binding_revision}`
+      );
+      err.code = 'STALE_OR_MISSING_BINDING_REVISION';
+      throw err;
+    }
+
+    core.setHumanIntervention({ active, reason });
+    if (this._storagePath) {
+      this.saveToFile(this._storagePath);
+    }
+    return {
+      success: true,
+      human_intervention: core.getSnapshot().human_intervention
+    };
+  }
+
+  clearProjectHumanIntervention(bindingId, { expected_binding_revision } = {}) {
+    return this.setProjectHumanIntervention(bindingId, {
+      active: false,
+      reason: null,
+      expected_binding_revision
+    });
+  }
+
   recordProjectActionFact(bindingId, actionParams) {
     const core = this.getProject(bindingId);
     const fact = core.recordActionFact(actionParams);

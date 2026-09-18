@@ -12,6 +12,7 @@
 import http from 'node:http';
 import { projectRegistrySurface } from './surface-projection.js';
 import { renderStatusSurfaceHtml } from './surface-template.js';
+import { deriveAttentionTray } from './attention-tray.js';
 import {
   executeSafeRebind,
   executeSafeOpenFocus,
@@ -77,22 +78,34 @@ export function createStatusSurfaceRequestHandler({ registry, browserAdapter = n
     const pathname = urlObj.pathname;
     const method = req.method.toUpperCase();
 
-    // 1. GET / 或 /index.html: 渲染状态表面 HTML
+    // 1. GET / 或 /index.html: 渲染状态表面 HTML (附带 Attention Tray)
     if (method === 'GET' && (pathname === '/' || pathname === '/index.html')) {
       try {
         const projects = projectRegistrySurface(registry);
-        const html = renderStatusSurfaceHtml({ projects });
+        const attentionTray = deriveAttentionTray(registry);
+        const html = renderStatusSurfaceHtml({ projects, attentionTray });
         return sendHtml(res, 200, html);
       } catch (err) {
         return sendJson(res, 500, { error: `Internal Server Error: ${err.message}` });
       }
     }
 
-    // 2. GET /api/projects: 返回所有项目规范表面投影 JSON
+    // 2. GET /api/projects: 返回所有项目规范表面投影 JSON (附加 attention_tray 派生视图)
     if (method === 'GET' && pathname === '/api/projects') {
       try {
         const projects = projectRegistrySurface(registry);
-        return sendJson(res, 200, { projects });
+        const attentionTray = deriveAttentionTray(registry);
+        return sendJson(res, 200, { projects, attention_tray: attentionTray });
+      } catch (err) {
+        return sendJson(res, 500, { error: `Internal Server Error: ${err.message}` });
+      }
+    }
+
+    // 2b. GET /api/attention-tray: 专有只读 Attention Tray 派生端点
+    if (method === 'GET' && pathname === '/api/attention-tray') {
+      try {
+        const attentionTray = deriveAttentionTray(registry);
+        return sendJson(res, 200, { attention_tray: attentionTray });
       } catch (err) {
         return sendJson(res, 500, { error: `Internal Server Error: ${err.message}` });
       }
@@ -136,6 +149,70 @@ export function createStatusSurfaceRequestHandler({ registry, browserAdapter = n
         }
       } catch (err) {
         return sendJson(res, 400, { success: false, reason: err.message });
+      }
+    }
+
+    // 3b. POST /api/projects/:bindingId/human-intervention/assert: 显式声明人工介入 (带版本锁与持久化)
+    const assertHumanMatch = pathname.match(/^\/api\/projects\/([^/]+)\/human-intervention\/assert$/);
+    if (method === 'POST' && assertHumanMatch) {
+      const bindingId = decodeURIComponent(assertHumanMatch[1]);
+      let body = {};
+      try {
+        body = await parseBody(req);
+      } catch (err) {
+        return sendJson(res, 400, { success: false, reason: err.message });
+      }
+
+      if (!registry.hasProject(bindingId)) {
+        return sendJson(res, 404, { success: false, reason: `Project "${bindingId}" not found` });
+      }
+
+      try {
+        const result = registry.setProjectHumanIntervention(bindingId, {
+          active: true,
+          reason: body.reason || null,
+          expected_binding_revision: body.expected_binding_revision
+        });
+
+        const snapshot = registry.getProject(bindingId).getSnapshot();
+        return sendJson(res, 200, {
+          success: true,
+          human_intervention: result.human_intervention,
+          project: snapshot
+        });
+      } catch (err) {
+        return handleControlError(res, err);
+      }
+    }
+
+    // 3c. POST /api/projects/:bindingId/human-intervention/clear: 清除人工介入 (带版本锁与持久化)
+    const clearHumanMatch = pathname.match(/^\/api\/projects\/([^/]+)\/human-intervention\/clear$/);
+    if (method === 'POST' && clearHumanMatch) {
+      const bindingId = decodeURIComponent(clearHumanMatch[1]);
+      let body = {};
+      try {
+        body = await parseBody(req);
+      } catch (err) {
+        return sendJson(res, 400, { success: false, reason: err.message });
+      }
+
+      if (!registry.hasProject(bindingId)) {
+        return sendJson(res, 404, { success: false, reason: `Project "${bindingId}" not found` });
+      }
+
+      try {
+        const result = registry.clearProjectHumanIntervention(bindingId, {
+          expected_binding_revision: body.expected_binding_revision
+        });
+
+        const snapshot = registry.getProject(bindingId).getSnapshot();
+        return sendJson(res, 200, {
+          success: true,
+          human_intervention: result.human_intervention,
+          project: snapshot
+        });
+      } catch (err) {
+        return handleControlError(res, err);
       }
     }
 

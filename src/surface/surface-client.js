@@ -422,5 +422,101 @@ export const SURFACE_CLIENT_JS = `
         applyFilter(savedFilter);
       }
     } catch {}
+
+    // 6. Attention Tray 展开 / 折叠客户端控制 (表现层状态，绝不修改规范事实)
+    document.addEventListener('click', function(e) {
+      const toggleBtn = e.target.closest('button[data-action="toggle-tray-expand"]');
+      if (!toggleBtn) return;
+      const container = toggleBtn.closest('.attention-tray-container');
+      if (!container) return;
+      container.classList.toggle('is-collapsed');
+      const isCollapsed = container.classList.contains('is-collapsed');
+      toggleBtn.setAttribute('aria-expanded', !isCollapsed);
+    });
+
+    // 7. Human Intervention Assert 点击事件 (弹出模态框填写 reason 并提交)
+    document.addEventListener('click', function(e) {
+      const btn = e.target.closest('button[data-action="assert-human-intervention"]');
+      if (!btn) return;
+      const bindingId = btn.getAttribute('data-binding-id');
+      const bindingRev = parseInt(btn.getAttribute('data-binding-revision'), 10);
+
+      modalTitle.textContent = '声明人工介入 [' + bindingId + '] (rev ' + bindingRev + ')';
+      modalBody.innerHTML = '<div class="form-group"><label>介入原因 (Reason):</label><input type="text" id="m-human-reason" class="form-control" placeholder="例如：需用户确认架构方案或提供敏感秘钥" /></div>';
+      modal.style.display = 'flex';
+
+      currentModalAction = async function() {
+        const reasonInput = document.getElementById('m-human-reason');
+        const reason = reasonInput ? reasonInput.value.trim() : '';
+        if (!reason) {
+          showToast('请输入人工介入原因', true);
+          return;
+        }
+
+        modalSubmit.disabled = true;
+        modalSubmit.textContent = '提交中...';
+
+        try {
+          const resp = await fetch('/api/projects/' + encodeURIComponent(bindingId) + '/human-intervention/assert', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              expected_binding_revision: bindingRev,
+              reason: reason
+            })
+          });
+          const result = await resp.json();
+          if (resp.ok && result.success) {
+            closeModal();
+            showToast('已成功声明人工介入: ' + bindingId);
+            window.location.reload();
+          } else {
+            showToast('声明失败: ' + (result.reason || '版本失配'), true);
+            modalSubmit.disabled = false;
+            modalSubmit.textContent = '确认执行';
+          }
+        } catch (err) {
+          showToast('请求异常: ' + err.message, true);
+          modalSubmit.disabled = false;
+          modalSubmit.textContent = '确认执行';
+        }
+      };
+    });
+
+    // 8. Human Intervention Clear 点击事件
+    document.addEventListener('click', async function(e) {
+      const btn = e.target.closest('button[data-action="clear-human-intervention"]');
+      if (!btn || btn.disabled) return;
+
+      const bindingId = btn.getAttribute('data-binding-id');
+      const bindingRev = parseInt(btn.getAttribute('data-binding-revision'), 10);
+
+      btn.disabled = true;
+      const originalText = btn.textContent;
+      btn.textContent = '清除中...';
+
+      try {
+        const resp = await fetch('/api/projects/' + encodeURIComponent(bindingId) + '/human-intervention/clear', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            expected_binding_revision: bindingRev
+          })
+        });
+        const result = await resp.json();
+        if (resp.ok && result.success) {
+          showToast('已成功清除人工介入: ' + bindingId);
+          window.location.reload();
+        } else {
+          showToast('清除失败: ' + (result.reason || '版本失配'), true);
+          btn.disabled = false;
+          btn.textContent = originalText;
+        }
+      } catch (err) {
+        showToast('请求异常: ' + err.message, true);
+        btn.disabled = false;
+        btn.textContent = originalText;
+      }
+    });
   })();
 `;

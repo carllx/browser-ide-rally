@@ -400,6 +400,9 @@ export class ProjectStatusCore {
       updated_at: new Date().toISOString()
     };
     this._updatedAt = this._humanIntervention.updated_at;
+    if (this._onMutation) {
+      this._onMutation();
+    }
   }
 
   clearHumanIntervention() {
