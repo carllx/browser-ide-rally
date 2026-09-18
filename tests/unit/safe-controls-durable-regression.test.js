@@ -174,10 +174,10 @@ test('[Production Seam] 3. 验证生产表面运行时的装配缝隙 buildProdu
   assert.ok(ideAdapter);
   assert.equal(ideAdapter.endpointId, 'ide-prod-1');
 
-  // focusWindow
-  const focusRes = ideAdapter.focusWindow();
-  assert.equal(focusRes.focused, true);
-  assert.equal(focusRes.endpointId, 'ide-prod-1');
+  // focusWindow 在未提供端点级会话 UI 聚焦原语时 Fail-Closed
+  assert.throws(() => {
+    ideAdapter.focusWindow();
+  }, /FOCUS_NOT_AVAILABLE: provider-side exact IDE conversation focus is not available at the existing seam/);
 
   // dispatchControlledTask
   const dispatchRes = ideAdapter.dispatchControlledTask({
@@ -295,21 +295,10 @@ test('[Production Controls] 4. ProductionIdeControlAdapter 真实调用 AgentAPI
   assert.equal(sendCall.args[2], 'conv-valid');
   assert.match(sendCall.args[3], /Real controlled instruction/);
 
-  // 4. 验证聚焦窗口：真实调用且绝不吞噬执行器异常
-  adapter.focusWindow();
-  assert.equal(scriptCalls.length, 1);
-  assert.match(scriptCalls[0], /tell application "Antigravity"/);
-
-  const failingAdapter = new ProductionIdeControlAdapter({
-    endpointId: 'ide-failing',
-    registry,
-    scriptExecutor: () => {
-      throw new Error('AppleScript execution failure: process dead');
-    }
-  });
+  // 4. 验证聚焦窗口：因 provider 端点聚焦原语不存在，fail-closed 抛出明确 stop condition 错误
   assert.throws(() => {
-    failingAdapter.focusWindow();
-  }, /AppleScript execution failure: process dead/);
+    adapter.focusWindow();
+  }, /FOCUS_NOT_AVAILABLE: provider-side exact IDE conversation focus is not available at the existing seam/);
 });
 
 test('[Safe Focus] 5. Open/Focus 终态流转唯一性与错误保留（消除 FAILED -> BLOCKED 双重终态）', () => {

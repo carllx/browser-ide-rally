@@ -89,15 +89,9 @@ export function executeSafeOpenFocus(params) {
     }
 
     try {
-      let tab = null;
       if (typeof browserAdapter.locateExactConversationTab === 'function') {
-        tab = browserAdapter.locateExactConversationTab(conversationId);
+        browserAdapter.locateExactConversationTab(conversationId);
       }
-
-      core.advanceActionStage(action.action_id, {
-        next_stage: 'SUBMITTED_LOCALLY',
-        evidence: `Locating and focusing browser conversation "${conversationId}"`
-      });
 
       // 规范单一控制接口：按 conversationId 聚焦，严禁坐标回退
       const focusRes = browserAdapter.focusConversationTab(conversationId);
@@ -164,11 +158,6 @@ export function executeSafeOpenFocus(params) {
     }
 
     try {
-      core.advanceActionStage(action.action_id, {
-        next_stage: 'SUBMITTED_LOCALLY',
-        evidence: `Verifying IDE endpoint "${target_endpoint}" identity`
-      });
-
       effectiveIdeAdapter.verifyTargetIdentity({
         conversationId: ep.conversation_id,
         expectedWorkspace: ep.workspace_identity,

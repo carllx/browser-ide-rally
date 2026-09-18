@@ -130,21 +130,13 @@ export class ProductionIdeControlAdapter {
   }
 
   /**
-   * 执行真实的 Antigravity 窗口激活置顶，绝不吞噬执行器异常
-   * @returns {{ focused: true, endpointId: string, method: string }}
+   * 执行 IDE 聚焦操作：在未提供端点级会话 UI 聚焦原语时 Fail-Closed
+   * 严禁以泛化的应用级置顶激活替代并虚假声称 TARGET_COMPLETED
    */
   focusWindow() {
-    const script = `
-    tell application "Antigravity"
-      activate
-    end tell
-    `;
-    this._scriptExecutor(script);
-    return {
-      focused: true,
-      endpointId: this._endpointId,
-      method: 'antigravity_activate'
-    };
+    throw new Error(
+      'FOCUS_NOT_AVAILABLE: provider-side exact IDE conversation focus is not available at the existing seam'
+    );
   }
 
   /**
