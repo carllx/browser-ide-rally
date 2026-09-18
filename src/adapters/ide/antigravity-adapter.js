@@ -352,7 +352,7 @@ export class AntigravityIdeAdapter {
       trusted: true,
       latest_completed_cursor: opaqueCursor,
       completed_at: completedAt,
-      latest_completed_result: this._buildCompletedResult(opaqueCursor, latestTurn.text || '', completedAt)
+      latest_completed_result: this._buildCompletedResult(opaqueCursor, latestTurn.text, completedAt)
     });
 
     this._statusCore.recordEndpointObservation(this._endpointId, observation);
@@ -439,7 +439,7 @@ export class AntigravityIdeAdapter {
               trusted: true,
               latest_completed_cursor: effectiveCursor,
               completed_at: completedAt,
-              latest_completed_result: this._buildCompletedResult(effectiveCursor, effectiveTurn.text || '', completedAt)
+              latest_completed_result: this._buildCompletedResult(effectiveCursor, effectiveTurn.text, completedAt)
             })
           );
           return { status: 'RECONCILED' };
@@ -471,7 +471,7 @@ export class AntigravityIdeAdapter {
           trusted: true,
           latest_completed_cursor: handledCursor,
           completed_at: completedAt,
-          latest_completed_result: this._buildCompletedResult(handledCursor, handledTurn.text || '', completedAt)
+          latest_completed_result: this._buildCompletedResult(handledCursor, handledTurn.text, completedAt)
         })
       );
       return { status: 'RECONCILED' };
@@ -487,7 +487,7 @@ export class AntigravityIdeAdapter {
         trusted: true,
         latest_completed_cursor: newOpaqueCursor,
         completed_at: completedAt,
-        latest_completed_result: this._buildCompletedResult(newOpaqueCursor, latestTurn.text || '', completedAt)
+        latest_completed_result: this._buildCompletedResult(newOpaqueCursor, latestTurn.text, completedAt)
       })
     );
 
