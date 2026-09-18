@@ -13,15 +13,24 @@
  */
 
 /**
+ * 提取 Action 的凭据/原因字符串
+ * @param {object|null} action
+ * @returns {string}
+ */
+export function extractActionEvidenceString(action) {
+  if (!action) return '';
+  if (typeof action.evidence === 'string') return action.evidence;
+  return action.evidence?.reason || action.evidence?.error || '';
+}
+
+/**
  * 判断动作是否包含目标歧义证据
  * @param {object} action - Action 事实
  * @returns {boolean}
  */
 export function isTargetAmbiguityAction(action) {
   if (!action) return false;
-  const evidenceStr = typeof action.evidence === 'string'
-    ? action.evidence
-    : (action.evidence?.reason || action.evidence?.error || '');
+  const evidenceStr = extractActionEvidenceString(action);
   return (
     evidenceStr.includes('AMBIGUOUS_MATCHES') ||
     evidenceStr.includes('Ambiguous match') ||
@@ -39,9 +48,7 @@ export function isRebindBlockedAction(action) {
   if (!action || action.action_type !== 'rebind' || action.stage !== 'BLOCKED') {
     return false;
   }
-  const evidenceStr = typeof action.evidence === 'string'
-    ? action.evidence
-    : (action.evidence?.reason || action.evidence?.error || '');
+  const evidenceStr = extractActionEvidenceString(action);
   return (
     evidenceStr.includes('unhandled NEW') ||
     evidenceStr.includes('unhandled UNKNOWN') ||
@@ -155,9 +162,7 @@ export function deriveProjectAttentionItems(snapshot) {
     const stage = act.stage;
     if (stage === 'BLOCKED' || stage === 'FAILED' || stage === 'UNKNOWN') {
       const classification = classifyActionAttention(act);
-      const evidenceStr = typeof act.evidence === 'string'
-        ? act.evidence
-        : (act.evidence?.reason || act.evidence?.error || null);
+      const evidenceStr = extractActionEvidenceString(act) || null;
 
       items.push({
         item_id: `action:${bindingId}:${act.action_id}`,
