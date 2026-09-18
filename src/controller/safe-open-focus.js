@@ -104,11 +104,14 @@ export function executeSafeOpenFocus(params) {
 
       // 副作用真实性凭据校验：必须实际执行了聚焦
       if (!focusRes || focusRes.focused !== true) {
+        const failureReason = focusRes?.reason || 'Browser tab focus not confirmed';
         core.advanceActionStage(action.action_id, {
           next_stage: 'FAILED',
-          evidence: focusRes?.reason || 'Browser tab focus operation not executed'
+          evidence: failureReason
         });
-        throw new Error(`FOCUS_FAILED: ${focusRes?.reason || 'Browser tab focus not confirmed'}`);
+        const failErr = new Error(`FOCUS_FAILED: ${failureReason}`);
+        failErr.actionStage = 'FAILED';
+        throw failErr;
       }
 
       core.advanceActionStage(action.action_id, {
@@ -118,11 +121,21 @@ export function executeSafeOpenFocus(params) {
 
       return { success: true, action, target: focusRes };
     } catch (err) {
-      if (action.stage !== 'BLOCKED') {
+      const isTerminal = action.stage === 'FAILED' || action.stage === 'BLOCKED' || action.stage === 'TARGET_COMPLETED';
+      if (!isTerminal) {
+        const isBlocked = err.message.includes('NO_EXACT_CONVERSATION_TAB') ||
+                          err.message.includes('AMBIGUOUS_CONVERSATION_TAB') ||
+                          err.message.includes('CONVERSATION_ID_REQUIRED') ||
+                          err.message.includes('not found') ||
+                          err.message.includes('SECURITY_REJECT');
+        const nextStage = isBlocked ? 'BLOCKED' : 'FAILED';
         core.advanceActionStage(action.action_id, {
-          next_stage: 'BLOCKED',
+          next_stage: nextStage,
           evidence: err.message
         });
+        err.actionStage = nextStage;
+      } else {
+        err.actionStage = action.stage;
       }
       throw err;
     }
@@ -134,7 +147,9 @@ export function executeSafeOpenFocus(params) {
         next_stage: 'BLOCKED',
         evidence: 'ide_endpoint_not_found'
       });
-      throw new Error(`IDE_ENDPOINT_NOT_FOUND: Endpoint "${target_endpoint}" does not exist in binding`);
+      const notFoundErr = new Error(`IDE_ENDPOINT_NOT_FOUND: Endpoint "${target_endpoint}" does not exist in binding`);
+      notFoundErr.actionStage = 'BLOCKED';
+      throw notFoundErr;
     }
 
     const effectiveIdeAdapter = resolveIdeAdapter(ideAdapter, target_endpoint);
@@ -143,7 +158,9 @@ export function executeSafeOpenFocus(params) {
         next_stage: 'BLOCKED',
         evidence: 'ide_adapter_not_available'
       });
-      throw new Error('IDE adapter is required for IDE open/focus');
+      const noAdapterErr = new Error('IDE adapter is required for IDE open/focus');
+      noAdapterErr.actionStage = 'BLOCKED';
+      throw noAdapterErr;
     }
 
     try {
@@ -164,16 +181,21 @@ export function executeSafeOpenFocus(params) {
           next_stage: 'BLOCKED',
           evidence: 'ide_focus_method_not_implemented'
         });
-        throw new Error(`FOCUS_NOT_SUPPORTED: IDE adapter for "${target_endpoint}" does not implement focusWindow`);
+        const notSupportedErr = new Error(`FOCUS_NOT_SUPPORTED: IDE adapter for "${target_endpoint}" does not implement focusWindow`);
+        notSupportedErr.actionStage = 'BLOCKED';
+        throw notSupportedErr;
       }
 
       const focusRes = effectiveIdeAdapter.focusWindow();
       if (!focusRes || focusRes.focused !== true) {
+        const failureReason = focusRes?.reason || 'IDE window focus not confirmed';
         core.advanceActionStage(action.action_id, {
           next_stage: 'FAILED',
-          evidence: focusRes?.reason || 'IDE window focus not confirmed'
+          evidence: failureReason
         });
-        throw new Error(`FOCUS_FAILED: ${focusRes?.reason || 'IDE window focus not confirmed'}`);
+        const failErr = new Error(`FOCUS_FAILED: ${failureReason}`);
+        failErr.actionStage = 'FAILED';
+        throw failErr;
       }
 
       core.advanceActionStage(action.action_id, {
@@ -183,11 +205,20 @@ export function executeSafeOpenFocus(params) {
 
       return { success: true, action, endpoint: ep, focusResult: focusRes };
     } catch (err) {
-      if (action.stage !== 'BLOCKED') {
+      const isTerminal = action.stage === 'FAILED' || action.stage === 'BLOCKED' || action.stage === 'TARGET_COMPLETED';
+      if (!isTerminal) {
+        const isBlocked = err.message.includes('IDENTITY_MISMATCH') ||
+                          err.message.includes('IDENTITY_VERIFY_FAIL') ||
+                          err.message.includes('not found') ||
+                          err.message.includes('SECURITY_REJECT');
+        const nextStage = isBlocked ? 'BLOCKED' : 'FAILED';
         core.advanceActionStage(action.action_id, {
-          next_stage: 'BLOCKED',
+          next_stage: nextStage,
           evidence: err.message
         });
+        err.actionStage = nextStage;
+      } else {
+        err.actionStage = action.stage;
       }
       throw err;
     }

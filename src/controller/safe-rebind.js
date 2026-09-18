@@ -30,12 +30,32 @@ export function executeSafeRebind(params) {
     options = {}
   } = params;
 
-  const allowReplace = Boolean(
+  const allowReplaceNew = Boolean(
     options.allow_discard_unhandled ||
     options.allow_replace_unhandled ||
+    options.confirm_replace_unhandled_new ||
     params.allowReplaceUnhandled ||
     params.allowDiscardUnhandled
   );
+
+  const allowReplaceUnknown = Boolean(
+    options.allow_replace_unknown ||
+    options.confirm_replace_unknown ||
+    options.allow_discard_unhandled ||
+    options.allow_replace_unhandled ||
+    params.allowReplaceUnknown ||
+    params.allowReplaceUnhandled ||
+    params.allowDiscardUnhandled
+  );
+
+  let cleanIdentity = identity;
+  if (identity && typeof identity === 'object') {
+    cleanIdentity = {
+      ...identity,
+      workspace_identity: identity.workspace_identity || identity.workspace,
+      repository_identity: identity.repository_identity || identity.repository
+    };
+  }
 
   const actionId = generateActionId();
   let core;
@@ -74,7 +94,7 @@ export function executeSafeRebind(params) {
     target_endpoint,
     stage: 'REQUESTED',
     binding_revision: expected_binding_revision,
-    payload: { identity }
+    payload: { identity: cleanIdentity }
   });
 
   // 检查目标端点是否处于 unhandled NEW 或 UNKNOWN 状态
@@ -90,13 +110,23 @@ export function executeSafeRebind(params) {
     const isNew = targetEndpointFact.result_state === 'NEW';
     const isUnknown = targetEndpointFact.result_state === 'UNKNOWN';
 
-    if ((isNew || isUnknown) && !allowReplace) {
+    if (isNew && !allowReplaceNew) {
       core.advanceActionStage(action.action_id, {
         next_stage: 'BLOCKED',
-        evidence: `Cannot replace ${target_endpoint} endpoint with unhandled ${targetEndpointFact.result_state} result without explicit confirmation`
+        evidence: `Cannot replace ${target_endpoint} endpoint with unhandled NEW result without explicit confirmation`
       });
       throw new Error(
-        `Cannot replace ${target_endpoint} endpoint with unhandled ${targetEndpointFact.result_state} result without explicit confirmation`
+        `Cannot replace ${target_endpoint} endpoint with unhandled NEW result without explicit confirmation`
+      );
+    }
+
+    if (isUnknown && !allowReplaceUnknown) {
+      core.advanceActionStage(action.action_id, {
+        next_stage: 'BLOCKED',
+        evidence: `Cannot replace ${target_endpoint} endpoint with unhandled UNKNOWN result without explicit confirmation`
+      });
+      throw new Error(
+        `Cannot replace ${target_endpoint} endpoint with unhandled UNKNOWN result without explicit confirmation`
       );
     }
   }
@@ -110,9 +140,12 @@ export function executeSafeRebind(params) {
     const updatedSnapshot = registry.rebindProjectEndpoint(bindingId, {
       endpoint_id: target_endpoint,
       target_endpoint,
-      identity,
-      allow_replace_unhandled: allowReplace,
-      allow_discard_unhandled: allowReplace,
+      identity: cleanIdentity,
+      allow_replace_unhandled: allowReplaceNew,
+      allow_discard_unhandled: allowReplaceNew,
+      confirm_replace_unhandled_new: allowReplaceNew,
+      allow_replace_unknown: allowReplaceUnknown,
+      confirm_replace_unknown: allowReplaceUnknown,
       ...options
     });
 

@@ -157,8 +157,8 @@ export const SURFACE_CLIENT_JS = `
           const branchInput = document.getElementById('m-branch');
           newIdentity.branch = branchInput && branchInput.value.trim() ? branchInput.value.trim() : null;
         } else {
-          newIdentity.workspace = document.getElementById('m-ws')?.value.trim() || '';
-          newIdentity.repository = document.getElementById('m-repo')?.value.trim() || '';
+          newIdentity.workspace_identity = document.getElementById('m-ws')?.value.trim() || '';
+          newIdentity.repository_identity = document.getElementById('m-repo')?.value.trim() || '';
         }
 
         const allowUnhandled = !!document.getElementById('m-allow-unhandled')?.checked;

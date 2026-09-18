@@ -336,4 +336,179 @@ describe('Safe Controls Surface 集成测试', () => {
     assert.match(html, /IDE 端点 \[ide-a\]/);
     assert.match(html, /IDE 端点 \[ide-b\]/);
   });
+
+  it('10. IDE Rebind: 目标端点处于 NEW 时无确认拦截为 409 BLOCKED', async () => {
+    const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/rebind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        expected_binding_revision: 2,
+        target_endpoint: 'ide-a',
+        new_identity: {
+          conversation_id: 'conv-ide-a-rebind-unconf',
+          workspace_identity: '/ws/repo',
+          repository_identity: 'github.com/org/repo'
+        },
+        allow_replace_unhandled: false
+      })
+    });
+
+    assert.equal(res.status, 409);
+    const data = await res.json();
+    assert.equal(data.success, false);
+    assert.equal(data.stage, 'BLOCKED');
+    assert.match(data.reason, /unhandled NEW/);
+  });
+
+  it('11. IDE Rebind: 目标端点处于 NEW 时显式 NEW 确认 (allow_replace_unhandled) 成功更新规范字段', async () => {
+    const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/rebind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        expected_binding_revision: 2,
+        target_endpoint: 'ide-a',
+        new_identity: {
+          conversation_id: 'conv-ide-a-rebound',
+          workspace_identity: '/ws/repo-new',
+          repository_identity: 'github.com/org/repo-new'
+        },
+        allow_replace_unhandled: true
+      })
+    });
+
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.success, true);
+    assert.equal(data.stage, 'TARGET_COMPLETED');
+    assert.equal(data.new_binding_revision, 3);
+
+    // 验证快照中规范 IDE 字段与 endpoint_revision 递增
+    const pRes = await fetch(`${baseUrl}/api/projects`);
+    const pData = await pRes.json();
+    const epA = pData.projects[0].ide_endpoints.find(e => e.endpoint_id === 'ide-a');
+    assert.ok(epA);
+    assert.equal(epA.conversation_id, 'conv-ide-a-rebound');
+    assert.equal(epA.workspace_identity, '/ws/repo-new');
+    assert.equal(epA.repository_identity, 'github.com/org/repo-new');
+    assert.equal(epA.endpoint_revision, 2);
+  });
+
+  it('12. IDE Rebind: 目标端点处于 UNKNOWN 时无确认拦截为 409 BLOCKED', async () => {
+    // ide-b 目前处于初始 UNKNOWN 状态
+    const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/rebind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        expected_binding_revision: 3,
+        target_endpoint: 'ide-b',
+        new_identity: {
+          conversation_id: 'conv-ide-b-rebind-unconf',
+          workspace_identity: '/ws/repo',
+          repository_identity: 'github.com/org/repo'
+        },
+        allow_replace_unknown: false,
+        allow_replace_unhandled: false
+      })
+    });
+
+    assert.equal(res.status, 409);
+    const data = await res.json();
+    assert.equal(data.success, false);
+    assert.equal(data.stage, 'BLOCKED');
+    assert.match(data.reason, /UNKNOWN/);
+  });
+
+  it('13. IDE Rebind: 目标端点处于 UNKNOWN 时仅勾选 allow_replace_unknown 独立授权成功', async () => {
+    const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/rebind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        expected_binding_revision: 3,
+        target_endpoint: 'ide-b',
+        new_identity: {
+          conversation_id: 'conv-ide-b-rebound',
+          workspace_identity: '/ws/repo-b',
+          repository_identity: 'github.com/org/repo-b'
+        },
+        allow_replace_unknown: true,
+        allow_replace_unhandled: false
+      })
+    });
+
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.success, true);
+    assert.equal(data.stage, 'TARGET_COMPLETED');
+    assert.equal(data.new_binding_revision, 4);
+
+    const pRes = await fetch(`${baseUrl}/api/projects`);
+    const pData = await pRes.json();
+    const epB = pData.projects[0].ide_endpoints.find(e => e.endpoint_id === 'ide-b');
+    assert.ok(epB);
+    assert.equal(epB.conversation_id, 'conv-ide-b-rebound');
+    assert.equal(epB.workspace_identity, '/ws/repo-b');
+    assert.equal(epB.repository_identity, 'github.com/org/repo-b');
+  });
+
+  it('14. Focus 失败 (显式失败结果)：HTTP 响应与 Action 事实一致为 FAILED 且无二次流转', async () => {
+    // 注入一个返回显式失败的 mock adapter
+    mockIdeAdapters.set('ide-a', {
+      verifyTargetIdentity: () => ({ verified: true }),
+      focusWindow: () => ({ focused: false, reason: 'Target IDE display disconnected' })
+    });
+
+    const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/open-focus`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        expected_binding_revision: 4,
+        target_endpoint: 'ide-a'
+      })
+    });
+
+    assert.equal(res.status, 400);
+    const data = await res.json();
+    assert.equal(data.success, false);
+    assert.equal(data.stage, 'FAILED');
+    assert.match(data.reason, /Target IDE display disconnected/);
+
+    // 检查项目底层的 Action 事实，确认严格记录且仅记录一次 FAILED 终态
+    const pRes = await fetch(`${baseUrl}/api/projects`);
+    const pData = await pRes.json();
+    const actions = pData.projects[0].actions;
+    const lastAction = actions[actions.length - 1];
+    assert.equal(lastAction.stage, 'FAILED');
+    assert.match(lastAction.evidence, /Target IDE display disconnected/);
+  });
+
+  it('15. Focus 失败 (执行器抛错)：HTTP 响应与 Action 事实一致为 FAILED 且无二次流转', async () => {
+    mockIdeAdapters.set('ide-a', {
+      verifyTargetIdentity: () => ({ verified: true }),
+      focusWindow: () => {
+        throw new Error('OS window activation exception');
+      }
+    });
+
+    const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/open-focus`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        expected_binding_revision: 4,
+        target_endpoint: 'ide-a'
+      })
+    });
+
+    assert.equal(res.status, 400);
+    const data = await res.json();
+    assert.equal(data.success, false);
+    assert.equal(data.stage, 'FAILED');
+    assert.match(data.reason, /OS window activation exception/);
+
+    const pRes = await fetch(`${baseUrl}/api/projects`);
+    const pData = await pRes.json();
+    const actions = pData.projects[0].actions;
+    const lastAction = actions[actions.length - 1];
+    assert.equal(lastAction.stage, 'FAILED');
+    assert.match(lastAction.evidence, /OS window activation exception/);
+  });
 });

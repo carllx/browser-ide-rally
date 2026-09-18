@@ -118,6 +118,7 @@ export function executeRebindEndpoint({
     allow_discard_unhandled = false,
     confirm_replace_unhandled_new = false,
     confirm_replace_unknown = false,
+    allow_replace_unknown = false,
     confirm_replace = false
   } = options;
 
@@ -132,7 +133,7 @@ export function executeRebindEndpoint({
       );
     }
   } else if (currentDerivedState === 'UNKNOWN') {
-    const confirmed = allow_discard_unhandled || confirm_replace_unknown || confirm_replace;
+    const confirmed = allow_discard_unhandled || confirm_replace_unknown || allow_replace_unknown || confirm_replace;
     if (!confirmed) {
       throw new Error(
         `Cannot replace ${resolvedEndpoint.id} endpoint in UNKNOWN state without explicit confirmation (allow_discard_unhandled: true or confirm_replace_unknown: true).`

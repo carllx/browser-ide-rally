@@ -134,18 +134,21 @@ export function createStatusSurfaceRequestHandler({ registry, browserAdapter = n
       }
     }
 
-function handleControlError(res, err) {
+function handleControlError(res, err, defaultStage = 'BLOCKED') {
   const msg = err?.message || String(err);
-  const isBlocked = msg.includes('STALE_OR_MISSING_BINDING_REVISION') ||
+  const stage = err?.actionStage || defaultStage;
+  const isBlocked = stage === 'BLOCKED' ||
+                    msg.includes('STALE_OR_MISSING_BINDING_REVISION') ||
                     msg.includes('BLOCKED') ||
                     msg.includes('unhandled NEW') ||
                     msg.includes('UNKNOWN') ||
                     msg.includes('SECURITY_REJECT') ||
                     msg.includes('IDE_ENDPOINT_NOT_FOUND') ||
                     msg.includes('TARGET_LOOKUP_FAIL');
-  return sendJson(res, isBlocked ? 409 : 400, {
+  const finalStage = stage === 'FAILED' ? 'FAILED' : (isBlocked ? 'BLOCKED' : 'FAILED');
+  return sendJson(res, finalStage === 'BLOCKED' ? 409 : 400, {
     success: false,
-    stage: 'BLOCKED',
+    stage: finalStage,
     reason: msg
   });
 }
@@ -162,17 +165,26 @@ function handleControlError(res, err) {
       }
 
       try {
+        const rawIdentity = body.new_identity || body.identity || {};
+        const normalizedIdentity = {
+          ...rawIdentity,
+          workspace_identity: rawIdentity.workspace_identity || rawIdentity.workspace,
+          repository_identity: rawIdentity.repository_identity || rawIdentity.repository
+        };
+
         const result = executeSafeRebind({
           registry,
           projectBindingId: bindingId,
           targetEndpoint: body.target_endpoint,
           expectedBindingRevision: body.expected_binding_revision,
-          newIdentity: body.new_identity,
-          identity: body.new_identity || body.identity,
+          newIdentity: normalizedIdentity,
+          identity: normalizedIdentity,
           options: {
             allow_discard_unhandled: body.allow_replace_unhandled === true || body.allow_discard_unhandled === true,
             allow_replace_unhandled: body.allow_replace_unhandled === true || body.allow_discard_unhandled === true,
-            allow_replace_unknown: body.allow_replace_unknown === true
+            confirm_replace_unhandled_new: body.allow_replace_unhandled === true || body.allow_discard_unhandled === true,
+            allow_replace_unknown: body.allow_replace_unknown === true || body.confirm_replace_unknown === true,
+            confirm_replace_unknown: body.allow_replace_unknown === true || body.confirm_replace_unknown === true
           }
         });
 
