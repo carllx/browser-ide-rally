@@ -36,6 +36,7 @@ export function executeSafeSend(params) {
     bindingId = params.projectBindingId,
     expected_binding_revision = params.expectedBindingRevision,
     target_endpoint = params.targetEndpoint,
+    action_type = params.action_type || params.actionType || 'send',
     browserAdapter = null,
     ideAdapter = params.ideAdapters || null,
     options = {}
@@ -64,7 +65,7 @@ export function executeSafeSend(params) {
   } catch (err) {
     recordBlockedAction(registry, bindingId, {
       actionId,
-      actionType: 'send',
+      actionType: action_type,
       targetEndpoint: target_endpoint,
       expectedRevision: expected_binding_revision,
       reason: 'stale_or_missing_binding_revision'
@@ -76,7 +77,7 @@ export function executeSafeSend(params) {
   if (!ALLOWED_OPERATIONS.includes(operation)) {
     recordBlockedAction(registry, bindingId, {
       actionId,
-      actionType: 'send',
+      actionType: action_type,
       targetEndpoint: target_endpoint,
       expectedRevision: expected_binding_revision,
       reason: `SECURITY_REJECT: Unsupported operation "${operation}"`
@@ -88,7 +89,7 @@ export function executeSafeSend(params) {
   if (target_endpoint === 'bound_ide') {
     recordBlockedAction(registry, bindingId, {
       actionId,
-      actionType: 'send',
+      actionType: action_type,
       targetEndpoint: target_endpoint,
       expectedRevision: expected_binding_revision,
       reason: 'generic_bound_ide_prohibited'
@@ -120,7 +121,7 @@ export function executeSafeSend(params) {
   } catch (err) {
     recordBlockedAction(registry, bindingId, {
       actionId,
-      actionType: 'send',
+      actionType: action_type,
       targetEndpoint: target_endpoint,
       expectedRevision: expected_binding_revision,
       reason: err.message
@@ -130,7 +131,7 @@ export function executeSafeSend(params) {
 
   const action = core.recordActionFact({
     action_id: actionId,
-    action_type: 'send',
+    action_type: action_type,
     target_endpoint,
     stage: 'REQUESTED',
     binding_revision: expected_binding_revision,

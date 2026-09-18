@@ -20,4 +20,5 @@ export {
 export { executeSafeRebind } from './safe-rebind.js';
 export { executeSafeOpenFocus } from './safe-open-focus.js';
 export { executeSafeSend } from './safe-send.js';
+export { executeSafeContinue } from './safe-continue.js';
 export { correlateAndAdvanceActionCompletion } from './action-correlation.js';

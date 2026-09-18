@@ -12,7 +12,12 @@
 import http from 'node:http';
 import { projectRegistrySurface } from './surface-projection.js';
 import { renderStatusSurfaceHtml } from './surface-template.js';
-import { executeSafeRebind, executeSafeOpenFocus, executeSafeSend } from '../controller/safe-controls.js';
+import {
+  executeSafeRebind,
+  executeSafeOpenFocus,
+  executeSafeSend,
+  executeSafeContinue
+} from '../controller/safe-controls.js';
 
 function sendJson(res, statusCode, data) {
   const payload = JSON.stringify(data);
@@ -148,7 +153,14 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
                     msg.includes('FOCUS_NOT_AVAILABLE') ||
                     msg.includes('FOCUS_NOT_SUPPORTED') ||
                     msg.includes('IDENTITY_MISMATCH') ||
-                    msg.includes('IDENTITY_VERIFY_FAIL');
+                    msg.includes('IDENTITY_VERIFY_FAIL') ||
+                    msg.includes('SOURCE_ENDPOINT_REQUIRED') ||
+                    msg.includes('SOURCE_ENDPOINT_UNKNOWN') ||
+                    msg.includes('STALE_SOURCE_CONTEXT') ||
+                    msg.includes('SOURCE_RESULT_UNAVAILABLE') ||
+                    msg.includes('PAYLOAD_TOO_LARGE') ||
+                    msg.includes('INVALID_SOURCE_ENDPOINT') ||
+                    msg.includes('PREFLIGHT_BLOCKED');
   const finalStage = stage === 'FAILED' ? 'FAILED' : (isBlocked ? 'BLOCKED' : 'FAILED');
   return sendJson(res, finalStage === 'BLOCKED' ? 409 : 400, {
     success: false,
@@ -267,7 +279,44 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
       }
     }
 
-    // 7. 其他路由 Fail-Closed 404
+    // 7. POST /api/projects/:bindingId/controls/continue: 安全一键继续 (One-Click Continue)
+    const continueMatch = pathname.match(/^\/api\/projects\/([^/]+)\/controls\/continue$/);
+    if (method === 'POST' && continueMatch) {
+      const bindingId = decodeURIComponent(continueMatch[1]);
+      let body = {};
+      try {
+        body = await parseBody(req);
+      } catch (err) {
+        return sendJson(res, 400, { success: false, reason: err.message });
+      }
+
+      try {
+        const result = executeSafeContinue({
+          registry,
+          projectBindingId: bindingId,
+          targetEndpoint: body.target_endpoint,
+          sourceEndpoint: body.source_endpoint,
+          expectedBindingRevision: body.expected_binding_revision,
+          expected_source_result_state: body.expected_source_result_state,
+          expected_source_cursor: body.expected_source_cursor,
+          expected_source_result_ref: body.expected_source_result_ref,
+          user_instruction: body.user_instruction || body.instruction,
+          browserAdapter,
+          ideAdapter: ideAdapters
+        });
+
+        return sendJson(res, 200, {
+          success: true,
+          action_id: result.action?.action_id,
+          stage: result.action?.stage,
+          nonce: result.envelope?.nonce
+        });
+      } catch (err) {
+        return handleControlError(res, err);
+      }
+    }
+
+    // 8. 其他路由 Fail-Closed 404
     sendJson(res, 404, { error: 'Not Found' });
   };
 }

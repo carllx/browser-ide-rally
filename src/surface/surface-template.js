@@ -48,7 +48,7 @@ function renderEndpointCard(ep, bindingId, bindingRevision, roleLabel) {
     <div class="endpoint-meta-grid">
       <div><span class="meta-label">最新完成游标:</span> <code>${escapeHtml(ep.latest_completed_cursor ?? '(无)')}</code></div>
       <div><span class="meta-label">已处理游标:</span> <code class="meta-handled-cursor">${escapeHtml(ep.last_handled_cursor ?? '(无)')}</code></div>
-      <div><span class="meta-label">完成时间:</span> <span>${escapeHtml(ep.completed_at ?? '-')}</span></div>
+      <div><span class="meta-label">结果引用:</span> <code>${escapeHtml(ep.result_ref ?? '(无)')}</code></div>
       <div><span class="meta-label">受信状态:</span> <span>${ep.continuity?.trusted ? '受信 (Trusted)' : '未受信 (Untrusted)'}</span></div>
     </div>
   `;
@@ -122,6 +122,17 @@ function renderEndpointCard(ep, bindingId, bindingRevision, roleLabel) {
         title="向此端点发送受控 Envelope">
         Send
       </button>
+      <button
+        type="button"
+        class="btn btn-control btn-continue"
+        data-action="continue"
+        data-binding-id="${escapeHtml(bindingId)}"
+        data-binding-revision="${escapeHtml(bindingRevision)}"
+        data-target-endpoint="${escapeHtml(ep.endpoint_id)}"
+        data-role="${escapeHtml(ep.role)}"
+        title="${isBrowser ? '在 Browser 中一键继续' : `在 IDE [${escapeHtml(ep.endpoint_id)}] 中一键继续`}">
+        Continue
+      </button>
     </div>
   `;
 
@@ -141,7 +152,12 @@ function renderEndpointCard(ep, bindingId, bindingRevision, roleLabel) {
   `;
 
   return `
-    <div class="endpoint-card ${isBrowser ? 'endpoint-browser' : 'endpoint-ide'}" data-endpoint-id="${escapeHtml(ep.endpoint_id)}">
+    <div class="endpoint-card ${isBrowser ? 'endpoint-browser' : 'endpoint-ide'}"
+      data-endpoint-id="${escapeHtml(ep.endpoint_id)}"
+      data-role="${escapeHtml(ep.role)}"
+      data-result-state="${escapeHtml(ep.result_state)}"
+      data-latest-cursor="${escapeHtml(ep.latest_completed_cursor ?? '')}"
+      data-result-ref="${escapeHtml(ep.result_ref ?? '')}">
       <div class="endpoint-header">
         <div class="endpoint-title">
           <strong>${headerTitle}</strong>

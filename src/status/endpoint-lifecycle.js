@@ -185,6 +185,7 @@ export function executeRebindEndpoint({
       latest_completed_cursor: null,
       last_handled_cursor: null,
       completed_at: null,
+      latest_completed_result: null,
       continuity: {
         trusted: false,
         unknown_reason: 'UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION'
@@ -223,6 +224,7 @@ export function executeRebindEndpoint({
       latest_completed_cursor: null,
       last_handled_cursor: null,
       completed_at: null,
+      latest_completed_result: null,
       continuity: {
         trusted: false,
         unknown_reason: 'UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION'

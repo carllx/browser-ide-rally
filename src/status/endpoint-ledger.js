@@ -26,6 +26,7 @@ export function createInitialEndpointFact({
     latest_completed_cursor: null,
     last_handled_cursor: null,
     completed_at: null,
+    latest_completed_result: null,
     continuity: {
       trusted: false,
       unknown_reason: 'initial_unobserved'
@@ -127,6 +128,14 @@ export function hydrateEndpointFact(fact, expectedEndpoint, {
     latest_completed_cursor: trusted ? fact.latest_completed_cursor : null,
     last_handled_cursor: trusted ? fact.last_handled_cursor : null,
     completed_at: fact.completed_at ?? null,
+    latest_completed_result: (trusted && fact.latest_completed_result && typeof fact.latest_completed_result === 'object' && fact.latest_completed_result.cursor === fact.latest_completed_cursor)
+      ? {
+          cursor: fact.latest_completed_result.cursor,
+          result_ref: fact.latest_completed_result.result_ref,
+          text: fact.latest_completed_result.text,
+          captured_at: fact.latest_completed_result.captured_at
+        }
+      : null,
     continuity: {
       trusted,
       unknown_reason: unknownReason
@@ -258,6 +267,7 @@ export function formatEndpointSnapshot(endpointFact) {
     latest_completed_cursor: endpointFact.latest_completed_cursor,
     last_handled_cursor: endpointFact.last_handled_cursor,
     completed_at: endpointFact.completed_at,
+    latest_completed_result: endpointFact.latest_completed_result ?? null,
     continuity: {
       trusted: isTrusted,
       unknown_reason: unknownReason

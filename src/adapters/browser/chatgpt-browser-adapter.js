@@ -16,6 +16,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import crypto from 'node:crypto';
 
 /**
  * 默认 AppleScript 执行器
@@ -235,10 +236,16 @@ export class ChatGPTBrowserAdapter {
             }
           }
           
+          let lastMessageText = '';
+          if (!isPlaceholder) {
+            lastMessageText = (lastEl.innerText || lastEl.textContent || '').trim();
+          }
+          
           return JSON.stringify({
             isGenerating,
             assistantCount: count,
             lastMessageId: isPlaceholder ? null : rawId.trim(),
+            lastMessageText: isPlaceholder ? '' : lastMessageText,
             hasValidLastMessage: !isPlaceholder,
             isPlaceholder
           });
@@ -347,12 +354,24 @@ export class ChatGPTBrowserAdapter {
       return baseObservation;
     }
 
-    // 6. 成功捕获完成轮次：生成稳定且不透明的 cursor
+    // 6. 成功捕获完成轮次：生成稳定且不透明的 cursor 与 product-safe result_ref
     const opaqueCursor = `chatgpt_msg_${probeResult.lastMessageId}`;
+    const completedAt = new Date().toISOString();
+    const safeRefHash = crypto.createHash('sha256')
+      .update(`browser:${conversationId}:${opaqueCursor}`)
+      .digest('hex')
+      .slice(0, 16);
+    const resultRef = `res_${safeRefHash}`;
 
     baseObservation.trusted = true;
     baseObservation.latest_completed_cursor = opaqueCursor;
-    baseObservation.completed_at = new Date().toISOString();
+    baseObservation.completed_at = completedAt;
+    baseObservation.latest_completed_result = {
+      cursor: opaqueCursor,
+      result_ref: resultRef,
+      text: probeResult.lastMessageText || '',
+      captured_at: completedAt
+    };
     return baseObservation;
   }
 

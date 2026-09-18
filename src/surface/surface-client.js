@@ -257,6 +257,101 @@ export const SURFACE_CLIENT_JS = `
       modal.style.display = 'flex';
     });
 
+    // Continue 点击事件监听与模态确认
+    document.addEventListener('click', function(e) {
+      const btn = e.target.closest('button[data-action="continue"]');
+      if (!btn) return;
+      const projectCard = btn.closest('.project-card');
+      const bindingId = btn.getAttribute('data-binding-id');
+      const bindingRev = parseInt(btn.getAttribute('data-binding-revision'), 10);
+      const targetEndpoint = btn.getAttribute('data-target-endpoint');
+      const role = btn.getAttribute('data-role');
+
+      let sourceEndpoint = null;
+      let sourceSelectorHtml = '';
+      const ideCards = projectCard ? Array.from(projectCard.querySelectorAll('.endpoint-ide')) : [];
+      const browserCard = projectCard ? projectCard.querySelector('.endpoint-browser') : null;
+
+      if (role === 'browser') {
+        if (ideCards.length === 1) {
+          sourceEndpoint = ideCards[0].getAttribute('data-endpoint-id');
+          sourceSelectorHtml = '<div class="form-group"><label>源 IDE 端点:</label><input type="text" class="form-control" value="' + sourceEndpoint + '" disabled /></div>';
+        } else if (ideCards.length > 1) {
+          const options = ideCards.map(c => {
+            const id = c.getAttribute('data-endpoint-id');
+            const state = c.getAttribute('data-result-state') || 'UNKNOWN';
+            return '<option value="' + id + '">' + id + ' (' + state + ')</option>';
+          }).join('');
+          sourceSelectorHtml = '<div class="form-group"><label>请显式选择源 IDE 端点 (必须唯一):</label><select id="m-continue-source" class="form-control">' + options + '</select></div>';
+        } else {
+          showToast('项目缺少 IDE 端点，无法作为上下文来源', true);
+          return;
+        }
+      } else {
+        sourceEndpoint = 'browser';
+        sourceSelectorHtml = '<div class="form-group"><label>源端点:</label><input type="text" class="form-control" value="browser" disabled /></div>';
+      }
+
+      modalTitle.textContent = '一键继续 (One-Click Continue) -> [' + targetEndpoint + '] (rev ' + bindingRev + ')';
+      modalBody.innerHTML =
+        '<div class="form-group"><label>目标端点:</label><input type="text" class="form-control" value="' + targetEndpoint + '" disabled /></div>' +
+        sourceSelectorHtml +
+        '<div class="form-group"><label>附加指令 (可选):</label><textarea id="m-continue-inst" class="form-control" rows="3" placeholder="输入继续任务的针对性指令 (留空则使用默认指令)..."></textarea></div>';
+
+      currentModalAction = async function() {
+        let finalSource = sourceEndpoint;
+        if (!finalSource) {
+          const sel = document.getElementById('m-continue-source');
+          finalSource = sel ? sel.value : null;
+        }
+        if (!finalSource) {
+          showToast('必须指定唯一的源端点', true);
+          return;
+        }
+
+        const sourceCard = finalSource === 'browser' ? browserCard : projectCard.querySelector('.endpoint-card[data-endpoint-id="' + finalSource + '"]');
+        const expectedState = sourceCard ? sourceCard.getAttribute('data-result-state') : null;
+        const expectedCursor = sourceCard ? (sourceCard.getAttribute('data-latest-cursor') || null) : null;
+        const expectedRef = sourceCard ? (sourceCard.getAttribute('data-result-ref') || null) : null;
+        const inst = (document.getElementById('m-continue-inst')?.value || '').trim();
+
+        modalSubmit.disabled = true;
+        modalSubmit.textContent = '执行中...';
+
+        try {
+          const resp = await fetch('/api/projects/' + encodeURIComponent(bindingId) + '/controls/continue', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              expected_binding_revision: bindingRev,
+              target_endpoint: targetEndpoint,
+              source_endpoint: finalSource,
+              expected_source_result_state: expectedState,
+              expected_source_cursor: expectedCursor,
+              expected_source_result_ref: expectedRef,
+              user_instruction: inst || undefined
+            })
+          });
+          const result = await resp.json();
+          if (resp.ok && result.success) {
+            showToast('已成功触发 Continue: ' + (result.stage || 'ACCEPTED_OR_DELIVERED'));
+            closeModal();
+            window.location.reload();
+          } else {
+            showToast('Continue 受阻 [' + (result.stage || 'BLOCKED') + ']: ' + (result.reason || '未知原因'), true);
+            modalSubmit.disabled = false;
+            modalSubmit.textContent = '确认执行';
+          }
+        } catch (err) {
+          showToast('请求异常: ' + err.message, true);
+          modalSubmit.disabled = false;
+          modalSubmit.textContent = '确认执行';
+        }
+      };
+
+      modal.style.display = 'flex';
+    });
+
     if (modalSubmit) {
       modalSubmit.addEventListener('click', function() {
         if (typeof currentModalAction === 'function') {

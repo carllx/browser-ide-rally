@@ -372,13 +372,14 @@ test('[IDE Adapter] 9. provider-specific transcript/step/fingerprint fields neve
     const snapshot = core.getSnapshot();
     const ideFact = snapshot.endpoints.ide;
 
-    // Core schema 只有规范字段：endpoint, result_state, latest_completed_cursor, last_handled_cursor, completed_at, continuity, updated_at
+    // Core schema 规范字段：endpoint, result_state, latest_completed_cursor, last_handled_cursor, completed_at, latest_completed_result, continuity, updated_at
     const allowedCoreKeys = new Set([
       'endpoint',
       'result_state',
       'latest_completed_cursor',
       'last_handled_cursor',
       'completed_at',
+      'latest_completed_result',
       'continuity',
       'unknown_reason',
       'updated_at'

@@ -290,13 +290,57 @@ export class ProjectStatusCore {
 
     let latestCursor = current.latest_completed_cursor;
     let completedAt = current.completed_at;
+    let latestResult = current.latest_completed_result;
 
     if (trusted) {
+      const cursorChanged = observation.latest_completed_cursor !== undefined &&
+        observation.latest_completed_cursor !== current.latest_completed_cursor;
+
       if (observation.latest_completed_cursor !== undefined) {
         latestCursor = observation.latest_completed_cursor;
       }
       if (observation.completed_at !== undefined) {
         completedAt = observation.completed_at;
+      }
+
+      if (cursorChanged) {
+        // 游标发生变化：只有新 artifact 存在且 cursor 精确匹配新 cursor 时才安装，否则清除为 null
+        const candidate = observation.latest_completed_result;
+        if (candidate && typeof candidate === 'object' && candidate.cursor === latestCursor) {
+          latestResult = {
+            cursor: candidate.cursor,
+            result_ref: candidate.result_ref,
+            text: candidate.text,
+            captured_at: candidate.captured_at || completedAt || now
+          };
+        } else {
+          latestResult = null;
+        }
+      } else {
+        // 游标未发生变化
+        if (observation.latest_completed_result !== undefined) {
+          const candidate = observation.latest_completed_result;
+          if (candidate && typeof candidate === 'object' && candidate.cursor === latestCursor) {
+            latestResult = {
+              cursor: candidate.cursor,
+              result_ref: candidate.result_ref,
+              text: candidate.text,
+              captured_at: candidate.captured_at || completedAt || now
+            };
+          } else {
+            latestResult = null;
+          }
+        } else {
+          // 未提供 result material：若已有 artifact 仍与当前 cursor 匹配则保留，否则置为 null
+          if (latestResult && latestResult.cursor !== latestCursor) {
+            latestResult = null;
+          }
+        }
+      }
+    } else {
+      // 未受信：若已有 artifact 与当前 cursor 不匹配，则置为 null
+      if (latestResult && latestResult.cursor !== latestCursor) {
+        latestResult = null;
       }
     }
 
@@ -305,6 +349,7 @@ export class ProjectStatusCore {
       latest_completed_cursor: latestCursor,
       last_handled_cursor: current.last_handled_cursor,
       completed_at: completedAt,
+      latest_completed_result: latestResult,
       continuity: {
         trusted,
         unknown_reason: unknownReason

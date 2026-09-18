@@ -169,15 +169,37 @@ export function parseTranscriptCompletedTurns(transcriptPath) {
       (!step.tool_calls || step.tool_calls.length === 0) &&
       typeof step.step_index === 'number'
     ) {
+      let turnText = '';
+      if (typeof step.content === 'string') {
+        turnText = step.content;
+      } else if (step.content && typeof step.content.text === 'string') {
+        turnText = step.content.text;
+      } else if (step.content) {
+        turnText = JSON.stringify(step.content);
+      }
+
       turns.push({
         stepIndex: step.step_index,
         fingerprint: deriveStepFingerprint(step),
+        text: turnText,
         createdAt: step.created_at || null
       });
     }
   }
 
   return turns.sort((a, b) => a.stepIndex - b.stepIndex);
+}
+
+/**
+ * 派生对用户/产品安全的确定性不透明结果引用 (Product-safe Result Ref)
+ * 格式固定为 res_<16 hex>，严格不泄露内部 step_index, fingerprint 或 provider message ID
+ */
+export function deriveProductSafeResultRef(endpointId, cursor) {
+  const hash = crypto.createHash('sha256')
+    .update(`ide:${endpointId}:${cursor}`)
+    .digest('hex')
+    .slice(0, 16);
+  return `res_${hash}`;
 }
 
 export class AntigravityIdeAdapter {
@@ -317,11 +339,19 @@ export class AntigravityIdeAdapter {
 
     const latestTurn = turns[turns.length - 1];
     const opaqueCursor = encodeOpaqueCursor(latestTurn.stepIndex, latestTurn.fingerprint);
+    const completedAt = latestTurn.createdAt || new Date().toISOString();
+    const resultRef = deriveProductSafeResultRef(this._endpointId, opaqueCursor);
 
     const observation = this._buildObservation({
       trusted: true,
       latest_completed_cursor: opaqueCursor,
-      completed_at: latestTurn.createdAt || new Date().toISOString()
+      completed_at: completedAt,
+      latest_completed_result: {
+        cursor: opaqueCursor,
+        result_ref: resultRef,
+        text: latestTurn.text || '',
+        captured_at: completedAt
+      }
     });
 
     this._statusCore.recordEndpointObservation(this._endpointId, observation);
@@ -400,13 +430,21 @@ export class AntigravityIdeAdapter {
           const subsequentTurns = turns.filter(t => t.stepIndex > decodedLatest.stepIndex);
           const effectiveTurn = subsequentTurns.length > 0 ? subsequentTurns[subsequentTurns.length - 1] : matchingTurn;
           const effectiveCursor = encodeOpaqueCursor(effectiveTurn.stepIndex, effectiveTurn.fingerprint);
+          const completedAt = effectiveTurn.createdAt || ideFact.completed_at || new Date().toISOString();
+          const resultRef = deriveProductSafeResultRef(this._endpointId, effectiveCursor);
 
           this._statusCore.recordEndpointObservation(
             this._endpointId,
             this._buildObservation({
               trusted: true,
               latest_completed_cursor: effectiveCursor,
-              completed_at: effectiveTurn.createdAt || ideFact.completed_at
+              completed_at: completedAt,
+              latest_completed_result: {
+                cursor: effectiveCursor,
+                result_ref: resultRef,
+                text: effectiveTurn.text || '',
+                captured_at: completedAt
+              }
             })
           );
           return { status: 'RECONCILED' };
@@ -431,12 +469,20 @@ export class AntigravityIdeAdapter {
 
     const subsequentTurns = turns.filter(t => t.stepIndex > decodedHandled.stepIndex);
     if (subsequentTurns.length === 0) {
+      const completedAt = handledTurn.createdAt || ideFact.completed_at || new Date().toISOString();
+      const resultRef = deriveProductSafeResultRef(this._endpointId, handledCursor);
       this._statusCore.recordEndpointObservation(
         this._endpointId,
         this._buildObservation({
           trusted: true,
           latest_completed_cursor: handledCursor,
-          completed_at: handledTurn.createdAt || ideFact.completed_at
+          completed_at: completedAt,
+          latest_completed_result: {
+            cursor: handledCursor,
+            result_ref: resultRef,
+            text: handledTurn.text || '',
+            captured_at: completedAt
+          }
         })
       );
       return { status: 'RECONCILED' };
@@ -444,13 +490,21 @@ export class AntigravityIdeAdapter {
 
     const latestTurn = subsequentTurns[subsequentTurns.length - 1];
     const newOpaqueCursor = encodeOpaqueCursor(latestTurn.stepIndex, latestTurn.fingerprint);
+    const completedAt = latestTurn.createdAt || new Date().toISOString();
+    const resultRef = deriveProductSafeResultRef(this._endpointId, newOpaqueCursor);
 
     this._statusCore.recordEndpointObservation(
       this._endpointId,
       this._buildObservation({
         trusted: true,
         latest_completed_cursor: newOpaqueCursor,
-        completed_at: latestTurn.createdAt || new Date().toISOString()
+        completed_at: completedAt,
+        latest_completed_result: {
+          cursor: newOpaqueCursor,
+          result_ref: resultRef,
+          text: latestTurn.text || '',
+          captured_at: completedAt
+        }
       })
     );
 
