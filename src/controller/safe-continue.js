@@ -32,7 +32,6 @@ export function executeSafeContinue(params = {}) {
     expected_source_result_state,
     expected_source_cursor,
     expected_source_result_ref,
-    user_instruction = null,
     browserAdapter = null,
     ideAdapter = params.ideAdapters || null
   } = params;
@@ -144,6 +143,15 @@ export function executeSafeContinue(params = {}) {
     }
 
     sourceResultMaterial = resultArtifact;
+  } else {
+    // 源端点非 NEW（如 NO_NEW_RESULT）：若显式提供了 expected_source_result_ref，核验必须与当前材料一致
+    if (expected_source_result_ref !== undefined) {
+      const actualResultRef = sourceFact.latest_completed_result?.result_ref ?? null;
+      const expRef = expected_source_result_ref ?? null;
+      if (expRef !== actualResultRef) {
+        blockAndThrow(`STALE_SOURCE_CONTEXT: expected source result_ref "${expRef}", got "${actualResultRef}"`);
+      }
+    }
   }
 
   // 4. 组装确定性 Outbound Bundle 与 Provenance
@@ -159,15 +167,9 @@ export function executeSafeContinue(params = {}) {
 
   let renderedText = '';
   if (sourceResultMaterial) {
-    const instruction = (typeof user_instruction === 'string' && user_instruction.trim())
-      ? user_instruction.trim()
-      : 'Continue the task with the provided context.';
-    renderedText = `[Rally Continue Context from ${resolvedSource}]\n${sourceResultMaterial.text}\n\n[Instruction]\n${instruction}`;
+    renderedText = `[Rally Continue Context from ${resolvedSource}]\n${sourceResultMaterial.text}\n\nPlease continue.`;
   } else {
-    const instruction = (typeof user_instruction === 'string' && user_instruction.trim())
-      ? user_instruction.trim()
-      : 'Please continue.';
-    renderedText = instruction;
+    renderedText = 'Please continue.';
   }
 
   const payload = {

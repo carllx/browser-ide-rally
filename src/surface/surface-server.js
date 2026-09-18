@@ -300,7 +300,6 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
           expected_source_result_state: body.expected_source_result_state,
           expected_source_cursor: body.expected_source_cursor,
           expected_source_result_ref: body.expected_source_result_ref,
-          user_instruction: body.user_instruction || body.instruction,
           browserAdapter,
           ideAdapter: ideAdapters
         });
