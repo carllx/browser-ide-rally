@@ -6,7 +6,8 @@ import os from 'node:os';
 import {
   createInitialEndpointFact,
   hydrateEndpointFact,
-  formatEndpointSnapshot
+  formatEndpointSnapshot,
+  validateAndNormalizeResultMaterial
 } from '../../src/status/endpoint-ledger.js';
 import { createProjectStatusCore } from '../../src/status/status-core.js';
 import { createProjectRegistry } from '../../src/registry/project-registry.js';
@@ -195,10 +196,11 @@ test('Result Material — 4. hydrateEndpointFact 校验与丢弃游标不匹配�
   assert.strictEqual(hydratedUntrusted.latest_completed_result, null);
 });
 
-test('Result Material — 5. ProjectRegistry persistence round-trip 验证', () => {
+test('Result Material — 5. Production endpoint observations are durably persisted (Blocker 1)', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rally-registry-rm-'));
   const storagePath = path.join(tmpDir, 'registry.json');
 
+  // 1. create registry with storagePath
   const reg1 = createProjectRegistry({ storagePath });
   const binding = createBinding({
     binding_id: 'proj-persist-rm',
@@ -211,8 +213,25 @@ test('Result Material — 5. ProjectRegistry persistence round-trip 验证', () 
       repository_identity: 'owner/repo'
     }]
   });
+  // 2. register project
   const core1 = reg1.registerProject({ binding });
 
+  // 证明 generation-in-progress 不会触发写盘
+  core1.recordEndpointObservation('browser', {
+    conversation_id: 'conv-browser-persist',
+    is_generating: true,
+    should_record: false
+  });
+  assert.strictEqual(fs.existsSync(storagePath), false, 'generation-in-progress must NOT trigger persistence');
+
+  // 证明 stale generation 不会触发写盘
+  core1.recordEndpointObservation('ide-main', {
+    conversation_id: 'wrong-conv-stale',
+    endpoint_revision: 999
+  });
+  assert.strictEqual(fs.existsSync(storagePath), false, 'stale generation must NOT trigger persistence');
+
+  // 3. call recordEndpointObservation() with trusted cursor + result material
   const browserArtifact = {
     cursor: 'br-cur-1',
     result_ref: 'res_br_1',
@@ -225,6 +244,9 @@ test('Result Material — 5. ProjectRegistry persistence round-trip 验证', () 
     latest_completed_cursor: 'br-cur-1',
     latest_completed_result: browserArtifact
   });
+
+  // 4. DO NOT manually call saveToFile()! 自动持久化必须已将文件落盘
+  assert.strictEqual(fs.existsSync(storagePath), true, 'Observation must automatically persist via onMutation');
 
   const ideArtifact = {
     cursor: 'ide-cur-1',
@@ -242,20 +264,85 @@ test('Result Material — 5. ProjectRegistry persistence round-trip 验证', () 
     latest_completed_result: ideArtifact
   });
 
-  // 持久化保存
-  reg1.saveToFile(storagePath);
-  assert.ok(fs.existsSync(storagePath));
-
-  // 重启创建新 Registry 并加载
+  // 5. create a new registry from the same storage path
   const reg2 = createProjectRegistry({ storagePath });
   const core2 = reg2.getProject('proj-persist-rm');
   const snap2 = core2.getSnapshot();
 
+  // 6. prove: cursor survived, result state survived, matching latest_completed_result survived
+  assert.strictEqual(snap2.endpoints.browser.latest_completed_cursor, 'br-cur-1');
   assert.strictEqual(snap2.endpoints.browser.result_state, 'NEW');
   assert.deepEqual(snap2.endpoints.browser.latest_completed_result, browserArtifact);
 
+  assert.strictEqual(snap2.endpoints.ide_endpoints['ide-main'].latest_completed_cursor, 'ide-cur-1');
   assert.strictEqual(snap2.endpoints.ide_endpoints['ide-main'].result_state, 'NEW');
   assert.deepEqual(snap2.endpoints.ide_endpoints['ide-main'].latest_completed_result, ideArtifact);
 
   fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('Result Material — 6. malformed result material 必须 fail closed 置为 null 且不破坏状态真值 (Blocker 3)', () => {
+  // A. validateAndNormalizeResultMaterial 单元校验
+  assert.strictEqual(validateAndNormalizeResultMaterial(null, 'c1'), null);
+  assert.strictEqual(validateAndNormalizeResultMaterial([], 'c1'), null);
+  assert.strictEqual(validateAndNormalizeResultMaterial('not-an-object', 'c1'), null);
+  assert.strictEqual(validateAndNormalizeResultMaterial({ cursor: 'c2', result_ref: 'r', text: 't' }, 'c1'), null);
+  assert.strictEqual(validateAndNormalizeResultMaterial({ cursor: 'c1', result_ref: '', text: 't' }, 'c1'), null);
+  assert.strictEqual(validateAndNormalizeResultMaterial({ cursor: 'c1', result_ref: '   ', text: 't' }, 'c1'), null);
+  assert.strictEqual(validateAndNormalizeResultMaterial({ cursor: 'c1', result_ref: 123, text: 't' }, 'c1'), null);
+  assert.strictEqual(validateAndNormalizeResultMaterial({ cursor: 'c1', result_ref: 'r', text: 456 }, 'c1'), null);
+
+  // 合规材料正常归一化
+  const norm = validateAndNormalizeResultMaterial(
+    { cursor: 'c1', result_ref: ' res_1 ', text: 'ok', captured_at: 'invalid-date' },
+    'c1',
+    '2026-09-18T10:00:00.000Z'
+  );
+  assert.strictEqual(norm.cursor, 'c1');
+  assert.strictEqual(norm.result_ref, 'res_1');
+  assert.strictEqual(norm.text, 'ok');
+  assert.strictEqual(norm.captured_at, '2026-09-18T10:00:00.000Z');
+
+  // B. observation 记录 malformed artifact: 必须变为 null，但 NEW 状态保持不受损
+  const binding = createBinding({
+    binding_id: 'proj-rm-malformed',
+    browser: { provider: 'chatgpt', conversation_id: 'conv-1' },
+    ide: { conversation_id: 'conv-ide-1', workspace_identity: '/ws', repository_identity: 'org/repo' }
+  });
+  const core = createProjectStatusCore({ binding });
+
+  core.recordEndpointObservation('browser', {
+    conversation_id: 'conv-1',
+    trusted: true,
+    latest_completed_cursor: 'cur-valid',
+    latest_completed_result: {
+      cursor: 'cur-valid',
+      result_ref: '', // malformed empty ref
+      text: 'Some text'
+    }
+  });
+
+  const snap = core.getSnapshot();
+  assert.strictEqual(snap.endpoints.browser.result_state, 'NEW');
+  assert.strictEqual(snap.endpoints.browser.latest_completed_cursor, 'cur-valid');
+  assert.strictEqual(snap.endpoints.browser.latest_completed_result, null);
+
+  // C. hydration 水合 malformed artifact: 必须变为 null，但状态保持
+  const hydrated = hydrateEndpointFact({
+    endpoint: 'browser',
+    role: 'browser',
+    endpoint_revision: 1,
+    latest_completed_cursor: 'cur-h',
+    last_handled_cursor: null,
+    latest_completed_result: {
+      cursor: 'cur-h',
+      result_ref: 'ref-ok',
+      text: 12345 // malformed non-string text
+    },
+    continuity: { trusted: true, unknown_reason: null }
+  }, 'browser', { role: 'browser' });
+
+  assert.strictEqual(hydrated.latest_completed_cursor, 'cur-h');
+  assert.strictEqual(hydrated.latest_completed_result, null);
+  assert.strictEqual(hydrated.continuity.trusted, true);
 });

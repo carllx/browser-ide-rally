@@ -17,7 +17,8 @@ import {
   deriveEndpointResult,
   createInitialEndpointFact,
   hydrateEndpointFact,
-  verifyObservationContinuity
+  verifyObservationContinuity,
+  validateAndNormalizeResultMaterial
 } from './endpoint-ledger.js';
 import {
   ALLOWED_ACTION_STAGES,
@@ -304,44 +305,36 @@ export class ProjectStatusCore {
       }
 
       if (cursorChanged) {
-        // 游标发生变化：只有新 artifact 存在且 cursor 精确匹配新 cursor 时才安装，否则清除为 null
-        const candidate = observation.latest_completed_result;
-        if (candidate && typeof candidate === 'object' && candidate.cursor === latestCursor) {
-          latestResult = {
-            cursor: candidate.cursor,
-            result_ref: candidate.result_ref,
-            text: candidate.text,
-            captured_at: candidate.captured_at || completedAt || now
-          };
-        } else {
-          latestResult = null;
-        }
+        // 游标发生变化：只有新 artifact 存在且规范有效、cursor 精确匹配新 cursor 时才安装，否则清除为 null
+        latestResult = validateAndNormalizeResultMaterial(
+          observation.latest_completed_result,
+          latestCursor,
+          completedAt || now
+        );
       } else {
         // 游标未发生变化
         if (observation.latest_completed_result !== undefined) {
-          const candidate = observation.latest_completed_result;
-          if (candidate && typeof candidate === 'object' && candidate.cursor === latestCursor) {
-            latestResult = {
-              cursor: candidate.cursor,
-              result_ref: candidate.result_ref,
-              text: candidate.text,
-              captured_at: candidate.captured_at || completedAt || now
-            };
-          } else {
-            latestResult = null;
-          }
+          latestResult = validateAndNormalizeResultMaterial(
+            observation.latest_completed_result,
+            latestCursor,
+            completedAt || now
+          );
         } else {
-          // 未提供 result material：若已有 artifact 仍与当前 cursor 匹配则保留，否则置为 null
-          if (latestResult && latestResult.cursor !== latestCursor) {
-            latestResult = null;
-          }
+          // 未提供 result material：若已有 artifact 仍合规且与当前 cursor 匹配则保留，否则置为 null
+          latestResult = validateAndNormalizeResultMaterial(
+            latestResult,
+            latestCursor,
+            completedAt || now
+          );
         }
       }
     } else {
-      // 未受信：若已有 artifact 与当前 cursor 不匹配，则置为 null
-      if (latestResult && latestResult.cursor !== latestCursor) {
-        latestResult = null;
-      }
+      // 未受信：若已有 artifact 与当前 cursor 不匹配或不合规，则置为 null
+      latestResult = validateAndNormalizeResultMaterial(
+        latestResult,
+        latestCursor,
+        completedAt || now
+      );
     }
 
     const updatedFact = {
@@ -364,6 +357,9 @@ export class ProjectStatusCore {
     }
 
     this._updatedAt = now;
+    if (this._onMutation) {
+      this._onMutation();
+    }
   }
 
   markEndpointHandled(endpointIdentifier, { expected_cursor } = {}) {
@@ -390,6 +386,9 @@ export class ProjectStatusCore {
     current.last_handled_cursor = current.latest_completed_cursor;
     current.updated_at = now;
     this._updatedAt = now;
+    if (this._onMutation) {
+      this._onMutation();
+    }
 
     return { success: true, handled_cursor: current.last_handled_cursor };
   }

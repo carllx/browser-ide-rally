@@ -72,6 +72,57 @@ export function deriveEndpointResult(endpointFact) {
  * 3. 账本自洽性校验：最新游标与已处理游标逻辑有效，杜绝 impossible ledger；
  * 4. 损坏数据坚决 fail-closed。
  */
+/**
+ * 规范校验与归一化端点结果材料 (Canonical Result Material Validation & Normalization Seam)
+ * 
+ * 校验约束 (Blocker 3)：
+ * 1. artifact 必须是 object (非 null, 非 array);
+ * 2. artifact.cursor 必须与 expectedCursor (即 canonical latest_completed_cursor) 严格精确相等;
+ * 3. artifact.result_ref 必须是非空 string;
+ * 4. artifact.text 必须是 string;
+ * 5. artifact.captured_at 归一化为有效 ISO 时间戳或 fallbackTimestamp。
+ * 
+ * 行为：
+ * - 任何不合规的 malformed artifact 均 fail-closed 返回 null;
+ * - 不理解任何 provider-specific 游标语法;
+ * - 合规时返回纯净归一化的对象 { cursor, result_ref, text, captured_at }。
+ */
+export function validateAndNormalizeResultMaterial(artifact, expectedCursor, fallbackTimestamp = new Date().toISOString()) {
+  if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) {
+    return null;
+  }
+
+  if (expectedCursor === null || expectedCursor === undefined) {
+    return null;
+  }
+  if (artifact.cursor !== expectedCursor) {
+    return null;
+  }
+
+  if (typeof artifact.result_ref !== 'string' || !artifact.result_ref.trim()) {
+    return null;
+  }
+
+  if (typeof artifact.text !== 'string') {
+    return null;
+  }
+
+  let capturedAt = fallbackTimestamp;
+  if (typeof artifact.captured_at === 'string' && artifact.captured_at.trim()) {
+    const parsed = Date.parse(artifact.captured_at);
+    if (!Number.isNaN(parsed)) {
+      capturedAt = artifact.captured_at.trim();
+    }
+  }
+
+  return {
+    cursor: artifact.cursor,
+    result_ref: artifact.result_ref.trim(),
+    text: artifact.text,
+    captured_at: capturedAt
+  };
+}
+
 export function hydrateEndpointFact(fact, expectedEndpoint, {
   role = 'ide',
   endpoint_revision = 1,
@@ -121,20 +172,17 @@ export function hydrateEndpointFact(fact, expectedEndpoint, {
     unknownReason = fact.continuity?.unknown_reason || 'untrusted_or_malformed_persisted_continuity';
   }
 
+  const validCursor = trusted ? fact.latest_completed_cursor : null;
+
   return {
     endpoint: expectedEndpoint,
     role: fact.role || role,
     endpoint_revision,
-    latest_completed_cursor: trusted ? fact.latest_completed_cursor : null,
+    latest_completed_cursor: validCursor,
     last_handled_cursor: trusted ? fact.last_handled_cursor : null,
     completed_at: fact.completed_at ?? null,
-    latest_completed_result: (trusted && fact.latest_completed_result && typeof fact.latest_completed_result === 'object' && fact.latest_completed_result.cursor === fact.latest_completed_cursor)
-      ? {
-          cursor: fact.latest_completed_result.cursor,
-          result_ref: fact.latest_completed_result.result_ref,
-          text: fact.latest_completed_result.text,
-          captured_at: fact.latest_completed_result.captured_at
-        }
+    latest_completed_result: trusted
+      ? validateAndNormalizeResultMaterial(fact.latest_completed_result, validCursor, fact.completed_at || fallbackUpdatedAt)
       : null,
     continuity: {
       trusted,

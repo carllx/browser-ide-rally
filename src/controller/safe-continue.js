@@ -32,7 +32,7 @@ export function executeSafeContinue(params = {}) {
     expected_source_result_state,
     expected_source_cursor,
     expected_source_result_ref,
-    user_instruction = 'Continue the task with the provided context.',
+    user_instruction = null,
     browserAdapter = null,
     ideAdapter = params.ideAdapters || null
   } = params;
@@ -116,9 +116,14 @@ export function executeSafeContinue(params = {}) {
     blockAndThrow(`STALE_SOURCE_CONTEXT: expected source result_state "${expected_source_result_state}", got "${sourceFact.result_state}"`);
   }
 
-  // 防漂移：核验 expected_source_cursor
-  if (expected_source_cursor !== undefined && expected_source_cursor !== (sourceFact.latest_completed_cursor || null)) {
-    blockAndThrow(`STALE_SOURCE_CONTEXT: expected source cursor "${expected_source_cursor}", got "${sourceFact.latest_completed_cursor}"`);
+  // 防漂移：expected_source_cursor 必须强制提供（但允许为 null）
+  if (expected_source_cursor === undefined) {
+    blockAndThrow('STALE_SOURCE_CONTEXT: expected_source_cursor is required for continue snapshot locking');
+  }
+
+  const actualCursor = sourceFact.latest_completed_cursor ?? null;
+  if (expected_source_cursor !== actualCursor) {
+    blockAndThrow(`STALE_SOURCE_CONTEXT: expected source cursor "${expected_source_cursor}", got "${actualCursor}"`);
   }
 
   // 若源端点为 NEW，必须具备可用结果材料，且必须提供并核验 expected_source_result_ref
@@ -154,11 +159,15 @@ export function executeSafeContinue(params = {}) {
 
   let renderedText = '';
   if (sourceResultMaterial) {
-    renderedText = user_instruction
-      ? `[Rally Continue Context from ${resolvedSource}]\n${sourceResultMaterial.text}\n\n[Instruction]\n${user_instruction}`
-      : `[Rally Continue Context from ${resolvedSource}]\n${sourceResultMaterial.text}\n\nPlease continue.`;
+    const instruction = (typeof user_instruction === 'string' && user_instruction.trim())
+      ? user_instruction.trim()
+      : 'Continue the task with the provided context.';
+    renderedText = `[Rally Continue Context from ${resolvedSource}]\n${sourceResultMaterial.text}\n\n[Instruction]\n${instruction}`;
   } else {
-    renderedText = user_instruction || 'Please continue.';
+    const instruction = (typeof user_instruction === 'string' && user_instruction.trim())
+      ? user_instruction.trim()
+      : 'Please continue.';
+    renderedText = instruction;
   }
 
   const payload = {

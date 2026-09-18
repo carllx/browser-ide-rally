@@ -232,7 +232,12 @@ test('Safe Continue — 3. Source 为 NO_NEW_RESULT: 允许派发，不回放陈
   assert.strictEqual(result.success, true);
   assert.strictEqual(dispatchedPrompts.length, 1);
   const promptText = dispatchedPrompts[0].text;
+  assert.strictEqual(promptText.includes('provided context'), false);
   assert.strictEqual(promptText.includes('OLD HISTORICAL TEXT THAT MUST NOT REPLAY'), false);
+  // 精确断言出站 payload.text 为纯粹 context-free 的 'Please continue.' (Blocker 4)
+  assert.strictEqual(result.action.payload.text, 'Please continue.');
+  const parsedPrompt = JSON.parse(promptText.replace(/<\/?RALLY_HANDOFF>/g, '').trim());
+  assert.strictEqual(parsedPrompt.payload.text, 'Please continue.');
 });
 
 test('Safe Continue — 4. Multi-IDE 到 Browser: 缺失 source_endpoint 时拦截；禁止 sibling 聚合', () => {

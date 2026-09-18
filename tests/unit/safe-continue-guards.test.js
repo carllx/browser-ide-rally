@@ -237,6 +237,7 @@ test('Safe Continue Guards — 5. 跨项目隔离: 项目 A 动作绝不包含�
     target_endpoint: 'ide',
     source_endpoint: 'browser',
     expected_source_result_state: 'NO_NEW_RESULT',
+    expected_source_cursor: null,
     ideAdapter
   });
 
@@ -350,7 +351,36 @@ test('Safe Continue Guards — 8. 缺失 expected_source_result_state 或 expect
     });
   }, /expected_source_result_state is required/);
 
-  // 2. NEW source 缺失 expected_source_result_ref
+  // 2. 完全缺失 expected_source_cursor (Blocker 2 场景 A)
+  assert.throws(() => {
+    executeSafeContinue({
+      registry,
+      bindingId: 'proj-continue-1',
+      expected_binding_revision: 1,
+      target_endpoint: 'browser',
+      source_endpoint: 'ide-1',
+      expected_source_result_state: 'NEW',
+      expected_source_result_ref: 'ref-ide-8',
+      browserAdapter
+    });
+  }, /expected_source_cursor is required/);
+
+  // 3. 显式 null 游标仅在当前端点实际 cursor 确实为 null 时合法
+  assert.throws(() => {
+    executeSafeContinue({
+      registry,
+      bindingId: 'proj-continue-1',
+      expected_binding_revision: 1,
+      target_endpoint: 'browser',
+      source_endpoint: 'ide-1',
+      expected_source_result_state: 'NEW',
+      expected_source_cursor: null,
+      expected_source_result_ref: 'ref-ide-8',
+      browserAdapter
+    });
+  }, /STALE_SOURCE_CONTEXT.*expected source cursor "null", got "cur-ide-8"/);
+
+  // 4. NEW source 缺失 expected_source_result_ref
   assert.throws(() => {
     executeSafeContinue({
       registry,
@@ -363,5 +393,104 @@ test('Safe Continue Guards — 8. 缺失 expected_source_result_state 或 expect
       browserAdapter
     });
   }, /expected_source_result_ref is required/);
+});
+
+test('Safe Continue Guards — 9. NO_NEW_RESULT 游标由 cursor-A 变为 cursor-B 必须 fail-closed BLOCKED (Blocker 2 场景 B)', () => {
+  const { registry, core } = setupMultiEndpointFixture();
+  const browserAdapter = createMockBrowserAdapter();
+
+  // 1. 初始状态：source endpoint 为 NO_NEW_RESULT @ cursor-A
+  core.recordEndpointObservation('ide-1', {
+    conversation_id: 'conv-ide-1',
+    workspace_identity: '/workspaces/proj',
+    repository_identity: 'carllx/browser-ide-rally',
+    endpoint_revision: 1,
+    trusted: true,
+    latest_completed_cursor: 'cursor-A'
+  });
+  core.markEndpointHandled('ide-1', { expected_cursor: 'cursor-A' });
+  assert.strictEqual(core.getSnapshot().endpoints.ide_endpoints['ide-1'].result_state, 'NO_NEW_RESULT');
+  assert.strictEqual(core.getSnapshot().endpoints.ide_endpoints['ide-1'].latest_completed_cursor, 'cursor-A');
+
+  // 请求形成时的快照参数：NO_NEW_RESULT @ cursor-A
+  const requestParams = {
+    registry,
+    bindingId: 'proj-continue-1',
+    expected_binding_revision: 1,
+    target_endpoint: 'browser',
+    source_endpoint: 'ide-1',
+    expected_source_result_state: 'NO_NEW_RESULT',
+    expected_source_cursor: 'cursor-A',
+    browserAdapter
+  };
+
+  // 2. 执行前，端点观察推进到 cursor-B 且已被处理，因此 result_state 依然是 NO_NEW_RESULT！
+  core.recordEndpointObservation('ide-1', {
+    conversation_id: 'conv-ide-1',
+    workspace_identity: '/workspaces/proj',
+    repository_identity: 'carllx/browser-ide-rally',
+    endpoint_revision: 1,
+    trusted: true,
+    latest_completed_cursor: 'cursor-B'
+  });
+  core.markEndpointHandled('ide-1', { expected_cursor: 'cursor-B' });
+  assert.strictEqual(core.getSnapshot().endpoints.ide_endpoints['ide-1'].result_state, 'NO_NEW_RESULT');
+  assert.strictEqual(core.getSnapshot().endpoints.ide_endpoints['ide-1'].latest_completed_cursor, 'cursor-B');
+
+  // 3. 执行时必须判定为过期上下文 (STALE_SOURCE_CONTEXT) 并严格 BLOCKED
+  assert.throws(() => {
+    executeSafeContinue(requestParams);
+  }, /STALE_SOURCE_CONTEXT.*expected source cursor "cursor-A", got "cursor-B"/);
+
+  const actions = core.getSnapshot().actions;
+  assert.strictEqual(actions.length, 1);
+  assert.strictEqual(actions[0].stage, 'BLOCKED');
+});
+
+test('Safe Continue Guards — 10. malformed result material 导致 Continue fail-closed 且绝不把脏内容 stringify 到出站包 (Blocker 3)', () => {
+  const { registry, core } = setupMultiEndpointFixture();
+  const dispatchedPrompts = [];
+  const browserAdapter = createMockBrowserAdapter(dispatchedPrompts);
+
+  // 观测提供 malformed artifact (例如 text 为非 string 或 result_ref 为空)
+  core.recordEndpointObservation('ide-1', {
+    conversation_id: 'conv-ide-1',
+    workspace_identity: '/workspaces/proj',
+    repository_identity: 'carllx/browser-ide-rally',
+    endpoint_revision: 1,
+    trusted: true,
+    latest_completed_cursor: 'cur-malformed-test',
+    latest_completed_result: {
+      cursor: 'cur-malformed-test',
+      result_ref: '', // malformed empty ref
+      text: { malicious: 'object' } // malformed non-string
+    }
+  });
+
+  const snap = core.getSnapshot();
+  // 规范状态机中材料已被安全置为 null，但状态真值依然是 NEW
+  assert.strictEqual(snap.endpoints.ide_endpoints['ide-1'].result_state, 'NEW');
+  assert.strictEqual(snap.endpoints.ide_endpoints['ide-1'].latest_completed_result, null);
+
+  // 执行 Continue：因 NEW 端点缺少可用合规材料，必须 fail-closed BLOCKED
+  assert.throws(() => {
+    executeSafeContinue({
+      registry,
+      bindingId: 'proj-continue-1',
+      expected_binding_revision: 1,
+      target_endpoint: 'browser',
+      source_endpoint: 'ide-1',
+      expected_source_result_state: 'NEW',
+      expected_source_cursor: 'cur-malformed-test',
+      expected_source_result_ref: 'any-ref',
+      browserAdapter
+    });
+  }, /SOURCE_RESULT_UNAVAILABLE/);
+
+  // 绝无任何请求被派发，绝无脏对象被 stringify 到出站载荷
+  assert.strictEqual(dispatchedPrompts.length, 0);
+  const actions = core.getSnapshot().actions;
+  assert.strictEqual(actions.length, 1);
+  assert.strictEqual(actions[0].stage, 'BLOCKED');
 });
 
