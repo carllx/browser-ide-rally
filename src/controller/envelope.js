@@ -103,14 +103,12 @@ export function extractAndValidateEnvelope(rawText, options = {}) {
     );
   }
 
-  // 7. Endpoint Revision 校验 (针对 IDE 端点世代边界，若提供 expectedEndpointRevision 且 parsed 携带则必须匹配)
+  // 7. Endpoint Revision 校验 (针对 IDE 端点世代边界，若提供 expectedEndpointRevision 则必须匹配且不能缺失)
   if (options.expectedEndpointRevision !== undefined && options.expectedEndpointRevision !== null) {
-    if (parsed.endpoint_revision !== undefined && parsed.endpoint_revision !== null) {
-      if (parsed.endpoint_revision !== options.expectedEndpointRevision) {
-        throw new Error(
-          `VALIDATION_FAIL: Stale or mismatched endpoint revision. Expected ${options.expectedEndpointRevision}, got ${parsed.endpoint_revision}`
-        );
-      }
+    if (parsed.endpoint_revision === undefined || parsed.endpoint_revision === null || parsed.endpoint_revision !== options.expectedEndpointRevision) {
+      throw new Error(
+        `VALIDATION_FAIL: Stale or mismatched endpoint revision. Expected ${options.expectedEndpointRevision}, got ${parsed.endpoint_revision}`
+      );
     }
   }
 

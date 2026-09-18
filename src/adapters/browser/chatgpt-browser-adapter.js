@@ -389,11 +389,11 @@ export class ChatGPTBrowserAdapter {
       throw new Error('CONVERSATION_ID_REQUIRED: conversationId must be a non-empty string');
     }
     const target = this.locateExactConversationTab(conversationId);
-    const safeConvId = JSON.stringify(conversationId.trim());
+    const safePattern = JSON.stringify(getConversationUrlPattern(conversationId.trim()));
     const checkCode = `(() => {
       try {
         const url = window.location.href;
-        if (!url.includes(${safeConvId})) {
+        if (!new RegExp(${safePattern}).test(url)) {
           return JSON.stringify({ ready: false, reason: 'conversation_url_drift_at_probe_time' });
         }
         const textarea = document.querySelector('#prompt-textarea');
@@ -447,11 +447,11 @@ export class ChatGPTBrowserAdapter {
     }
     const target = this.locateExactConversationTab(conversationId);
     const safeText = JSON.stringify(text);
-    const safeConvId = JSON.stringify(conversationId.trim());
+    const sendPattern = JSON.stringify(getConversationUrlPattern(conversationId.trim()));
     const sendCode = `(() => {
       try {
         const url = window.location.href;
-        if (!url.includes(${safeConvId})) {
+        if (!new RegExp(${sendPattern}).test(url)) {
           return JSON.stringify({ success: false, reason: 'conversation_url_drift_before_mutation' });
         }
         const textarea = document.querySelector('#prompt-textarea');
@@ -472,14 +472,7 @@ export class ChatGPTBrowserAdapter {
           return JSON.stringify({ success: true, method: 'button_click' });
         }
         
-        const enterEvent = new KeyboardEvent('keydown', {
-          bubbles: true,
-          cancelable: true,
-          key: 'Enter',
-          code: 'Enter',
-          keyCode: 13,
-          which: 13
-        });
+        const enterEvent = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter', code: 'Enter', keyCode: 13, which: 13 });
         textarea.dispatchEvent(enterEvent);
         return JSON.stringify({ success: true, method: 'enter_key' });
       } catch (e) {
@@ -503,4 +496,3 @@ export class ChatGPTBrowserAdapter {
 export function createChatGPTBrowserAdapter(options = {}) {
   return new ChatGPTBrowserAdapter(options);
 }
-

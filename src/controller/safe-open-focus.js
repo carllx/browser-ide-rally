@@ -99,17 +99,8 @@ export function executeSafeOpenFocus(params) {
         evidence: `Locating and focusing browser conversation "${conversationId}"`
       });
 
-      // 规范单一控制接口：按 conversationId 聚焦，若 mock 要求坐标对象则兼容传入
-      let focusRes = null;
-      try {
-        focusRes = browserAdapter.focusConversationTab(conversationId);
-      } catch (err) {
-        if (tab && typeof browserAdapter.focusConversationTab === 'function') {
-          focusRes = browserAdapter.focusConversationTab(tab);
-        } else {
-          throw err;
-        }
-      }
+      // 规范单一控制接口：按 conversationId 聚焦，严禁坐标回退
+      const focusRes = browserAdapter.focusConversationTab(conversationId);
 
       // 副作用真实性凭据校验：必须实际执行了聚焦
       if (!focusRes || focusRes.focused !== true) {

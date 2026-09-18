@@ -206,4 +206,23 @@ test('[Envelope] 8. 严格核验 IDE 端点世代边界 endpoint_revision', () =
       expectedEndpointRevision: 3
     });
   }, /Stale or mismatched endpoint revision/);
+
+  // 期望 endpoint_revision 但信封缺失 -> Fail-Closed
+  const envWithoutEpRev = {
+    version: 1,
+    nonce: 'nonce-eprev',
+    binding_id: 'proj-alpha',
+    binding_revision: 1,
+    target_endpoint: 'ide-a',
+    operation: 'rally.echo',
+    payload: { text: 'test' }
+  };
+  const blockWithoutEpRev = formatEnvelopeBlock(envWithoutEpRev);
+  assert.throws(() => {
+    extractAndValidateEnvelope(blockWithoutEpRev, {
+      expectedBindingRevision: 1,
+      expectedBindingId: 'proj-alpha',
+      expectedEndpointRevision: 2
+    });
+  }, /Stale or mismatched endpoint revision/);
 });
