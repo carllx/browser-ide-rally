@@ -511,4 +511,36 @@ describe('Safe Controls Surface 集成测试', () => {
     assert.equal(lastAction.stage, 'FAILED');
     assert.match(lastAction.evidence, /OS window activation exception/);
   });
+
+  it('16. Production IDE Focus: 发现 Provider 会话聚焦能力不可用时返回 409 BLOCKED 且 Action 严格为 BLOCKED', async () => {
+    mockIdeAdapters.set('ide-a', {
+      verifyTargetIdentity: () => ({ verified: true }),
+      focusWindow: () => {
+        throw new Error('FOCUS_NOT_AVAILABLE: provider-side exact IDE conversation focus is not available at the existing seam');
+      }
+    });
+
+    const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/open-focus`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        expected_binding_revision: 4,
+        target_endpoint: 'ide-a'
+      })
+    });
+
+    assert.equal(res.status, 409);
+    const data = await res.json();
+    assert.equal(data.success, false);
+    assert.equal(data.stage, 'BLOCKED');
+    assert.match(data.reason, /FOCUS_NOT_AVAILABLE/);
+    assert.match(data.reason, /provider-side exact IDE conversation focus is not available at the existing seam/);
+
+    const pRes = await fetch(`${baseUrl}/api/projects`);
+    const pData = await pRes.json();
+    const actions = pData.projects[0].actions;
+    const lastAction = actions[actions.length - 1];
+    assert.equal(lastAction.stage, 'BLOCKED');
+    assert.match(lastAction.evidence, /provider-side exact IDE conversation focus is not available at the existing seam/);
+  });
 });

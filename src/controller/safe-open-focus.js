@@ -120,6 +120,8 @@ export function executeSafeOpenFocus(params) {
         const isBlocked = err.message.includes('NO_EXACT_CONVERSATION_TAB') ||
                           err.message.includes('AMBIGUOUS_CONVERSATION_TAB') ||
                           err.message.includes('CONVERSATION_ID_REQUIRED') ||
+                          err.message.includes('FOCUS_NOT_AVAILABLE') ||
+                          err.message.includes('FOCUS_NOT_SUPPORTED') ||
                           err.message.includes('not found') ||
                           err.message.includes('SECURITY_REJECT');
         const nextStage = isBlocked ? 'BLOCKED' : 'FAILED';
@@ -198,6 +200,8 @@ export function executeSafeOpenFocus(params) {
       if (!isTerminal) {
         const isBlocked = err.message.includes('IDENTITY_MISMATCH') ||
                           err.message.includes('IDENTITY_VERIFY_FAIL') ||
+                          err.message.includes('FOCUS_NOT_AVAILABLE') ||
+                          err.message.includes('FOCUS_NOT_SUPPORTED') ||
                           err.message.includes('not found') ||
                           err.message.includes('SECURITY_REJECT');
         const nextStage = isBlocked ? 'BLOCKED' : 'FAILED';

@@ -417,4 +417,34 @@ test('[Safe Focus] 5. Open/Focus 终态流转唯一性与错误保留（消除 F
   const lastActionD = actionsD[actionsD.length - 1];
   assert.equal(lastActionD.stage, 'FAILED');
   assert.match(lastActionD.evidence, /OS window activation permission denied/);
+
+  // E. 生产真实 IDE Focus 发现能力不可用：必须以 BLOCKED 终结，证据明确，无 transient SUBMITTED_LOCALLY
+  let focusSideEffectOccurred = false;
+  const prodIdeAdapters = new Map([
+    ['ide-focus-1', {
+      verifyTargetIdentity: () => ({ verified: true }),
+      focusWindow: () => {
+        focusSideEffectOccurred = true;
+        throw new Error('FOCUS_NOT_AVAILABLE: provider-side exact IDE conversation focus is not available at the existing seam');
+      }
+    }]
+  ]);
+  assert.throws(() => {
+    executeSafeOpenFocus({
+      registry,
+      bindingId: 'proj-focus-terminal',
+      expected_binding_revision: 1,
+      target_endpoint: 'ide-focus-1',
+      ideAdapters: prodIdeAdapters
+    });
+  }, (err) => {
+    assert.match(err.message, /FOCUS_NOT_AVAILABLE/);
+    assert.equal(err.actionStage, 'BLOCKED', 'FOCUS_NOT_AVAILABLE 必须精确归类为 BLOCKED');
+    return true;
+  });
+  const actionsE = core.getSnapshot().actions;
+  const lastActionE = actionsE[actionsE.length - 1];
+  assert.equal(lastActionE.stage, 'BLOCKED');
+  assert.match(lastActionE.evidence, /provider-side exact IDE conversation focus is not available at the existing seam/);
+  assert.equal(focusSideEffectOccurred, true);
 });

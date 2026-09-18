@@ -144,7 +144,11 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
                     msg.includes('UNKNOWN') ||
                     msg.includes('SECURITY_REJECT') ||
                     msg.includes('IDE_ENDPOINT_NOT_FOUND') ||
-                    msg.includes('TARGET_LOOKUP_FAIL');
+                    msg.includes('TARGET_LOOKUP_FAIL') ||
+                    msg.includes('FOCUS_NOT_AVAILABLE') ||
+                    msg.includes('FOCUS_NOT_SUPPORTED') ||
+                    msg.includes('IDENTITY_MISMATCH') ||
+                    msg.includes('IDENTITY_VERIFY_FAIL');
   const finalStage = stage === 'FAILED' ? 'FAILED' : (isBlocked ? 'BLOCKED' : 'FAILED');
   return sendJson(res, finalStage === 'BLOCKED' ? 409 : 400, {
     success: false,
