@@ -238,7 +238,8 @@ export class ChatGPTBrowserAdapter {
           
           let lastMessageText = '';
           if (!isPlaceholder) {
-            lastMessageText = (lastEl.innerText || lastEl.textContent || '').trim();
+            const contentEl = lastEl.querySelector('.markdown') || lastEl;
+            lastMessageText = (contentEl.innerText || contentEl.textContent || '').trim();
           }
           
           return JSON.stringify({

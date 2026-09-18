@@ -39,6 +39,17 @@ export function executeSafeContinue(params = {}) {
 
   const actionId = generateActionId();
 
+  function blockAndThrow(reason) {
+    recordBlockedAction(registry, bindingId, {
+      actionId,
+      actionType: 'continue',
+      targetEndpoint: target_endpoint,
+      expectedRevision: expected_binding_revision,
+      reason
+    });
+    throw new Error(reason);
+  }
+
   // 1. 基础参数与版本核验
   let core;
   let currentBinding;
@@ -47,14 +58,7 @@ export function executeSafeContinue(params = {}) {
     core = res.core;
     currentBinding = res.currentBinding;
   } catch (err) {
-    recordBlockedAction(registry, bindingId, {
-      actionId,
-      actionType: 'continue',
-      targetEndpoint: target_endpoint,
-      expectedRevision: expected_binding_revision,
-      reason: 'stale_or_missing_binding_revision'
-    });
-    throw err;
+    blockAndThrow(err.message || 'stale_or_missing_binding_revision');
   }
 
   const snapshot = core.getSnapshot();
@@ -68,15 +72,7 @@ export function executeSafeContinue(params = {}) {
     if (source_endpoint) {
       const match = ideEndpoints.find(e => e.endpoint_id === source_endpoint);
       if (!match) {
-        const reason = `INVALID_SOURCE_ENDPOINT: source_endpoint "${source_endpoint}" does not exist in binding`;
-        recordBlockedAction(registry, bindingId, {
-          actionId,
-          actionType: 'continue',
-          targetEndpoint: target_endpoint,
-          expectedRevision: expected_binding_revision,
-          reason
-        });
-        throw new Error(reason);
+        blockAndThrow(`INVALID_SOURCE_ENDPOINT: source_endpoint "${source_endpoint}" does not exist in binding`);
       }
       resolvedSource = source_endpoint;
       sourceEpRev = match.endpoint_revision || 1;
@@ -85,42 +81,18 @@ export function executeSafeContinue(params = {}) {
         resolvedSource = ideEndpoints[0].endpoint_id;
         sourceEpRev = ideEndpoints[0].endpoint_revision || 1;
       } else {
-        const reason = 'SOURCE_ENDPOINT_REQUIRED: Target is browser but multiple IDE endpoints exist; explicit source_endpoint is required';
-        recordBlockedAction(registry, bindingId, {
-          actionId,
-          actionType: 'continue',
-          targetEndpoint: target_endpoint,
-          expectedRevision: expected_binding_revision,
-          reason
-        });
-        throw new Error(reason);
+        blockAndThrow('SOURCE_ENDPOINT_REQUIRED: Target is browser but multiple IDE endpoints exist; explicit source_endpoint is required');
       }
     }
   } else {
     // 目标为 IDE
     const targetMatch = ideEndpoints.find(e => e.endpoint_id === target_endpoint);
     if (!targetMatch) {
-      const reason = `IDE_ENDPOINT_NOT_FOUND: Target endpoint "${target_endpoint}" does not exist in binding`;
-      recordBlockedAction(registry, bindingId, {
-        actionId,
-        actionType: 'continue',
-        targetEndpoint: target_endpoint,
-        expectedRevision: expected_binding_revision,
-        reason
-      });
-      throw new Error(reason);
+      blockAndThrow(`IDE_ENDPOINT_NOT_FOUND: Target endpoint "${target_endpoint}" does not exist in binding`);
     }
 
     if (source_endpoint && source_endpoint !== 'browser') {
-      const reason = `INVALID_SOURCE_ENDPOINT: Source for IDE target must be "browser", got "${source_endpoint}"`;
-      recordBlockedAction(registry, bindingId, {
-        actionId,
-        actionType: 'continue',
-        targetEndpoint: target_endpoint,
-        expectedRevision: expected_binding_revision,
-        reason
-      });
-      throw new Error(reason);
+      blockAndThrow(`INVALID_SOURCE_ENDPOINT: Source for IDE target must be "browser", got "${source_endpoint}"`);
     }
 
     resolvedSource = 'browser';
@@ -133,71 +105,37 @@ export function executeSafeContinue(params = {}) {
     : (snapshot.endpoints.ide_endpoints?.[resolvedSource] || null);
 
   if (!sourceFact || sourceFact.continuity?.trusted !== true || sourceFact.result_state === 'UNKNOWN') {
-    const reason = `SOURCE_ENDPOINT_UNKNOWN: Context uncertain on source endpoint "${resolvedSource}"`;
-    recordBlockedAction(registry, bindingId, {
-      actionId,
-      actionType: 'continue',
-      targetEndpoint: target_endpoint,
-      expectedRevision: expected_binding_revision,
-      reason
-    });
-    throw new Error(reason);
+    blockAndThrow(`SOURCE_ENDPOINT_UNKNOWN: Context uncertain on source endpoint "${resolvedSource}"`);
   }
 
-  // 防漂移：核验 expected_source_result_state
-  if (expected_source_result_state !== undefined && expected_source_result_state !== sourceFact.result_state) {
-    const reason = `STALE_SOURCE_CONTEXT: expected source result_state "${expected_source_result_state}", got "${sourceFact.result_state}"`;
-    recordBlockedAction(registry, bindingId, {
-      actionId,
-      actionType: 'continue',
-      targetEndpoint: target_endpoint,
-      expectedRevision: expected_binding_revision,
-      reason
-    });
-    throw new Error(reason);
+  // 防漂移：必须提供 expected_source_result_state 并核验
+  if (expected_source_result_state === undefined || expected_source_result_state === null) {
+    blockAndThrow('STALE_SOURCE_CONTEXT: expected_source_result_state is required for continue snapshot locking');
+  }
+  if (expected_source_result_state !== sourceFact.result_state) {
+    blockAndThrow(`STALE_SOURCE_CONTEXT: expected source result_state "${expected_source_result_state}", got "${sourceFact.result_state}"`);
   }
 
   // 防漂移：核验 expected_source_cursor
-  if (expected_source_cursor !== undefined && expected_source_cursor !== sourceFact.latest_completed_cursor) {
-    const reason = `STALE_SOURCE_CONTEXT: expected source cursor "${expected_source_cursor}", got "${sourceFact.latest_completed_cursor}"`;
-    recordBlockedAction(registry, bindingId, {
-      actionId,
-      actionType: 'continue',
-      targetEndpoint: target_endpoint,
-      expectedRevision: expected_binding_revision,
-      reason
-    });
-    throw new Error(reason);
+  if (expected_source_cursor !== undefined && expected_source_cursor !== (sourceFact.latest_completed_cursor || null)) {
+    blockAndThrow(`STALE_SOURCE_CONTEXT: expected source cursor "${expected_source_cursor}", got "${sourceFact.latest_completed_cursor}"`);
   }
 
-  // 若源端点为 NEW，必须具备可用结果材料，且核验 result_ref
+  // 若源端点为 NEW，必须具备可用结果材料，且必须提供并核验 expected_source_result_ref
   const hasSourceNewResult = sourceFact.result_state === 'NEW';
   let sourceResultMaterial = null;
 
   if (hasSourceNewResult) {
+    if (!expected_source_result_ref) {
+      blockAndThrow('STALE_SOURCE_CONTEXT: expected_source_result_ref is required when source result_state is NEW');
+    }
     const resultArtifact = sourceFact.latest_completed_result;
     if (!resultArtifact || typeof resultArtifact !== 'object' || resultArtifact.cursor !== sourceFact.latest_completed_cursor) {
-      const reason = `SOURCE_RESULT_UNAVAILABLE: source endpoint "${resolvedSource}" has NEW result but result artifact is missing or mismatched`;
-      recordBlockedAction(registry, bindingId, {
-        actionId,
-        actionType: 'continue',
-        targetEndpoint: target_endpoint,
-        expectedRevision: expected_binding_revision,
-        reason
-      });
-      throw new Error(reason);
+      blockAndThrow(`SOURCE_RESULT_UNAVAILABLE: source endpoint "${resolvedSource}" has NEW result but result artifact is missing or mismatched`);
     }
 
-    if (expected_source_result_ref !== undefined && expected_source_result_ref !== resultArtifact.result_ref) {
-      const reason = `STALE_SOURCE_CONTEXT: expected source result_ref "${expected_source_result_ref}", got "${resultArtifact.result_ref}"`;
-      recordBlockedAction(registry, bindingId, {
-        actionId,
-        actionType: 'continue',
-        targetEndpoint: target_endpoint,
-        expectedRevision: expected_binding_revision,
-        reason
-      });
-      throw new Error(reason);
+    if (expected_source_result_ref !== resultArtifact.result_ref) {
+      blockAndThrow(`STALE_SOURCE_CONTEXT: expected source result_ref "${expected_source_result_ref}", got "${resultArtifact.result_ref}"`);
     }
 
     sourceResultMaterial = resultArtifact;
@@ -216,9 +154,11 @@ export function executeSafeContinue(params = {}) {
 
   let renderedText = '';
   if (sourceResultMaterial) {
-    renderedText = `[Rally Continue Context from ${resolvedSource}]\n${sourceResultMaterial.text}\n\n[Instruction]\n${user_instruction}`;
+    renderedText = user_instruction
+      ? `[Rally Continue Context from ${resolvedSource}]\n${sourceResultMaterial.text}\n\n[Instruction]\n${user_instruction}`
+      : `[Rally Continue Context from ${resolvedSource}]\n${sourceResultMaterial.text}\n\nPlease continue.`;
   } else {
-    renderedText = `[Rally Continue Instruction]\n${user_instruction}`;
+    renderedText = user_instruction || 'Please continue.';
   }
 
   const payload = {
@@ -229,15 +169,7 @@ export function executeSafeContinue(params = {}) {
   // 5. 载荷超限防御 (Fail-closed BLOCKED，绝不静默截断)
   const estimatedBytes = Buffer.byteLength(JSON.stringify(payload), 'utf8');
   if (estimatedBytes > MAX_PAYLOAD_BYTES) {
-    const reason = `PAYLOAD_TOO_LARGE: Envelope payload exceeds bound (${MAX_PAYLOAD_BYTES} bytes, got ${estimatedBytes} bytes)`;
-    recordBlockedAction(registry, bindingId, {
-      actionId,
-      actionType: 'continue',
-      targetEndpoint: target_endpoint,
-      expectedRevision: expected_binding_revision,
-      reason
-    });
-    throw new Error(reason);
+    blockAndThrow(`PAYLOAD_TOO_LARGE: Envelope payload exceeds bound (${MAX_PAYLOAD_BYTES} bytes, got ${estimatedBytes} bytes)`);
   }
 
   // 6. 委托 executeSafeSend 产生单一规范 Action 事实并派发
