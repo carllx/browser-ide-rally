@@ -168,8 +168,12 @@ function handleControlError(res, err) {
           targetEndpoint: body.target_endpoint,
           expectedBindingRevision: body.expected_binding_revision,
           newIdentity: body.new_identity,
-          allowReplaceUnhandled: body.allow_replace_unhandled === true,
-          allowReplaceUnknown: body.allow_replace_unknown === true
+          identity: body.new_identity || body.identity,
+          options: {
+            allow_discard_unhandled: body.allow_replace_unhandled === true || body.allow_discard_unhandled === true,
+            allow_replace_unhandled: body.allow_replace_unhandled === true || body.allow_discard_unhandled === true,
+            allow_replace_unknown: body.allow_replace_unknown === true
+          }
         });
 
         return sendJson(res, 200, {

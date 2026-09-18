@@ -19,6 +19,7 @@ describe('Safe Controls Surface 集成测试', () => {
   let baseUrl;
   let mockBrowserAdapter;
   let mockIdeAdapters;
+  let ideCalls;
 
   const bindingAlpha = {
     binding_id: 'proj-alpha',
@@ -83,7 +84,7 @@ describe('Safe Controls Surface 集成测试', () => {
       }
     };
 
-    const ideCalls = [];
+    ideCalls = [];
     mockIdeAdapters = new Map([
       ['ide-a', {
         verifyTargetIdentity(expected) {
@@ -236,7 +237,7 @@ describe('Safe Controls Surface 集成测试', () => {
     assert.equal(pData.projects[0].browser.branch, 'feat/beta');
   });
 
-  it('6. POST /controls/send 成功格式化受控 Envelope 并在目标适配器上派发', async () => {
+  it('6. POST /controls/send 成功格式化受控 Envelope 并在目标适配器上派发 (与客户端 JSON 结构一致)', async () => {
     const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/send`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -245,7 +246,7 @@ describe('Safe Controls Surface 集成测试', () => {
         target_endpoint: 'browser',
         envelope: {
           op: 'rally.prompt',
-          body: 'Hello rally executor'
+          payload: { text: 'Hello from Surface Client exact JSON' }
         }
       })
     });
@@ -253,14 +254,15 @@ describe('Safe Controls Surface 集成测试', () => {
     assert.equal(res.status, 200);
     const data = await res.json();
     assert.equal(data.success, true);
-    assert.equal(data.stage, 'ACCEPTED_OR_DELIVERED');
+    // 本地提交成功严格停留在 SUBMITTED_LOCALLY
+    assert.equal(data.stage, 'SUBMITTED_LOCALLY');
     assert.ok(data.nonce);
     assert.equal(mockBrowserAdapter.sendCalls.length, 1);
     const lastSend = mockBrowserAdapter.sendCalls[0];
     assert.equal(lastSend.convId, 'conv-browser-2');
     assert.match(lastSend.text, /<RALLY_HANDOFF/);
     assert.match(lastSend.text, /"binding_revision":\s*2/);
-    assert.match(lastSend.text, /Hello rally executor/);
+    assert.match(lastSend.text, /Hello from Surface Client exact JSON/);
   });
 
   it('7. POST /controls/send 严禁通用 bound_ide，必须按 exact endpoint_id 寻址', async () => {
@@ -272,7 +274,7 @@ describe('Safe Controls Surface 集成测试', () => {
         target_endpoint: 'bound_ide', // 禁止泛化
         envelope: {
           op: 'rally.prompt',
-          body: 'Generic IDE dispatch'
+          payload: { text: 'Generic IDE dispatch' }
         }
       })
     });
@@ -293,7 +295,7 @@ describe('Safe Controls Surface 集成测试', () => {
         target_endpoint: 'ide-a',
         envelope: {
           op: 'rally.prompt',
-          body: 'Task for IDE-A'
+          payload: { text: 'Task for IDE-A' }
         }
       })
     });
@@ -301,7 +303,10 @@ describe('Safe Controls Surface 集成测试', () => {
     assert.equal(res.status, 200);
     const data = await res.json();
     assert.equal(data.success, true);
-    assert.equal(data.stage, 'ACCEPTED_OR_DELIVERED');
+    assert.equal(data.stage, 'SUBMITTED_LOCALLY');
+    assert.equal(ideCalls.length, 1);
+    assert.equal(ideCalls[0].ide, 'ide-a');
+    assert.equal(ideCalls[0].task.envelope.payload.text, 'Task for IDE-A');
   });
 
   it('9. Blocked controls 绝不影响状态表面只读端点展示与 Mark handled 控件', async () => {

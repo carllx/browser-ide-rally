@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createProjectRegistry } from '../src/registry/project-registry.js';
 import { startStatusSurfaceServer } from '../src/surface/surface-server.js';
+import { createProductionControlRuntime } from '../src/adapters/production-runtime-controls.js';
 
 function parseArgs(args) {
   const options = {
@@ -187,6 +188,10 @@ export function initializeStartupRegistry(options = {}) {
   return createProjectRegistry();
 }
 
+function buildProductionSurfaceRuntime({ registry, scriptExecutor = null } = {}) {
+  return createProductionControlRuntime({ registry, scriptExecutor });
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const registry = initializeStartupRegistry(options);
@@ -199,8 +204,12 @@ async function main() {
     console.log(`[Rally] Started clean production surface (0 registered projects)`);
   }
 
+  const { browserAdapter, ideAdapters } = buildProductionSurfaceRuntime({ registry });
+
   const { url, close } = await startStatusSurfaceServer({
     registry,
+    browserAdapter,
+    ideAdapters,
     port: options.port,
     host: '127.0.0.1'
   });
@@ -226,4 +235,4 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(im
   });
 }
 
-export { main, parseArgs, populateDemoRegistry };
+export { main, parseArgs, populateDemoRegistry, buildProductionSurfaceRuntime };

@@ -43,7 +43,15 @@ export class ProjectRegistry {
       throw new Error(`Project binding_id "${binding.binding_id}" is already registered`);
     }
 
-    const core = createProjectStatusCore({ binding, initial_endpoints });
+    const core = createProjectStatusCore({
+      binding,
+      initial_endpoints,
+      onMutation: () => {
+        if (this._storagePath) {
+          this.saveToFile(this._storagePath);
+        }
+      }
+    });
     this._projects.set(binding.binding_id, core);
     return core;
   }
@@ -98,6 +106,24 @@ export class ProjectRegistry {
       this.saveToFile(this._storagePath);
     }
     return result;
+  }
+
+  recordProjectActionFact(bindingId, actionParams) {
+    const core = this.getProject(bindingId);
+    const fact = core.recordActionFact(actionParams);
+    if (this._storagePath) {
+      this.saveToFile(this._storagePath);
+    }
+    return fact;
+  }
+
+  advanceProjectActionStage(bindingId, actionId, transitionParams) {
+    const core = this.getProject(bindingId);
+    const updated = core.advanceActionStage(actionId, transitionParams);
+    if (this._storagePath) {
+      this.saveToFile(this._storagePath);
+    }
+    return updated;
   }
 
   exportRegistryData() {
@@ -232,6 +258,12 @@ export class ProjectRegistry {
           core.recordActionFact(act);
         }
       }
+
+      core.setOnMutation(() => {
+        if (this._storagePath) {
+          this.saveToFile(this._storagePath);
+        }
+      });
 
       nextProjects.set(bindingId, core);
     }

@@ -33,12 +33,12 @@ import { formatStatusSnapshot, formatCompactStatus } from './status-view.js';
 
 export { deriveEndpointResult, ALLOWED_ACTION_STAGES };
 
-export function createProjectStatusCore({ binding, initial_endpoints = null }) {
-  return new ProjectStatusCore({ binding, initial_endpoints });
+export function createProjectStatusCore({ binding, initial_endpoints = null, onMutation = null }) {
+  return new ProjectStatusCore({ binding, initial_endpoints, onMutation });
 }
 
 export class ProjectStatusCore {
-  constructor({ binding, initial_endpoints = null }) {
+  constructor({ binding, initial_endpoints = null, onMutation = null }) {
     const validation = validateBinding(binding);
     if (!validation.valid) {
       throw new Error(`Invalid Binding for Status Core: ${validation.errors.join('; ')}`);
@@ -46,6 +46,7 @@ export class ProjectStatusCore {
 
     this._binding = { ...binding };
     this._updatedAt = new Date().toISOString();
+    this._onMutation = typeof onMutation === 'function' ? onMutation : null;
     this._isLegacySingleIdeAuthority = Boolean(
       binding.is_legacy_single_ide ?? (binding.ide && (!Array.isArray(binding.ide_endpoints) || binding.ide_endpoints.length <= 1))
     );
@@ -370,7 +371,9 @@ export class ProjectStatusCore {
     payload = null,
     nonce = null,
     correlation_id = null,
-    evidence = null
+    evidence = null,
+    created_at = null,
+    updated_at = null
   }) {
     const fact = createActionFact({
       action_id,
@@ -381,11 +384,16 @@ export class ProjectStatusCore {
       payload,
       nonce,
       correlation_id,
-      evidence
+      evidence,
+      created_at,
+      updated_at
     });
 
     this._actions.push(fact);
     this._updatedAt = fact.updated_at;
+    if (this._onMutation) {
+      this._onMutation();
+    }
     return fact;
   }
 
@@ -396,7 +404,14 @@ export class ProjectStatusCore {
     }
     const updated = transitionActionStage(action, { next_stage, evidence });
     this._updatedAt = updated.updated_at;
+    if (this._onMutation) {
+      this._onMutation();
+    }
     return updated;
+  }
+
+  setOnMutation(fn) {
+    this._onMutation = typeof fn === 'function' ? fn : null;
   }
 
   updateBinding(nextBinding) {

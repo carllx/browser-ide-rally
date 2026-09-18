@@ -142,3 +142,68 @@ test('[Envelope] 6. 严格校验有界负载 (Bounded Payload Guard: 超出上�
     formatEnvelopeBlock(oversizedEnvelope);
   }, /PAYLOAD_TOO_LARGE/);
 });
+
+test('[Envelope] 7. 严格拦截缺失或失配的 binding_id (Mandatory Binding ID Guard)', () => {
+  const missingBindingIdEnvelope = {
+    version: 1,
+    nonce: 'nonce-nobind',
+    binding_revision: 1,
+    target_endpoint: 'ide-a',
+    operation: 'rally.echo',
+    payload: { text: 'test' }
+  };
+
+  const rawJson = `<RALLY_HANDOFF>\n${JSON.stringify(missingBindingIdEnvelope)}\n</RALLY_HANDOFF>`;
+
+  // 1. 未提供 expectedBindingId，但 envelope 缺失 binding_id -> Fail-Closed
+  assert.throws(() => {
+    extractAndValidateEnvelope(rawJson, {
+      expectedBindingRevision: 1
+    });
+  }, /Mandatory binding_id is required/);
+
+  // 2. 提供了 expectedBindingId，envelope 缺失 binding_id -> Fail-Closed
+  assert.throws(() => {
+    extractAndValidateEnvelope(rawJson, {
+      expectedBindingRevision: 1,
+      expectedBindingId: 'proj-alpha'
+    });
+  }, /Mandatory binding_id is required/);
+
+  // 3. formatEnvelopeBlock 缺失 binding_id -> Fail-Closed
+  assert.throws(() => {
+    formatEnvelopeBlock(missingBindingIdEnvelope);
+  }, /binding_id is required/);
+});
+
+test('[Envelope] 8. 严格核验 IDE 端点世代边界 endpoint_revision', () => {
+  const envWithEpRev = {
+    version: 1,
+    nonce: 'nonce-eprev',
+    binding_id: 'proj-alpha',
+    binding_revision: 1,
+    endpoint_revision: 2,
+    target_endpoint: 'ide-a',
+    operation: 'rally.echo',
+    payload: { text: 'test' }
+  };
+
+  const blockText = formatEnvelopeBlock(envWithEpRev);
+
+  // 期望 endpoint_revision 匹配
+  const parsed = extractAndValidateEnvelope(blockText, {
+    expectedBindingRevision: 1,
+    expectedBindingId: 'proj-alpha',
+    expectedEndpointRevision: 2
+  });
+  assert.equal(parsed.endpoint_revision, 2);
+
+  // 期望 endpoint_revision 失配 -> Fail-Closed
+  assert.throws(() => {
+    extractAndValidateEnvelope(blockText, {
+      expectedBindingRevision: 1,
+      expectedBindingId: 'proj-alpha',
+      expectedEndpointRevision: 3
+    });
+  }, /Stale or mismatched endpoint revision/);
+});

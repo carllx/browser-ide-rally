@@ -88,8 +88,11 @@ export function extractAndValidateEnvelope(rawText, options = {}) {
     throw new Error(`VALIDATION_FAIL: Target endpoint mismatch. Expected "${expectedTargetEndpoint}", got "${parsed.target_endpoint}"`);
   }
 
-  // 5. Binding ID 校验
-  if (expectedBindingId && parsed.binding_id && parsed.binding_id !== expectedBindingId) {
+  // 5. Binding ID 校验 (强制非空，且若提供 expectedBindingId 则必须匹配)
+  if (!parsed.binding_id || typeof parsed.binding_id !== 'string' || !parsed.binding_id.trim()) {
+    throw new Error('VALIDATION_FAIL: Mandatory binding_id is required and must be a non-empty string');
+  }
+  if (expectedBindingId && parsed.binding_id !== expectedBindingId) {
     throw new Error(`VALIDATION_FAIL: Binding ID mismatch. Expected "${expectedBindingId}", got "${parsed.binding_id}"`);
   }
 
@@ -98,6 +101,17 @@ export function extractAndValidateEnvelope(rawText, options = {}) {
     throw new Error(
       `VALIDATION_FAIL: Stale or mismatched binding revision. Expected ${expectedBindingRevision}, got ${parsed.binding_revision}`
     );
+  }
+
+  // 7. Endpoint Revision 校验 (针对 IDE 端点世代边界，若提供 expectedEndpointRevision 且 parsed 携带则必须匹配)
+  if (options.expectedEndpointRevision !== undefined && options.expectedEndpointRevision !== null) {
+    if (parsed.endpoint_revision !== undefined && parsed.endpoint_revision !== null) {
+      if (parsed.endpoint_revision !== options.expectedEndpointRevision) {
+        throw new Error(
+          `VALIDATION_FAIL: Stale or mismatched endpoint revision. Expected ${options.expectedEndpointRevision}, got ${parsed.endpoint_revision}`
+        );
+      }
+    }
   }
 
   // 7. 操作白名单校验 (严禁 shell.exec 等未授权指令)
@@ -133,6 +147,13 @@ export function extractAndValidateEnvelope(rawText, options = {}) {
  * @returns {string}
  */
 export function formatEnvelopeBlock(envelope) {
+  if (!envelope || typeof envelope !== 'object') {
+    throw new Error('VALIDATION_FAIL: envelope must be an object');
+  }
+  if (!envelope.binding_id || typeof envelope.binding_id !== 'string' || !envelope.binding_id.trim()) {
+    throw new Error('VALIDATION_FAIL: binding_id is required and must be a non-empty string in envelope');
+  }
+
   let normalizedPayload = envelope.payload;
   if (typeof normalizedPayload === 'string') {
     normalizedPayload = { text: normalizedPayload };

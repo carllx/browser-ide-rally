@@ -385,18 +385,35 @@ export class ChatGPTBrowserAdapter {
    * @returns {{ ready: boolean, reason?: string }}
    */
   checkComposerPreflight(conversationId) {
+    if (!conversationId || typeof conversationId !== 'string') {
+      throw new Error('CONVERSATION_ID_REQUIRED: conversationId must be a non-empty string');
+    }
     const target = this.locateExactConversationTab(conversationId);
+    const safeConvId = JSON.stringify(conversationId.trim());
     const checkCode = `(() => {
       try {
+        const url = window.location.href;
+        if (!url.includes(${safeConvId})) {
+          return JSON.stringify({ ready: false, reason: 'conversation_url_drift_at_probe_time' });
+        }
         const textarea = document.querySelector('#prompt-textarea');
         const stopBtn = document.querySelector('button[data-testid="stop-button"], button[aria-label="Stop streaming"], button[aria-label="Stop generating"]');
-        return JSON.stringify({
-          hasComposer: !!textarea,
-          isGenerating: !!stopBtn,
-          disabled: textarea ? (textarea.disabled || textarea.getAttribute('aria-disabled') === 'true') : true
-        });
+        const isGenerating = !!stopBtn;
+        const hasComposer = !!textarea;
+        const disabled = textarea ? (textarea.disabled || textarea.getAttribute('aria-disabled') === 'true') : true;
+
+        if (isGenerating) {
+          return JSON.stringify({ ready: false, reason: 'generation_in_progress' });
+        }
+        if (!hasComposer) {
+          return JSON.stringify({ ready: false, reason: 'composer_not_found' });
+        }
+        if (disabled) {
+          return JSON.stringify({ ready: false, reason: 'composer_disabled' });
+        }
+        return JSON.stringify({ ready: true, hasComposer: true, isGenerating: false, disabled: false });
       } catch (e) {
-        return JSON.stringify({ error: e.message });
+        return JSON.stringify({ ready: false, error: e.message });
       }
     })()`;
     const raw = this.runTabJS(target.windowIndex, target.tabIndex, checkCode);
@@ -409,14 +426,8 @@ export class ChatGPTBrowserAdapter {
     if (parsed.error) {
       return { ready: false, reason: `preflight_error: ${parsed.error}` };
     }
-    if (parsed.isGenerating) {
-      return { ready: false, reason: 'generation_in_progress' };
-    }
-    if (!parsed.hasComposer) {
-      return { ready: false, reason: 'composer_not_found' };
-    }
-    if (parsed.disabled) {
-      return { ready: false, reason: 'composer_disabled' };
+    if (!parsed.ready) {
+      return { ready: false, reason: parsed.reason || 'composer_not_ready' };
     }
     return { ready: true };
   }
@@ -425,16 +436,24 @@ export class ChatGPTBrowserAdapter {
    * 安全地向目标会话输入文本并触发发送
    * @param {string} conversationId
    * @param {string} text
-   * @returns {{ accepted: true, textLength: number }}
+   * @returns {{ accepted: true, textLength: number, method: string }}
    */
   sendTextPrompt(conversationId, text) {
+    if (!conversationId || typeof conversationId !== 'string' || !conversationId.trim()) {
+      throw new Error('CONVERSATION_ID_REQUIRED: conversationId must be a non-empty string');
+    }
     if (typeof text !== 'string' || !text.trim()) {
       throw new Error('PROMPT_EMPTY: text must be non-empty string');
     }
     const target = this.locateExactConversationTab(conversationId);
     const safeText = JSON.stringify(text);
+    const safeConvId = JSON.stringify(conversationId.trim());
     const sendCode = `(() => {
       try {
+        const url = window.location.href;
+        if (!url.includes(${safeConvId})) {
+          return JSON.stringify({ success: false, reason: 'conversation_url_drift_before_mutation' });
+        }
         const textarea = document.querySelector('#prompt-textarea');
         if (!textarea) return JSON.stringify({ success: false, reason: 'textarea_not_found' });
         
@@ -477,7 +496,11 @@ export class ChatGPTBrowserAdapter {
     if (!parsed.success) {
       throw new Error(`SEND_FAILED: ${parsed.reason || 'unknown send error'}`);
     }
-    return { accepted: true, textLength: text.length };
+    return { accepted: true, textLength: text.length, method: parsed.method || 'dom_mutation' };
   }
+}
+
+export function createChatGPTBrowserAdapter(options = {}) {
+  return new ChatGPTBrowserAdapter(options);
 }
 

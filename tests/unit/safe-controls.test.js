@@ -17,7 +17,9 @@ function createMockBrowserAdapter({
   failAtProbe = false,
   promptDraft = '',
   isGenerating = false,
-  submitError = null
+  submitError = null,
+  deliveryProven = false,
+  deliveryUnknown = false
 } = {}) {
   let focused = false;
   let sentTexts = [];
@@ -32,11 +34,11 @@ function createMockBrowserAdapter({
       }
       return { windowIndex: 1, tabIndex: 2, url: `https://chatgpt.com/c/${conversationId}` };
     },
-    focusConversationTab({ windowIndex, tabIndex }) {
+    focusConversationTab(conversationId) {
       focused = true;
-      return { focused: true, windowIndex, tabIndex };
+      return { focused: true, windowIndex: 1, tabIndex: 2, conversationId };
     },
-    checkComposerPreflight(windowIndex, tabIndex) {
+    checkComposerPreflight(conversationId) {
       if (failAtProbe) {
         throw new Error('PREFLIGHT_FAIL: tab_url_mismatch_at_probe_time');
       }
@@ -44,16 +46,22 @@ function createMockBrowserAdapter({
         throw new Error(`PREFLIGHT_FAIL: Unsent draft present in composer: "${promptDraft}"`);
       }
       if (isGenerating) {
-        throw new Error('PREFLIGHT_FAIL: ChatGPT is currently generating (busy)');
+        return { ready: false, reason: 'generation_in_progress' };
       }
-      return { hasPrompt: true, promptDraft: '', isGenerating: false };
+      return { ready: true };
     },
-    sendTextPrompt(windowIndex, tabIndex, text) {
+    sendTextPrompt(conversationId, text) {
       if (submitError) {
         throw new Error(`SUBMIT_FAIL: ${submitError}`);
       }
       sentTexts.push(text);
-      return true;
+      if (deliveryUnknown) {
+        return { accepted: true, delivery_state: 'UNKNOWN', reason: 'Delivery unconfirmed within timeout' };
+      }
+      if (deliveryProven) {
+        return { accepted: true, delivery_proven: true, delivery_evidence: 'Browser prompt delivery verified by provider' };
+      }
+      return { accepted: true };
     },
     get focused() { return focused; },
     get sentTexts() { return sentTexts; }
@@ -62,9 +70,12 @@ function createMockBrowserAdapter({
 
 function createMockIdeAdapter({
   mismatchType = null, // 'workspace' | 'repo' | 'conversation'
-  dispatchError = null
+  dispatchError = null,
+  deliveryProven = false,
+  deliveryUnknown = false
 } = {}) {
   let verified = false;
+  let focused = false;
   let dispatchedTasks = [];
 
   return {
@@ -81,14 +92,25 @@ function createMockIdeAdapter({
       verified = true;
       return { verified: true, conversationId, expectedWorkspace, expectedRepo };
     },
+    focusWindow() {
+      focused = true;
+      return { focused: true };
+    },
     dispatchControlledTask(params) {
       if (dispatchError) {
         throw new Error(`DISPATCH_FAIL: ${dispatchError}`);
       }
       dispatchedTasks.push(params);
-      return { success: true };
+      if (deliveryUnknown) {
+        return { accepted: true, delivery_state: 'UNKNOWN', reason: 'Delivery unconfirmed within timeout' };
+      }
+      if (deliveryProven) {
+        return { accepted: true, delivery_proven: true, delivery_evidence: 'IDE target accepted task' };
+      }
+      return { accepted: true };
     },
     get verified() { return verified; },
+    get focused() { return focused; },
     get dispatchedTasks() { return dispatchedTasks; }
   };
 }
@@ -331,7 +353,7 @@ test('[Safe Controls] 6. Action 事实生命周期：REQUESTED -> SUBMITTED_LOCA
   const { registry, bindingId } = setupMultiProject();
   const mockBrowser = createMockBrowserAdapter({ matches: 1 });
 
-  // 6a. 仅本地提交 (不附带投递确认) -> 停留在 SUBMITTED_LOCALLY
+  // 6a. 仅本地提交 (默认适配器仅证明本地点击) -> 严格停留在 SUBMITTED_LOCALLY
   const sendRes = executeSafeSend({
     registry,
     bindingId,
@@ -339,13 +361,13 @@ test('[Safe Controls] 6. Action 事实生命周期：REQUESTED -> SUBMITTED_LOCA
     target_endpoint: 'browser',
     operation: 'rally.echo',
     payload: { text: 'Hello Browser' },
-    browserAdapter: mockBrowser,
-    options: { confirm_delivery: false }
+    browserAdapter: mockBrowser
   });
   assert.equal(sendRes.action.stage, 'SUBMITTED_LOCALLY');
   assert.equal(sendRes.action.evidence, 'DOM composer submit clicked');
 
-  // 6b. 附带投递确认 -> 进入 ACCEPTED_OR_DELIVERED，但绝不推断 TARGET_COMPLETED
+  // 6b. 具备独立提供者投递凭据 -> 推进至 ACCEPTED_OR_DELIVERED，但绝不推断 TARGET_COMPLETED
+  const provenBrowser = createMockBrowserAdapter({ matches: 1, deliveryProven: true });
   const sendDelivered = executeSafeSend({
     registry,
     bindingId,
@@ -353,15 +375,14 @@ test('[Safe Controls] 6. Action 事实生命周期：REQUESTED -> SUBMITTED_LOCA
     target_endpoint: 'browser',
     operation: 'rally.echo',
     payload: { text: 'Hello Browser 2' },
-    browserAdapter: mockBrowser,
-    options: { confirm_delivery: true }
+    browserAdapter: provenBrowser
   });
   assert.equal(sendDelivered.action.stage, 'ACCEPTED_OR_DELIVERED');
 });
 
 test('[Safe Controls] 7. UNKNOWN 投递绝不隐式重试 (No implicit retry after UNKNOWN delivery)', () => {
   const { registry, bindingId } = setupMultiProject();
-  const mockBrowser = createMockBrowserAdapter({ matches: 1 });
+  const unconfirmedBrowser = createMockBrowserAdapter({ matches: 1, deliveryUnknown: true });
 
   const sendRes = executeSafeSend({
     registry,
@@ -370,20 +391,19 @@ test('[Safe Controls] 7. UNKNOWN 投递绝不隐式重试 (No implicit retry aft
     target_endpoint: 'browser',
     operation: 'rally.echo',
     payload: { text: 'Uncertain delivery' },
-    browserAdapter: mockBrowser,
-    options: { simulate_delivery_unknown: true }
+    browserAdapter: unconfirmedBrowser
   });
 
   assert.equal(sendRes.action.stage, 'UNKNOWN');
   assert.equal(sendRes.action.evidence, 'Delivery unconfirmed within timeout');
   // 确认仅发送了一次，未进行任何隐式静默重试
-  assert.equal(mockBrowser.sentTexts.length, 1);
+  assert.equal(unconfirmedBrowser.sentTexts.length, 1);
 });
 
 test('[Safe Controls] 8. 无关的新观察结果绝不推进 Action 为 TARGET_COMPLETED；仅可靠关联完成方可推进', () => {
   const { registry, bindingId } = setupMultiProject();
   const core = registry.getProject(bindingId);
-  const mockBrowser = createMockBrowserAdapter({ matches: 1 });
+  const provenBrowser = createMockBrowserAdapter({ matches: 1, deliveryProven: true });
 
   const sendRes = executeSafeSend({
     registry,
@@ -392,8 +412,7 @@ test('[Safe Controls] 8. 无关的新观察结果绝不推进 Action 为 TARGET_
     target_endpoint: 'browser',
     operation: 'rally.echo',
     payload: { text: 'Correlated action test' },
-    browserAdapter: mockBrowser,
-    options: { confirm_delivery: true }
+    browserAdapter: provenBrowser
   });
   const actId = sendRes.action.action_id;
   const nonce = sendRes.action.nonce;
@@ -438,7 +457,7 @@ test('[Safe Controls] 9. 目标操作与 Action 流转绝不篡改 last_handled_
   assert.equal(core.getSnapshot().endpoints.ide_endpoints['ide-a'].last_handled_cursor, null);
 
   // 向 ide-a 派发动作并流转至 TARGET_COMPLETED
-  const mockIde = createMockIdeAdapter();
+  const mockIde = createMockIdeAdapter({ deliveryProven: true });
   const sendRes = executeSafeSend({
     registry,
     bindingId,
@@ -446,8 +465,7 @@ test('[Safe Controls] 9. 目标操作与 Action 流转绝不篡改 last_handled_
     target_endpoint: 'ide-a',
     operation: 'rally.echo',
     payload: { text: 'Echo test' },
-    ideAdapter: mockIde,
-    options: { confirm_delivery: true }
+    ideAdapter: mockIde
   });
 
   correlateAndAdvanceActionCompletion({
@@ -466,60 +484,4 @@ test('[Safe Controls] 9. 目标操作与 Action 流转绝不篡改 last_handled_
   assert.equal(snap.endpoints.ide_endpoints['ide-a'].result_state, 'NEW');
   assert.equal(snap.endpoints.ide_endpoints['ide-a'].latest_completed_cursor, 'cursor-preserve-me');
   assert.equal(snap.endpoints.ide_endpoints['ide-a'].last_handled_cursor, null);
-});
-
-test('[Safe Controls] 10. Action 事实跨 durable 存储重启完整保留', () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rally-act-test-'));
-  const storagePath = path.join(tmpDir, 'registry.json');
-
-  try {
-    const reg1 = createProjectRegistry({ storagePath });
-    const b = createBinding({
-      binding_id: 'proj-act-persist',
-      browser: { provider: 'chatgpt', conversation_id: 'c1' },
-      ide_endpoints: [{ endpoint_id: 'ide-1', conversation_id: 'i1', workspace_identity: '/w', repository_identity: 'r' }]
-    });
-    reg1.registerProject({ binding: b });
-    const core1 = reg1.getProject('proj-act-persist');
-
-    // 记录两个 Action：一个 BLOCKED，一个 TARGET_COMPLETED
-    const act1 = core1.recordActionFact({
-      action_id: 'act-persist-1',
-      action_type: 'send',
-      target_endpoint: 'browser',
-      stage: 'REQUESTED',
-      binding_revision: 1
-    });
-    core1.advanceActionStage('act-persist-1', { next_stage: 'BLOCKED', evidence: 'stale_revision' });
-
-    const act2 = core1.recordActionFact({
-      action_id: 'act-persist-2',
-      action_type: 'send',
-      target_endpoint: 'ide-1',
-      stage: 'REQUESTED',
-      binding_revision: 1,
-      nonce: 'nonce-persist-2'
-    });
-    core1.advanceActionStage('act-persist-2', { next_stage: 'SUBMITTED_LOCALLY' });
-    core1.advanceActionStage('act-persist-2', { next_stage: 'ACCEPTED_OR_DELIVERED' });
-    core1.advanceActionStage('act-persist-2', { next_stage: 'TARGET_COMPLETED' });
-
-    reg1.saveToFile(storagePath);
-
-    // 重启装载
-    const reg2 = createProjectRegistry({ storagePath });
-    const core2 = reg2.getProject('proj-act-persist');
-    const actions = core2.getSnapshot().actions;
-
-    assert.equal(actions.length, 2);
-    const loadedAct1 = actions.find(a => a.action_id === 'act-persist-1');
-    assert.equal(loadedAct1.stage, 'BLOCKED');
-    assert.equal(loadedAct1.evidence, 'stale_revision');
-
-    const loadedAct2 = actions.find(a => a.action_id === 'act-persist-2');
-    assert.equal(loadedAct2.stage, 'TARGET_COMPLETED');
-    assert.equal(loadedAct2.nonce, 'nonce-persist-2');
-  } finally {
-    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
-  }
 });

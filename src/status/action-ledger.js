@@ -41,7 +41,9 @@ export function createActionFact({
   payload = null,
   nonce = null,
   correlation_id = null,
-  evidence = null
+  evidence = null,
+  created_at = null,
+  updated_at = null
 }) {
   if (!action_id || typeof action_id !== 'string') {
     throw new Error('action_id is required and must be a string');
@@ -61,8 +63,8 @@ export function createActionFact({
     nonce: nonce || null,
     correlation_id: correlation_id || null,
     evidence,
-    created_at: now,
-    updated_at: now
+    created_at: created_at || now,
+    updated_at: updated_at || now
   };
 }
 
