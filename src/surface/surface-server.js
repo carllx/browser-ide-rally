@@ -152,10 +152,7 @@ export function createStatusSurfaceRequestHandler({ registry, browserAdapter = n
       }
     }
 
-    // 3b. POST /api/projects/:bindingId/human-intervention/assert: 显式声明人工介入 (带版本锁与持久化)
-    const assertHumanMatch = pathname.match(/^\/api\/projects\/([^/]+)\/human-intervention\/assert$/);
-    if (method === 'POST' && assertHumanMatch) {
-      const bindingId = decodeURIComponent(assertHumanMatch[1]);
+    async function handleHumanInterventionMutation(bindingId, mutateFn) {
       let body = {};
       try {
         body = await parseBody(req);
@@ -168,12 +165,7 @@ export function createStatusSurfaceRequestHandler({ registry, browserAdapter = n
       }
 
       try {
-        const result = registry.setProjectHumanIntervention(bindingId, {
-          active: true,
-          reason: body.reason || null,
-          expected_binding_revision: body.expected_binding_revision
-        });
-
+        const result = mutateFn(body);
         const snapshot = registry.getProject(bindingId).getSnapshot();
         return sendJson(res, 200, {
           success: true,
@@ -185,35 +177,28 @@ export function createStatusSurfaceRequestHandler({ registry, browserAdapter = n
       }
     }
 
+    // 3b. POST /api/projects/:bindingId/human-intervention/assert: 显式声明人工介入 (带版本锁与持久化)
+    const assertHumanMatch = pathname.match(/^\/api\/projects\/([^/]+)\/human-intervention\/assert$/);
+    if (method === 'POST' && assertHumanMatch) {
+      const bindingId = decodeURIComponent(assertHumanMatch[1]);
+      return handleHumanInterventionMutation(bindingId, (body) =>
+        registry.setProjectHumanIntervention(bindingId, {
+          active: true,
+          reason: body.reason || null,
+          expected_binding_revision: body.expected_binding_revision
+        })
+      );
+    }
+
     // 3c. POST /api/projects/:bindingId/human-intervention/clear: 清除人工介入 (带版本锁与持久化)
     const clearHumanMatch = pathname.match(/^\/api\/projects\/([^/]+)\/human-intervention\/clear$/);
     if (method === 'POST' && clearHumanMatch) {
       const bindingId = decodeURIComponent(clearHumanMatch[1]);
-      let body = {};
-      try {
-        body = await parseBody(req);
-      } catch (err) {
-        return sendJson(res, 400, { success: false, reason: err.message });
-      }
-
-      if (!registry.hasProject(bindingId)) {
-        return sendJson(res, 404, { success: false, reason: `Project "${bindingId}" not found` });
-      }
-
-      try {
-        const result = registry.clearProjectHumanIntervention(bindingId, {
+      return handleHumanInterventionMutation(bindingId, (body) =>
+        registry.clearProjectHumanIntervention(bindingId, {
           expected_binding_revision: body.expected_binding_revision
-        });
-
-        const snapshot = registry.getProject(bindingId).getSnapshot();
-        return sendJson(res, 200, {
-          success: true,
-          human_intervention: result.human_intervention,
-          project: snapshot
-        });
-      } catch (err) {
-        return handleControlError(res, err);
-      }
+        })
+      );
     }
 
 function handleControlError(res, err, defaultStage = 'BLOCKED') {

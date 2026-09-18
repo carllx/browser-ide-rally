@@ -14,6 +14,7 @@
 import { SURFACE_CSS } from './surface-styles.js';
 import { ATTENTION_TRAY_CSS } from './attention-styles.js';
 import { SURFACE_CLIENT_JS } from './surface-client.js';
+import { ATTENTION_CLIENT_JS } from './attention-client.js';
 import { renderAttentionTrayHtml } from './attention-template.js';
 
 function escapeHtml(str) {
@@ -400,6 +401,7 @@ export function renderStatusSurfaceHtml({ projects = [], attentionTray = null } 
   </div>
 
   <script>${SURFACE_CLIENT_JS}</script>
+  <script>${ATTENTION_CLIENT_JS}</script>
 </body>
 </html>
 `;
