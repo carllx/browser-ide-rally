@@ -56,7 +56,6 @@ export function projectStatusSurface(snapshot) {
     last_handled_cursor: browserHandledCursor,
     completed_at: browserFact?.completed_at ?? null,
     result_ref: browserFact?.latest_completed_result?.result_ref || null,
-    has_result_material: Boolean(browserFact?.latest_completed_result && typeof browserFact.latest_completed_result === 'object'),
     continuity: {
       trusted: browserTrusted,
       unknown_reason: browserFact?.continuity?.unknown_reason ?? null
@@ -107,7 +106,6 @@ export function projectStatusSurface(snapshot) {
       last_handled_cursor: epHandledCursor,
       completed_at: epFact?.completed_at ?? null,
       result_ref: epFact?.latest_completed_result?.result_ref || null,
-      has_result_material: Boolean(epFact?.latest_completed_result && typeof epFact?.latest_completed_result === 'object'),
       continuity: {
         trusted: epTrusted,
         unknown_reason: epFact?.continuity?.unknown_reason ?? null

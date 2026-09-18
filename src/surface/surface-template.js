@@ -48,6 +48,7 @@ function renderEndpointCard(ep, bindingId, bindingRevision, roleLabel) {
     <div class="endpoint-meta-grid">
       <div><span class="meta-label">最新完成游标:</span> <code>${escapeHtml(ep.latest_completed_cursor ?? '(无)')}</code></div>
       <div><span class="meta-label">已处理游标:</span> <code class="meta-handled-cursor">${escapeHtml(ep.last_handled_cursor ?? '(无)')}</code></div>
+      <div><span class="meta-label">完成时间:</span> <code>${escapeHtml(ep.completed_at ?? '(无)')}</code></div>
       <div><span class="meta-label">结果引用:</span> <code>${escapeHtml(ep.result_ref ?? '(无)')}</code></div>
       <div><span class="meta-label">受信状态:</span> <span>${ep.continuity?.trusted ? '受信 (Trusted)' : '未受信 (Untrusted)'}</span></div>
     </div>

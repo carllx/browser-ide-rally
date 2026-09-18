@@ -175,11 +175,6 @@ export function parseTranscriptCompletedTurns(transcriptPath) {
       } else if (step.content && typeof step.content.text === 'string') {
         turnText = step.content.text;
       }
-
-      if (typeof turnText !== 'string') {
-        continue;
-      }
-
       turns.push({
         stepIndex: step.step_index,
         fingerprint: deriveStepFingerprint(step),
@@ -352,7 +347,6 @@ export class AntigravityIdeAdapter {
     const latestTurn = turns[turns.length - 1];
     const opaqueCursor = encodeOpaqueCursor(latestTurn.stepIndex, latestTurn.fingerprint);
     const completedAt = latestTurn.createdAt || new Date().toISOString();
-    const resultRef = deriveProductSafeResultRef(this._endpointId, opaqueCursor);
 
     const observation = this._buildObservation({
       trusted: true,
@@ -438,7 +432,6 @@ export class AntigravityIdeAdapter {
           const effectiveTurn = subsequentTurns.length > 0 ? subsequentTurns[subsequentTurns.length - 1] : matchingTurn;
           const effectiveCursor = encodeOpaqueCursor(effectiveTurn.stepIndex, effectiveTurn.fingerprint);
           const completedAt = effectiveTurn.createdAt || ideFact.completed_at || new Date().toISOString();
-          const resultRef = deriveProductSafeResultRef(this._endpointId, effectiveCursor);
 
           this._statusCore.recordEndpointObservation(
             this._endpointId,

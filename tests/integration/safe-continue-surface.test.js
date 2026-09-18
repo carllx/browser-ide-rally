@@ -187,7 +187,6 @@ test('Surface Integration — 3. Surface 投影与 HTML 模板包含 Continue �
 
   // 验证 Projection 不泄露完整 text
   assert.strictEqual(projection.browser.result_ref, 'res_br_safe_ref');
-  assert.strictEqual(projection.browser.has_result_material, true);
   assert.strictEqual('text' in projection.browser, false);
   assert.strictEqual(JSON.stringify(projection).includes('SECRET RAW BODY TEXT'), false);
 
