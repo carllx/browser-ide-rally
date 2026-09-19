@@ -1,0 +1,11 @@
+{
+  "rally-ide-stop-hook": {
+    "Stop": [
+      {
+        "type": "command",
+        "command": "node \"$(if [ -f ./scripts/antigravity-stop-hook.mjs ]; then echo ./scripts/antigravity-stop-hook.mjs; else echo ../scripts/antigravity-stop-hook.mjs; fi)\"",
+        "timeout": 5
+      }
+    ]
+  }
+}

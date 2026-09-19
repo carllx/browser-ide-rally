@@ -50,6 +50,8 @@ export class ObservationRuntimeCoordinator {
       pollIntervalMs,
       logger
     });
+
+    this._stopped = false;
   }
 
   get browserDriver() {
@@ -65,6 +67,9 @@ export class ObservationRuntimeCoordinator {
    * @param {object} hookPayload
    */
   handleAntigravityHook(hookPayload) {
+    if (this._stopped) {
+      return { accepted: false, reason: 'runtime_stopped' };
+    }
     return this._hookIngress.handleHook(hookPayload);
   }
 
@@ -124,6 +129,9 @@ export class ObservationRuntimeCoordinator {
    */
   async start() {
     this._logger?.log?.('[ObservationRuntimeCoordinator] Starting observation runtime...');
+    this._stopped = false;
+    this._hookIngress.resume();
+
     // 1. 启动时执行一次 IDE 端点核验
     this.reconcileAllIdeEndpointsOnStartup();
 
@@ -136,6 +144,8 @@ export class ObservationRuntimeCoordinator {
    */
   stop() {
     this._logger?.log?.('[ObservationRuntimeCoordinator] Stopping observation runtime...');
+    this._stopped = true;
+    this._hookIngress.stop();
     this._browserDriver.stop();
   }
 }
