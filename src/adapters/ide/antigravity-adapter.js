@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { resolveDefaultAntigravityTranscriptPath } from './transcript-paths.js';
 
 export const FINAL_TERMINATION_REASONS = [
   'NO_TOOL_CALL'
@@ -287,12 +288,12 @@ export class AntigravityIdeAdapter {
 
     const {
       conversationId,
-      workspacePaths,
       fullyIdle,
       terminationReason,
       transcriptPath
     } = hookPayload;
 
+    const workspaceList = hookPayload.workspacePaths || hookPayload.workspacePath;
     const expectedIde = this._ideIdentity;
 
     if (!conversationId || conversationId !== expectedIde.conversation_id) {
@@ -302,13 +303,13 @@ export class AntigravityIdeAdapter {
       };
     }
 
-    if (!matchesWorkspace(workspacePaths, expectedIde.workspace_identity)) {
+    if (!matchesWorkspace(workspaceList, expectedIde.workspace_identity)) {
       const reason = `workspace_mismatch: expected ${expectedIde.workspace_identity}`;
       this._failClosedToUnknown(reason);
       return { accepted: false, reason };
     }
 
-    const matchedWorkspace = (Array.isArray(workspacePaths) ? workspacePaths : [workspacePaths])
+    const matchedWorkspace = (Array.isArray(workspaceList) ? workspaceList : [workspaceList])
       .find(w => normalizePath(w) === normalizePath(expectedIde.workspace_identity));
     if (!matchesRepository(matchedWorkspace, expectedIde.repository_identity)) {
       const reason = `repository_mismatch: expected ${expectedIde.repository_identity}`;
@@ -329,12 +330,14 @@ export class AntigravityIdeAdapter {
       return { accepted: false, reason };
     }
 
-    if (!isProvenAntigravityTranscript(transcriptPath, expectedIde.conversation_id)) {
+    const effectiveTranscriptPath = transcriptPath || resolveDefaultAntigravityTranscriptPath(expectedIde.conversation_id);
+
+    if (!isProvenAntigravityTranscript(effectiveTranscriptPath, expectedIde.conversation_id)) {
       this._failClosedToUnknown('transcript_provenance_unverified: official transcriptPath missing or does not prove ownership of bound conversation');
       return { accepted: false, reason: 'transcript_provenance_unverified' };
     }
 
-    const turns = parseTranscriptCompletedTurns(transcriptPath);
+    const turns = parseTranscriptCompletedTurns(effectiveTranscriptPath);
     if (turns.length === 0) {
       this._failClosedToUnknown('no_completed_turns_found: transcript has no completed turn');
       return { accepted: false, reason: 'no_completed_turns_found' };
