@@ -212,7 +212,7 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
         const oldIde = projectBefore?.binding?.ide_endpoints?.find(e => e.endpoint_id === body.target_endpoint);
         const isIde = body.target_endpoint !== 'browser';
         const mgr = observationCoordinator?.workspaceHookManager;
-        let hookInstalled = false;
+        let newlySubscribed = false;
 
         // 1. 若为 IDE 端点重绑定，操作前先确立目标工作区 Hook 与订阅；若安装失败则直接拦截，防止残缺落盘
         if (isIde && mgr && normalizedIdentity?.workspace_identity && normalizedIdentity?.conversation_id) {
@@ -220,10 +220,10 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
           if (!hookRes.success) {
             throw new Error(`WORKSPACE_HOOK_FAILED: ${hookRes.reason}`);
           }
-          hookInstalled = true;
+          newlySubscribed = hookRes.newlySubscribed === true;
         }
 
-        // 2. 执行规范 Rebind（失败时回滚预装 hook）
+        // 2. 执行规范 Rebind（失败时仅撤销本次真正新增的订阅，绝不删除原本存在的有效订阅）
         let result;
         try {
           result = executeSafeRebind({
@@ -240,7 +240,7 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
             }
           });
         } catch (rebindErr) {
-          if (hookInstalled && mgr) {
+          if (newlySubscribed && mgr) {
             mgr.removeWorkspaceHook(normalizedIdentity.workspace_identity, normalizedIdentity.conversation_id);
           }
           throw rebindErr;

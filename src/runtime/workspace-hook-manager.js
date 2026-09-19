@@ -246,7 +246,8 @@ export class WorkspaceHookManager {
     const allowlistData = this._readAllowlist(allowlistPath);
 
     const convs = Array.isArray(allowlistData.conversations) ? allowlistData.conversations : [];
-    if (!convs.includes(cleanConvId)) {
+    const isNewSubscription = !convs.includes(cleanConvId);
+    if (isNewSubscription) {
       convs.push(cleanConvId);
     }
     allowlistData.conversations = convs;
@@ -257,7 +258,8 @@ export class WorkspaceHookManager {
     return {
       success: true,
       workspacePath: resolvedWs,
-      conversationId: cleanConvId
+      conversationId: cleanConvId,
+      newlySubscribed: isNewSubscription
     };
   }
 
