@@ -251,4 +251,49 @@ describe('BrowserObservationDriver', () => {
     driver.stop();
     assert.equal(driver.isRunning(), false);
   });
+
+  it('suppresses redundant recording when repeated observations remain untrusted / disconnected', async () => {
+    const project = setupProject('proj-untrusted', 'browser-conv-untrusted');
+
+    let recordCallCount = 0;
+    const originalRecord = project.recordEndpointObservation.bind(project);
+    project.recordEndpointObservation = (...args) => {
+      recordCallCount++;
+      return originalRecord(...args);
+    };
+
+    mockBrowserAdapter = {
+      observeBrowserEndpoint: () => ({
+        conversation_id: 'browser-conv-untrusted',
+        trusted: false,
+        continuity_lost: true,
+        reason: 'tab_closed_or_not_found',
+        latest_completed_cursor: null,
+        is_generating: false,
+        should_record: true
+      })
+    };
+
+    driver = new BrowserObservationDriver({
+      registry,
+      browserAdapter: mockBrowserAdapter,
+      pollIntervalMs: 1000
+    });
+
+    // 第一次轮询：从未观察过 -> 记录 UNKNOWN (recordCallCount = 1)
+    const firstPoll = await driver.pollOnce();
+    assert.equal(firstPoll.recordedCount, 1);
+    assert.equal(recordCallCount, 1);
+
+    // 第二次轮询：依然是 tab_closed_or_not_found -> 防重写拦截，绝不反复重写磁盘！
+    const secondPoll = await driver.pollOnce();
+    assert.equal(secondPoll.recordedCount, 0);
+    assert.equal(secondPoll.skippedCount, 1);
+    assert.equal(recordCallCount, 1);
+
+    // 第三次轮询：依然拦截
+    const thirdPoll = await driver.pollOnce();
+    assert.equal(thirdPoll.recordedCount, 0);
+    assert.equal(recordCallCount, 1);
+  });
 });

@@ -21,17 +21,22 @@ export function isObservationUnchanged(currentBrowserSnapshot, newObservation) {
 
   const currentTrusted = Boolean(currentBrowserSnapshot.continuity?.trusted);
   const nextTrusted = Boolean(newObservation.trusted);
+
+  // 1. 若当前未受信且新观察也未受信：
+  // 端点处于 UNKNOWN 状态且未恢复受信任，若未受信原因相同，跳过重复写盘；防止断开连接或找不到标签页时持续无限重写
+  if (!currentTrusted && !nextTrusted) {
+    const currentReason = currentBrowserSnapshot.continuity?.unknown_reason ?? null;
+    const nextReason = newObservation.reason ?? newObservation.error ?? (newObservation.continuity_lost ? 'continuity_lost' : null);
+    return currentReason === nextReason;
+  }
+
+  // 2. 受信任状态发生跃迁 (true <-> false)：必须录入 Core
   if (currentTrusted !== nextTrusted) return false;
 
+  // 3. 两者均受信任：比较最新完成游标
   const currentCursor = currentBrowserSnapshot.latest_completed_cursor ?? null;
   const nextCursor = newObservation.latest_completed_cursor ?? null;
-  if (currentCursor !== nextCursor) return false;
-
-  const currentLost = Boolean(currentBrowserSnapshot.continuity?.unknown_reason && !currentTrusted);
-  const nextLost = Boolean(newObservation.continuity_lost);
-  if (currentLost !== nextLost) return false;
-
-  return true;
+  return currentCursor === nextCursor;
 }
 
 export class BrowserObservationDriver {

@@ -222,12 +222,16 @@ async function main() {
 
   const { browserAdapter, ideAdapters } = buildProductionSurfaceRuntime({ registry });
 
-  const pollIntervalMs = parseInt(process.env.RALLY_BROWSER_POLL_INTERVAL_MS, 10) || 2000;
-  const observationCoordinator = createObservationRuntimeCoordinator({
-    registry,
-    browserAdapter,
-    pollIntervalMs
-  });
+  // 仅在生产模式（非 --demo）下启动真实端点观察运行时，防止冲刷演示数据或向外部发起轮询
+  let observationCoordinator = null;
+  if (!options.demo) {
+    const pollIntervalMs = parseInt(process.env.RALLY_BROWSER_POLL_INTERVAL_MS, 10) || 2000;
+    observationCoordinator = createObservationRuntimeCoordinator({
+      registry,
+      browserAdapter,
+      pollIntervalMs
+    });
+  }
 
   const { url, close } = await startStatusSurfaceServer({
     registry,
@@ -238,7 +242,9 @@ async function main() {
     host: '127.0.0.1'
   });
 
-  await observationCoordinator.start();
+  if (observationCoordinator) {
+    await observationCoordinator.start();
+  }
 
   console.log(`[Rally] Status Surface listening at ${url}`);
   console.log(`[Rally] Press Ctrl+C to shut down.`);
@@ -250,7 +256,9 @@ async function main() {
     }
     isShuttingDown = true;
     console.log('\n[Rally] Shutting down Status Surface...');
-    observationCoordinator.stop();
+    if (observationCoordinator) {
+      observationCoordinator.stop();
+    }
     const forceExitTimer = setTimeout(() => {
       process.exit(0);
     }, 300);

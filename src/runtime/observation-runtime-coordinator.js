@@ -13,6 +13,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { BrowserObservationDriver } from './browser-observation-driver.js';
 import { AntigravityHookIngress } from './antigravity-hook-ingress.js';
+import { resolveDefaultAntigravityTranscriptPath } from '../adapters/ide/antigravity-adapter.js';
 
 export class ObservationRuntimeCoordinator {
   /**
@@ -95,9 +96,7 @@ export class ObservationRuntimeCoordinator {
           continue;
         }
 
-        const transcriptPath = effectiveBaseDir
-          ? path.join(effectiveBaseDir, convId, '.system_generated', 'logs', 'transcript.jsonl')
-          : path.join(os.homedir(), '.gemini', 'antigravity', 'brain', convId, '.system_generated', 'logs', 'transcript.jsonl');
+        const transcriptPath = resolveDefaultAntigravityTranscriptPath(convId, effectiveBaseDir);
 
         try {
           const adapter = this._hookIngress.getOrCreateAdapter({ bindingId, endpointId });
