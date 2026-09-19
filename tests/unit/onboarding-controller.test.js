@@ -92,6 +92,14 @@ test('[Onboarding Controller] 1. URL 解析：准确解析标准/GPTs/带参数�
   }, /Invalid ChatGPT conversation URL/i);
 
   assert.throws(() => {
+    parseChatGPTConversationUrl('/c/conv-relative-path-123');
+  }, /Invalid ChatGPT conversation URL/i);
+
+  assert.throws(() => {
+    parseChatGPTConversationUrl('conv-plain-id-only');
+  }, /Invalid ChatGPT conversation URL/i);
+
+  assert.throws(() => {
     parseChatGPTConversationUrl('');
   }, /Invalid ChatGPT conversation URL/i);
 });

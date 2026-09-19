@@ -40,7 +40,7 @@ export function parseChatGPTConversationUrl(url) {
   }
 
   const cleaned = url.trim();
-  const pattern = /^(?:https?:\/\/(?:chatgpt\.com|chat\.openai\.com))?\/(?:g\/[^\/]+\/)?c\/([a-zA-Z0-9_-]+)(?:[?#\/]|$)/i;
+  const pattern = /^https?:\/\/(?:chatgpt\.com|chat\.openai\.com)\/(?:g\/[^\/]+\/)?c\/([a-zA-Z0-9_-]+)(?:[?#\/]|$)/i;
   const match = cleaned.match(pattern);
 
   if (!match || !match[1]) {

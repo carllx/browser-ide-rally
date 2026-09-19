@@ -52,10 +52,9 @@ export class ProjectRegistry {
 
     for (const [existingId, existingCore] of this._projects.entries()) {
       const existingBinding = existingCore.getBinding();
-      if (newDisplayName && existingBinding.display_name) {
-        if (existingBinding.display_name.trim().toLowerCase() === newDisplayName) {
-          throw new Error(`Project display_name "${binding.display_name}" is already registered in project "${existingId}"`);
-        }
+      const existingEffectiveName = (existingBinding.display_name || existingBinding.binding_id || '').trim().toLowerCase();
+      if (newDisplayName && existingEffectiveName && existingEffectiveName === newDisplayName) {
+        throw new Error(`Project display_name "${binding.display_name}" is already registered in project "${existingId}"`);
       }
 
       if (newBrowserConvId && existingBinding.browser?.conversation_id?.trim() === newBrowserConvId) {

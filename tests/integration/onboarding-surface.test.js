@@ -53,6 +53,49 @@ describe('Onboarding Surface 集成测试', () => {
     }
   };
 
+  const mockAgentMetadata = {
+    'conv-ide-alpha': {
+      response: {
+        conversationMetadata: {
+          metadata: {
+            workspaces: [
+              {
+                workspaceFolderAbsoluteUri: '/Users/test/projects/alpha',
+                repository: { computedName: 'carllx/browser-ide-rally' }
+              }
+            ]
+          }
+        }
+      }
+    },
+    'conv-ide-beta': {
+      response: {
+        conversationMetadata: {
+          metadata: {
+            workspaces: [
+              {
+                workspaceFolderAbsoluteUri: '/Users/test/projects/beta',
+                repository: { computedName: 'carllx/secondary-repo' }
+              }
+            ]
+          }
+        }
+      }
+    }
+  };
+
+  const mockAgentApiExecutor = (binPath, args) => {
+    const cmd = args[0];
+    const convId = args[1];
+    if (cmd === 'get-conversation-metadata') {
+      if (!mockAgentMetadata[convId]) {
+        throw new Error(`Antigravity conversation "${convId}" not found`);
+      }
+      return JSON.stringify(mockAgentMetadata[convId]);
+    }
+    throw new Error(`Unsupported mock command: ${cmd}`);
+  };
+
   before(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rally-onboarding-surface-'));
     storageFile = path.join(tmpDir, 'durable-registry.json');
@@ -61,6 +104,7 @@ describe('Onboarding Surface 集成测试', () => {
     serverHandle = await startStatusSurfaceServer({
       registry,
       browserAdapter: mockBrowserAdapter,
+      agentApiExecutor: mockAgentApiExecutor,
       port: 0
     });
     baseUrl = serverHandle.url;
@@ -120,9 +164,7 @@ describe('Onboarding Surface 集成测试', () => {
   });
 
   it('3. POST /api/onboarding/create 成功创建首个真实项目，确立基线且落盘', async () => {
-    // 首次注册项目 Alpha
-    // 使用当前正在执行的真实 Antigravity conversation ID，证明生产元数据接通
-    const realIdeConvId = 'b1b193e3-1b2d-4f5c-abee-38efb8179254';
+    const ideConvId = 'conv-ide-alpha';
 
     // 1. 先调用 verify
     const verifyRes = await fetch(`${baseUrl}/api/onboarding/verify`, {
@@ -131,7 +173,7 @@ describe('Onboarding Surface 集成测试', () => {
       body: JSON.stringify({
         display_name: 'Rally Alpha Project',
         browser_url: 'https://chatgpt.com/c/conv-browser-alpha',
-        ide_conversation_id: realIdeConvId
+        ide_conversation_id: ideConvId
       })
     });
     assert.equal(verifyRes.status, 200);
@@ -139,7 +181,7 @@ describe('Onboarding Surface 集成测试', () => {
     assert.equal(verifyJson.success, true);
     assert.equal(verifyJson.preview.display_name, 'Rally Alpha Project');
     assert.equal(verifyJson.preview.browser.conversation_id, 'conv-browser-alpha');
-    assert.equal(verifyJson.preview.ide.conversation_id, realIdeConvId);
+    assert.equal(verifyJson.preview.ide.conversation_id, ideConvId);
     assert.equal(verifyJson.preview.ide.repository_identity, 'carllx/browser-ide-rally');
 
     // 2. 调用 create
@@ -149,7 +191,7 @@ describe('Onboarding Surface 集成测试', () => {
       body: JSON.stringify({
         display_name: 'Rally Alpha Project',
         browser_url: 'https://chatgpt.com/c/conv-browser-alpha',
-        ide_conversation_id: realIdeConvId
+        ide_conversation_id: ideConvId
       })
     });
     assert.equal(createRes.status, 201);
@@ -181,7 +223,7 @@ describe('Onboarding Surface 集成测试', () => {
   });
 
   it('4. 重复注册拦截：重复 Display Name 或端点会话一律被拒', async () => {
-    const realIdeConvId = 'b1b193e3-1b2d-4f5c-abee-38efb8179254';
+    const ideConvId = 'conv-ide-alpha';
 
     // 尝试以相同 display_name 创建
     const resDupName = await fetch(`${baseUrl}/api/onboarding/create`, {
@@ -218,7 +260,7 @@ describe('Onboarding Surface 集成测试', () => {
       body: JSON.stringify({
         display_name: 'Second Project',
         browser_url: 'https://chatgpt.com/c/conv-browser-beta',
-        ide_conversation_id: realIdeConvId
+        ide_conversation_id: ideConvId
       })
     });
     assert.equal(resDupIde.status, 400);
@@ -235,6 +277,7 @@ describe('Onboarding Surface 集成测试', () => {
     serverHandle = await startStatusSurfaceServer({
       registry: nextRegistry,
       browserAdapter: mockBrowserAdapter,
+      agentApiExecutor: mockAgentApiExecutor,
       port: 0
     });
     baseUrl = serverHandle.url;
@@ -246,37 +289,60 @@ describe('Onboarding Surface 集成测试', () => {
     assert.equal(data.projects.length, 1);
     assert.equal(data.projects[0].display_name, 'Rally Alpha Project');
     assert.equal(data.projects[0].browser.conversation_id, 'conv-browser-alpha');
-    assert.equal(data.projects[0].ide_endpoints[0].conversation_id, 'b1b193e3-1b2d-4f5c-abee-38efb8179254');
+    assert.equal(data.projects[0].ide_endpoints[0].conversation_id, 'conv-ide-alpha');
   });
 
   it('6. 两独立项目共存无冲突：添加第二个项目 Beta，两项目在 Surface 中独立呈现且互不串台', async () => {
-    // 增加第二个独立项目的标签页
-    mockTabs.push({
-      conversationId: 'conv-browser-beta',
-      url: 'https://chatgpt.com/c/conv-browser-beta'
-    });
-
-    // 也可以使用当前的 conversationId 作为第二个项目的模拟，或者使用带有 metadata 的 mock
-    // 为测试双项目无缝共存，提供带有 mockAgentApi 的请求（通过集成端点）
-    const realIdeConvId2 = 'b1b193e3-1b2d-4f5c-abee-38efb8179254'; // 同一 IDE 会话已被绑定会报冲突
-    // 创建一个合法的新 IDE 会话 ID（但在测试中若真实 CLI 不存在会拦截，这里使用 mock 执行器验证双项目共存）
-    // 先验证冲突
+    // 1. 先验证尝试绑定重复 IDE 会话会被拦截
     const resConflict = await fetch(`${baseUrl}/api/onboarding/create`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         display_name: 'Rally Beta Project',
         browser_url: 'https://chatgpt.com/c/conv-browser-beta',
-        ide_conversation_id: realIdeConvId2
+        ide_conversation_id: 'conv-ide-alpha'
       })
     });
     assert.equal(resConflict.status, 400);
     const jsonConflict = await resConflict.json();
     assert.match(jsonConflict.reason, /already bound to project/i);
 
-    // 验证当前列表中依然只有 Alpha 一个项目，不受失败请求破坏
+    // 2. 正向创建第 2 个独立项目 Beta
+    const resBeta = await fetch(`${baseUrl}/api/onboarding/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        display_name: 'Rally Beta Project',
+        browser_url: 'https://chatgpt.com/c/conv-browser-beta',
+        ide_conversation_id: 'conv-ide-beta'
+      })
+    });
+    assert.equal(resBeta.status, 201);
+    const jsonBeta = await resBeta.json();
+    assert.equal(jsonBeta.success, true);
+    const betaBindingId = jsonBeta.binding_id;
+    assert.ok(betaBindingId);
+
+    // 3. 验证当前列表中同时存在两个独立项目
     const resList = await fetch(`${baseUrl}/api/projects`);
     const jsonList = await resList.json();
-    assert.equal(jsonList.projects.length, 1);
+    assert.equal(jsonList.projects.length, 2);
+
+    const alphaItem = jsonList.projects.find(p => p.display_name === 'Rally Alpha Project');
+    const betaItem = jsonList.projects.find(p => p.display_name === 'Rally Beta Project');
+    assert.ok(alphaItem, 'Alpha project must exist in projects list');
+    assert.ok(betaItem, 'Beta project must exist in projects list');
+    assert.equal(alphaItem.browser.conversation_id, 'conv-browser-alpha');
+    assert.equal(alphaItem.ide_endpoints[0].conversation_id, 'conv-ide-alpha');
+    assert.equal(betaItem.browser.conversation_id, 'conv-browser-beta');
+    assert.equal(betaItem.ide_endpoints[0].conversation_id, 'conv-ide-beta');
+
+    // 4. 验证 HTML 渲染中同时展示 Alpha 与 Beta 两个卡片
+    const htmlRes = await fetch(`${baseUrl}/`);
+    const html = await htmlRes.text();
+    assert.match(html, /Rally Alpha Project/);
+    assert.match(html, /Rally Beta Project/);
+    assert.match(html, new RegExp(alphaItem.binding_id));
+    assert.match(html, new RegExp(betaBindingId));
   });
 });

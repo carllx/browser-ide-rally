@@ -31,15 +31,29 @@ export const ONBOARDING_CLIENT_JS = `
     const previewIdeWorkspace = document.getElementById('preview-ide-workspace');
     const previewIdeRepo = document.getElementById('preview-ide-repo');
 
-    function showError(msg) {
+    const errorDebug = document.getElementById('onboarding-error-debug');
+    const errorDebugContent = document.getElementById('onboarding-error-debug-content');
+
+    function showError(msg, details = null) {
       if (!errorAlert || !errorMsg) return;
       errorMsg.textContent = msg;
+      if (errorDebug && errorDebugContent) {
+        if (details) {
+          errorDebugContent.textContent = typeof details === 'object' ? JSON.stringify(details, null, 2) : String(details);
+          errorDebug.style.display = 'block';
+        } else {
+          errorDebugContent.textContent = '';
+          errorDebug.style.display = 'none';
+        }
+      }
       errorAlert.style.display = 'block';
     }
 
     function clearError() {
       if (!errorAlert || !errorMsg) return;
       errorMsg.textContent = '';
+      if (errorDebug) errorDebug.style.display = 'none';
+      if (errorDebugContent) errorDebugContent.textContent = '';
       errorAlert.style.display = 'none';
     }
 
@@ -157,10 +171,10 @@ export const ONBOARDING_CLIENT_JS = `
             btnBack.style.display = 'inline-block';
             btnCancel.style.display = 'none';
           } else {
-            showError(result.reason || result.error || '核验未通过，请检查输入并重试。');
+            showError(result.reason || result.error || '核验未通过，请检查输入并重试。', result.details || null);
           }
         } catch (err) {
-          showError('请求异常: ' + err.message);
+          showError('请求异常: ' + err.message, err.stack || err.message);
         } finally {
           btnVerify.disabled = false;
           btnVerify.textContent = origText;
@@ -204,12 +218,12 @@ export const ONBOARDING_CLIENT_JS = `
               window.location.reload();
             }, 500);
           } else {
-            showError(result.reason || result.error || '创建项目失败，请重试。');
+            showError(result.reason || result.error || '创建项目失败，请重试。', result.details || null);
             btnCreate.disabled = false;
             btnCreate.textContent = origText;
           }
         } catch (err) {
-          showError('请求异常: ' + err.message);
+          showError('请求异常: ' + err.message, err.stack || err.message);
           btnCreate.disabled = false;
           btnCreate.textContent = origText;
         }

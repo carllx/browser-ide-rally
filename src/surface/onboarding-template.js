@@ -30,6 +30,10 @@ export function renderAddProjectModalHtml() {
         <div id="onboarding-error-alert" class="alert-box alert-error" style="display: none;">
           <div class="alert-title">验证未通过</div>
           <div id="onboarding-error-msg" class="alert-message"></div>
+          <details id="onboarding-error-debug" style="display: none; margin-top: 8px; font-size: 12px;">
+            <summary style="cursor: pointer; color: #8b949e; user-select: none;">查看技术详情 (Debug details)</summary>
+            <pre id="onboarding-error-debug-content" style="margin-top: 6px; padding: 8px; background: #0d1117; border: 1px solid #30363d; border-radius: 4px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; color: #f85149; font-family: ui-monospace, monospace;"></pre>
+          </details>
         </div>
 
         <!-- 步骤 1：输入表单 -->

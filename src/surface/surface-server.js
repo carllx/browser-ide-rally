@@ -71,8 +71,9 @@ function parseBody(req) {
  * @param {import('../registry/project-registry.js').ProjectRegistry} params.registry
  * @param {object} [params.browserAdapter]
  * @param {object|Map} [params.ideAdapters]
+ * @param {Function} [params.agentApiExecutor]
  */
-export function createStatusSurfaceRequestHandler({ registry, browserAdapter = null, ideAdapters = null }) {
+export function createStatusSurfaceRequestHandler({ registry, browserAdapter = null, ideAdapters = null, agentApiExecutor = null }) {
   if (!registry || typeof registry.listProjects !== 'function') {
     throw new Error('Valid ProjectRegistry instance is required for Status Surface Server');
   }
@@ -396,11 +397,16 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
           browserUrl: body.browser_url,
           ideConversationId: body.ide_conversation_id,
           registry,
-          browserAdapter
+          browserAdapter,
+          ...(agentApiExecutor ? { agentApiExecutor } : {})
         });
         return sendJson(res, 200, { success: true, preview });
       } catch (err) {
-        return sendJson(res, 400, { success: false, reason: err.message });
+        return sendJson(res, 400, {
+          success: false,
+          reason: err.message,
+          details: err.stack || err.message
+        });
       }
     }
 
@@ -419,7 +425,8 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
           browserUrl: body.browser_url,
           ideConversationId: body.ide_conversation_id,
           registry,
-          browserAdapter
+          browserAdapter,
+          ...(agentApiExecutor ? { agentApiExecutor } : {})
         });
         return sendJson(res, 201, {
           success: true,
@@ -427,7 +434,11 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
           project: result.snapshot
         });
       } catch (err) {
-        return sendJson(res, 400, { success: false, reason: err.message });
+        return sendJson(res, 400, {
+          success: false,
+          reason: err.message,
+          details: err.stack || err.message
+        });
       }
     }
 
@@ -442,12 +453,13 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
  * @param {import('../registry/project-registry.js').ProjectRegistry} params.registry
  * @param {object} [params.browserAdapter]
  * @param {object|Map} [params.ideAdapters]
+ * @param {Function} [params.agentApiExecutor]
  * @param {number} [params.port=0]
  * @param {string} [params.host='127.0.0.1']
  * @returns {Promise<{ server: http.Server, port: number, url: string, close: () => Promise<void> }>}
  */
-export function startStatusSurfaceServer({ registry, browserAdapter = null, ideAdapters = null, port = 0, host = '127.0.0.1' }) {
-  const handler = createStatusSurfaceRequestHandler({ registry, browserAdapter, ideAdapters });
+export function startStatusSurfaceServer({ registry, browserAdapter = null, ideAdapters = null, agentApiExecutor = null, port = 0, host = '127.0.0.1' }) {
+  const handler = createStatusSurfaceRequestHandler({ registry, browserAdapter, ideAdapters, agentApiExecutor });
   const server = http.createServer(handler);
 
   return new Promise((resolve, reject) => {
