@@ -186,6 +186,7 @@ export function executeSafeContinue(params = {}) {
   // 6. 构造仅限内部流转的消费上下文 (不向出站 bundle 泄露 provider cursor)
   const consumptionContext = {
     eligible: hasSourceNewResult,
+    source_result_state: expected_source_result_state,
     binding_id: bindingId,
     binding_revision: currentBinding.binding_revision,
     source_endpoint: resolvedSource,

@@ -34,19 +34,22 @@ export function reconcileVerifiedConsumption({ core, action, consumptionContext 
     return { reconciled: false, reason: 'action_stage_not_accepted_or_delivered' };
   }
 
-  // 2. 消费资格校验：无消费上下文或形成时非 NEW 则绝不执行自动处理
-  if (!consumptionContext || consumptionContext.eligible !== true) {
+  // 2. 消费资格校验：必须形成自规范 NEW 且具备明确资格，伪造或不一致严格 Fail-Closed
+  if (!consumptionContext || consumptionContext.source_result_state !== 'NEW' || consumptionContext.eligible !== true) {
     return { reconciled: false, reason: 'not_eligible_for_auto_handled' };
   }
 
   const snapshot = core.getSnapshot();
   const currentBinding = snapshot.binding;
 
-  // 3. 绑定与版本强校验
+  // 3. 绑定与版本强校验 (Action / Context / Core 三方交叉核验)
   if (currentBinding.binding_id !== consumptionContext.binding_id) {
     return { reconciled: false, reason: 'binding_id_mismatch' };
   }
-  if (currentBinding.binding_revision !== consumptionContext.binding_revision) {
+  if (
+    action.binding_revision !== currentBinding.binding_revision ||
+    consumptionContext.binding_revision !== currentBinding.binding_revision
+  ) {
     return { reconciled: false, reason: 'binding_revision_stale' };
   }
 
@@ -85,15 +88,24 @@ export function reconcileVerifiedConsumption({ core, action, consumptionContext 
     return { reconciled: false, reason: 'source_not_currently_new' };
   }
 
-  // 7. 游标与结果材料完全匹配校验（防漂移）
+  // 7. 游标与强制非空结果材料匹配校验 (防漂移与零空伪造)
   const currentCursor = sourceFact.latest_completed_cursor ?? null;
   if (currentCursor !== consumptionContext.expected_cursor) {
     return { reconciled: false, reason: 'source_cursor_drifted' };
   }
 
-  const currentResultRef = sourceFact.latest_completed_result?.result_ref ?? null;
-  if (consumptionContext.expected_result_ref !== undefined &&
-      currentResultRef !== consumptionContext.expected_result_ref) {
+  const expectedRef = consumptionContext.expected_result_ref;
+  if (typeof expectedRef !== 'string' || expectedRef.trim().length === 0) {
+    return { reconciled: false, reason: 'missing_or_blank_expected_result_ref' };
+  }
+
+  const currentResultMaterial = sourceFact.latest_completed_result;
+  if (!currentResultMaterial || typeof currentResultMaterial !== 'object') {
+    return { reconciled: false, reason: 'missing_current_result_material' };
+  }
+
+  const currentRef = currentResultMaterial.result_ref;
+  if (typeof currentRef !== 'string' || currentRef.trim().length === 0 || currentRef !== expectedRef) {
     return { reconciled: false, reason: 'source_result_ref_drifted' };
   }
 
