@@ -244,4 +244,65 @@ describe('ObservationRuntimeCoordinator Integration', () => {
 
     coordinator.stop();
   });
+
+  it('refuses hook mutations after coordinator stop, preserving canonical state with runtime_stopped rejection', async () => {
+    const convId = 'ag-conv-stopped-guard';
+    const project = setupProject('proj-stop', 'browser-conv-stop', convId, currentWorkspace, currentRepo);
+
+    const t = createTempTranscript(convId, 'Turn delivered after stop');
+    tmpDir = t.dir;
+
+    const mockBrowserAdapter = {
+      observeBrowserEndpoint: () => ({
+        conversation_id: 'browser-conv-stop',
+        trusted: true,
+        latest_completed_cursor: null,
+        is_generating: false,
+        should_record: true
+      })
+    };
+
+    coordinator = createObservationRuntimeCoordinator({
+      registry,
+      browserAdapter: mockBrowserAdapter,
+      pollIntervalMs: 500,
+      brainBaseDir: tmpDir
+    });
+
+    // 1. coordinator start
+    await coordinator.start();
+
+    const initialSnapshot = project.getSnapshot();
+    const initialIdeState = initialSnapshot.endpoints.ide_endpoints['ide-primary'].result_state;
+
+    // 2. coordinator stop
+    coordinator.stop();
+
+    // 3. deliver valid final Antigravity Hook (payload 本身完全合法)
+    const validHookPayload = {
+      conversationId: convId,
+      workspacePaths: [currentWorkspace],
+      fullyIdle: true,
+      terminationReason: 'NO_TOOL_CALL',
+      transcriptPath: t.transcriptPath
+    };
+
+    const directResult = coordinator.handleAntigravityHook(validHookPayload);
+
+    // 4 & 5. 返回 rejected / stopped 语义，且 endpoint canonical state 必须保持不变
+    assert.equal(directResult.accepted, false);
+    assert.equal(directResult.reason, 'runtime_stopped');
+
+    const postDirectSnapshot = project.getSnapshot();
+    assert.equal(postDirectSnapshot.endpoints.ide_endpoints['ide-primary'].result_state, initialIdeState);
+    assert.equal(postDirectSnapshot.endpoints.ide_endpoints['ide-primary'].latest_completed_cursor, null);
+
+    // 验证 HookIngress 实例自身同样拒绝
+    const ingressResult = coordinator.hookIngress.handleHook(validHookPayload);
+    assert.equal(ingressResult.accepted, false);
+    assert.equal(ingressResult.reason, 'runtime_stopped');
+
+    const finalSnapshot = project.getSnapshot();
+    assert.equal(finalSnapshot.endpoints.ide_endpoints['ide-primary'].result_state, initialIdeState);
+  });
 });

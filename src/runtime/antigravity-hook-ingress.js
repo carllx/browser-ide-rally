@@ -26,6 +26,21 @@ export class AntigravityHookIngress {
     this._registry = registry;
     this._ideAdapters = ideAdapters instanceof Map ? ideAdapters : new Map();
     this._logger = logger;
+    this._stopped = false;
+  }
+
+  /**
+   * 停止 Hook 入口接收，拒绝后续所有变更
+   */
+  stop() {
+    this._stopped = true;
+  }
+
+  /**
+   * 恢复 Hook 入口接收
+   */
+  resume() {
+    this._stopped = false;
   }
 
   /**
@@ -60,6 +75,10 @@ export class AntigravityHookIngress {
    * @returns {{ accepted: boolean, reason?: string, binding_id?: string, endpoint_id?: string, observation?: object }}
    */
   handleHook(hookPayload) {
+    if (this._stopped) {
+      return { accepted: false, reason: 'runtime_stopped' };
+    }
+
     if (!hookPayload || typeof hookPayload !== 'object') {
       return { accepted: false, reason: 'malformed_hook_payload' };
     }

@@ -113,7 +113,7 @@ export function isProvenAntigravityTranscript(transcriptPath, conversationId) {
   const convDir = parts[len - 4];
 
   if (
-    fileName !== 'transcript.jsonl' ||
+    (fileName !== 'transcript.jsonl' && fileName !== 'transcript_full.jsonl') ||
     logsDir !== 'logs' ||
     sysDir !== '.system_generated' ||
     convDir !== conversationId.trim()
