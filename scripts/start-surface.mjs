@@ -232,10 +232,23 @@ async function main() {
   console.log(`[Rally] Status Surface listening at ${url}`);
   console.log(`[Rally] Press Ctrl+C to shut down.`);
 
-  const shutdown = async () => {
+  let isShuttingDown = false;
+  const shutdown = () => {
+    if (isShuttingDown) {
+      process.exit(0);
+    }
+    isShuttingDown = true;
     console.log('\n[Rally] Shutting down Status Surface...');
-    await close();
-    process.exit(0);
+    const forceExitTimer = setTimeout(() => {
+      process.exit(0);
+    }, 300);
+    forceExitTimer.unref();
+
+    close()
+      .catch(() => {})
+      .finally(() => {
+        process.exit(0);
+      });
   };
 
   process.on('SIGINT', shutdown);

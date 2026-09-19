@@ -473,7 +473,12 @@ export function startStatusSurfaceServer({ registry, browserAdapter = null, ideA
         server,
         port: actualPort,
         url,
-        close: () => new Promise(res => server.close(res))
+        close: () => new Promise(res => {
+          if (typeof server.closeAllConnections === 'function') {
+            server.closeAllConnections();
+          }
+          server.close(res);
+        })
       });
     });
   });
