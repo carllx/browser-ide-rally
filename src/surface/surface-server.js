@@ -13,16 +13,9 @@ import http from 'node:http';
 import { projectRegistrySurface } from './surface-projection.js';
 import { renderStatusSurfaceHtml } from './surface-template.js';
 import { deriveAttentionTray } from './attention-tray.js';
-import {
-  executeSafeRebind,
-  executeSafeOpenFocus,
-  executeSafeSend,
-  executeSafeContinue
-} from '../controller/safe-controls.js';
-import {
-  verifyOnboardingIdentities,
-  createOnboardingProject
-} from './onboarding-controller.js';
+import { executeSafeRebind, executeSafeOpenFocus, executeSafeSend, executeSafeContinue } from '../controller/safe-controls.js';
+import { verifyOnboardingIdentities, createOnboardingProject } from './onboarding-controller.js';
+import { handleAntigravityHookRequest } from './hook-controller.js';
 
 function sendJson(res, statusCode, data) {
   const payload = JSON.stringify(data);
@@ -447,22 +440,12 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
 
     // 7b. POST /api/hooks/antigravity: 接收 Antigravity Stop Hook 事件
     if (method === 'POST' && pathname === '/api/hooks/antigravity') {
-      let body;
       try {
-        body = await parseBody(req);
+        const body = await parseBody(req);
+        const { statusCode, payload } = handleAntigravityHookRequest({ body, observationCoordinator });
+        return sendJson(res, statusCode, payload);
       } catch (err) {
         return sendJson(res, 400, { success: false, reason: err.message });
-      }
-
-      if (!observationCoordinator || typeof observationCoordinator.handleAntigravityHook !== 'function') {
-        return sendJson(res, 503, { success: false, reason: 'observation_coordinator_not_configured' });
-      }
-
-      try {
-        const result = observationCoordinator.handleAntigravityHook(body);
-        return sendJson(res, 200, { success: Boolean(result?.accepted), result });
-      } catch (err) {
-        return sendJson(res, 500, { success: false, reason: err.message });
       }
     }
 

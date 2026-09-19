@@ -97,32 +97,37 @@ export class AntigravityHookIngress {
       };
     }
 
-    // 3. 分发到所有匹配的目标端点适配器
-    let lastResult = null;
-    for (const target of matchedTargets) {
-      const adapter = this.getOrCreateAdapter(target);
-      try {
-        const res = adapter.handleStopHook(hookPayload);
-        lastResult = {
-          accepted: Boolean(res?.accepted),
-          reason: res?.reason || null,
-          binding_id: target.bindingId,
-          endpoint_id: target.endpointId,
-          observation: res?.observation || null
-        };
-      } catch (err) {
-        this._logger?.error?.(
-          `[AntigravityHookIngress] Unexpected error handling Stop Hook for ${target.bindingId}:${target.endpointId}: ${err.message}`
-        );
-        lastResult = {
-          accepted: false,
-          reason: `internal_adapter_error: ${err.message}`,
-          binding_id: target.bindingId,
-          endpoint_id: target.endpointId
-        };
-      }
+    // 3. 歧义多重绑定守卫：conversationId 必须全局严格唯一映射单个端点
+    if (matchedTargets.length > 1) {
+      return {
+        accepted: false,
+        reason: 'ambiguous_conversation_multiple_bindings',
+        conversationId: targetConvId
+      };
     }
 
-    return lastResult;
+    // 4. 精准分发到唯一绑定的目标端点适配器
+    const target = matchedTargets[0];
+    const adapter = this.getOrCreateAdapter(target);
+    try {
+      const res = adapter.handleStopHook(hookPayload);
+      return {
+        accepted: Boolean(res?.accepted),
+        reason: res?.reason || null,
+        binding_id: target.bindingId,
+        endpoint_id: target.endpointId,
+        observation: res?.observation || null
+      };
+    } catch (err) {
+      this._logger?.error?.(
+        `[AntigravityHookIngress] Unexpected error handling Stop Hook for ${target.bindingId}:${target.endpointId}: ${err.message}`
+      );
+      return {
+        accepted: false,
+        reason: `internal_adapter_error: ${err.message}`,
+        binding_id: target.bindingId,
+        endpoint_id: target.endpointId
+      };
+    }
   }
 }
