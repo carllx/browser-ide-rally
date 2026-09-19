@@ -43,7 +43,19 @@ async function main() {
     process.exit(0);
   }
 
-  const targetUrlStr = process.env.RALLY_SURFACE_URL || 'http://127.0.0.1:3123/api/hooks/antigravity';
+  let targetUrlStr = process.env.RALLY_SURFACE_URL;
+  if (!targetUrlStr) {
+    try {
+      const fs = await import('node:fs');
+      const overrideUrl = new URL('../.agents/hook-url', import.meta.url);
+      if (fs.existsSync(overrideUrl)) {
+        targetUrlStr = fs.readFileSync(overrideUrl, 'utf8').trim();
+      }
+    } catch (_) {}
+  }
+  if (!targetUrlStr) {
+    targetUrlStr = 'http://127.0.0.1:3123/api/hooks/antigravity';
+  }
   try {
     const targetUrl = new URL(targetUrlStr);
     const postData = Buffer.from(JSON.stringify(hookPayload), 'utf8');

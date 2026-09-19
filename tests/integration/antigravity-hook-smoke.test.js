@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import path from 'node:path';
 import { createProjectRegistry } from '../../src/registry/project-registry.js';
 import { createObservationRuntimeCoordinator } from '../../src/runtime/observation-runtime-coordinator.js';
 import { startStatusSurfaceServer } from '../../src/surface/surface-server.js';
@@ -32,13 +33,16 @@ describe('Official Antigravity Stop Hook Real Integration Smoke', () => {
       pollIntervalMs: 500
     });
 
-    // 在官方默认端口 3123 上启动临时核验服务
+    // 使用动态端口 port: 0 启动临时隔离测试服务，防止与常规运行的 3123 端口冲突
     const server = await startStatusSurfaceServer({
       registry,
       browserAdapter: mockBrowserAdapter,
       observationCoordinator: coordinator,
-      port: 3123
+      port: 0
     });
+
+    const hookOverrideFile = path.resolve(process.cwd(), '.agents', 'hook-url');
+    fs.writeFileSync(hookOverrideFile, `${server.url}/api/hooks/antigravity`, 'utf8');
 
     try {
       // 1. 真实派生 Antigravity 会话
@@ -90,6 +94,11 @@ describe('Official Antigravity Stop Hook Real Integration Smoke', () => {
       assert.ok(advancedSnap.latest_completed_result?.result_ref?.startsWith('res_'));
       assert.ok(advancedSnap.latest_completed_result?.text?.includes('PONG'));
     } finally {
+      try {
+        if (fs.existsSync(hookOverrideFile)) {
+          fs.unlinkSync(hookOverrideFile);
+        }
+      } catch (_) {}
       await server.close();
     }
   });
