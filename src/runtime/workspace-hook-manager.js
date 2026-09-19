@@ -154,6 +154,21 @@ export class WorkspaceHookManager {
     }
   }
 
+  _readAllowlist(allowlistPath) {
+    if (!fs.existsSync(allowlistPath)) {
+      return { conversations: [] };
+    }
+    try {
+      const data = JSON.parse(fs.readFileSync(allowlistPath, 'utf8'));
+      return {
+        conversations: Array.isArray(data?.conversations) ? data.conversations : [],
+        updated_at: data?.updated_at || null
+      };
+    } catch (_) {
+      return { conversations: [] };
+    }
+  }
+
   /**
    * 确保目标工作区具备 Rally Stop Hook 并将指定会话录入白名单
    * @param {string} workspacePath
@@ -228,14 +243,7 @@ export class WorkspaceHookManager {
 
     // 5. 更新 .agents/rally-conversations.json 本地会话白名单
     const allowlistPath = path.join(agentsDir, 'rally-conversations.json');
-    let allowlistData = { conversations: [] };
-    if (fs.existsSync(allowlistPath)) {
-      try {
-        allowlistData = JSON.parse(fs.readFileSync(allowlistPath, 'utf8'));
-      } catch (_) {
-        allowlistData = { conversations: [] };
-      }
-    }
+    const allowlistData = this._readAllowlist(allowlistPath);
 
     const convs = Array.isArray(allowlistData.conversations) ? allowlistData.conversations : [];
     if (!convs.includes(cleanConvId)) {
@@ -273,13 +281,7 @@ export class WorkspaceHookManager {
       return { success: true, remaining: 0, removedHook: false };
     }
 
-    let allowlistData = { conversations: [] };
-    try {
-      allowlistData = JSON.parse(fs.readFileSync(allowlistPath, 'utf8'));
-    } catch (_) {
-      allowlistData = { conversations: [] };
-    }
-
+    const allowlistData = this._readAllowlist(allowlistPath);
     const existingConvs = Array.isArray(allowlistData.conversations) ? allowlistData.conversations : [];
     const remainingConvs = existingConvs.filter(id => id !== cleanConvId);
 
@@ -369,12 +371,23 @@ export class WorkspaceHookManager {
 
     for (const [ws, convSet] of workspaceMap.entries()) {
       if (!fs.existsSync(ws)) continue;
+
+      // 1. 确保活跃会话均被安装
       for (const convId of convSet) {
         const res = this.ensureWorkspaceHook(ws, convId);
         if (!res.success) {
           errors.push(`Workspace ${ws} conv ${convId}: ${res.reason}`);
         }
       }
+
+      // 2. 修剪白名单中已失效的历史会话，与权威真值严格对齐
+      const allowlistPath = path.join(ws, '.agents', 'rally-conversations.json');
+      const currentAllowlist = this._readAllowlist(allowlistPath);
+      const staleConvs = currentAllowlist.conversations.filter(id => !convSet.has(id));
+      for (const staleId of staleConvs) {
+        this.removeWorkspaceHook(ws, staleId);
+      }
+
       reconciledCount++;
     }
 
