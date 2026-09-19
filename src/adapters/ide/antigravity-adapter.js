@@ -124,19 +124,7 @@ export function isProvenAntigravityTranscript(transcriptPath, conversationId) {
   return true;
 }
 
-/**
- * 推导指定 Antigravity 会话的默认规范 Transcript 路径
- * @param {string} conversationId
- * @param {string} [baseDir]
- * @returns {string}
- */
-export function resolveDefaultAntigravityTranscriptPath(conversationId, baseDir = null) {
-  if (!conversationId || typeof conversationId !== 'string') return '';
-  const trimmed = conversationId.trim();
-  return baseDir
-    ? path.join(baseDir, trimmed, '.system_generated', 'logs', 'transcript.jsonl')
-    : path.join(os.homedir(), '.gemini', 'antigravity', 'brain', trimmed, '.system_generated', 'logs', 'transcript.jsonl');
-}
+export { resolveDefaultAntigravityTranscriptPath } from './transcript-paths.js';
 
 export function deriveStepFingerprint(step) {
   const content = typeof step.content === 'string' ? step.content : JSON.stringify(step.content || '');
