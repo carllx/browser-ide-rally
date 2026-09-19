@@ -305,4 +305,100 @@ describe('ObservationRuntimeCoordinator Integration', () => {
     const finalSnapshot = project.getSnapshot();
     assert.equal(finalSnapshot.endpoints.ide_endpoints['ide-primary'].result_state, initialIdeState);
   });
+
+  it('Regression: blocked Rebind preserves pre-existing valid subscription and only rolls back newly added state', async () => {
+    const testWs = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-rebind-sub-test-'));
+    const preExistingConvId = 'conv-pre-existing-123';
+    const project = setupProject('proj-rebind-test', 'browser-conv-rebind', preExistingConvId, testWs, currentRepo);
+
+    // 将端点置为 NEW 状态，使得后续未确认的 rebind 必定被 BLOCKED
+    project.recordEndpointObservation('ide-primary', {
+      trusted: true,
+      latest_completed_cursor: 'cursor-pre-existing-1',
+      endpoint_id: 'ide-primary',
+      endpoint_revision: 1,
+      conversation_id: preExistingConvId,
+      workspace_identity: testWs,
+      repository_identity: currentRepo
+    });
+
+    const mockBrowserAdapter = {
+      observeBrowserEndpoint: () => ({
+        conversation_id: 'browser-conv-rebind',
+        trusted: true,
+        latest_completed_cursor: null,
+        is_generating: false,
+        should_record: true
+      })
+    };
+
+    coordinator = createObservationRuntimeCoordinator({
+      registry,
+      browserAdapter: mockBrowserAdapter,
+      pollIntervalMs: 500
+    });
+
+    // 预先建立已存在的合法工作区订阅
+    const preEnsure = coordinator.workspaceHookManager.ensureWorkspaceHook(testWs, preExistingConvId);
+    assert.equal(preEnsure.success, true);
+    assert.equal(preEnsure.newlySubscribed, true);
+
+    const allowlistPath = path.join(testWs, '.agents', 'rally-conversations.json');
+    let allowlistData = JSON.parse(fs.readFileSync(allowlistPath, 'utf8'));
+    assert.deepEqual(allowlistData.conversations, [preExistingConvId]);
+
+    surfaceServer = await startStatusSurfaceServer({
+      registry,
+      observationCoordinator: coordinator,
+      port: 0
+    });
+
+    // 尝试重绑定到同一个已有会话（或者尝试重绑但缺少确认），导致 409 BLOCKED
+    const blockedRes1 = await fetch(`${surfaceServer.url}/api/projects/proj-rebind-test/controls/rebind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        expected_binding_revision: 1,
+        target_endpoint: 'ide-primary',
+        new_identity: {
+          conversation_id: preExistingConvId,
+          workspace_identity: testWs,
+          repository_identity: currentRepo
+        },
+        allow_replace_unhandled: false
+      })
+    });
+    assert.equal(blockedRes1.status, 409);
+
+    // 关键回归断言：pre-existing subscription 绝不能被回滚错误删除
+    assert.equal(fs.existsSync(allowlistPath), true);
+    allowlistData = JSON.parse(fs.readFileSync(allowlistPath, 'utf8'));
+    assert.deepEqual(allowlistData.conversations, [preExistingConvId]);
+
+    // 尝试重绑定到一个新会话，但同样因缺少确认被 409 BLOCKED
+    const newConvId = 'conv-new-blocked-456';
+    const blockedRes2 = await fetch(`${surfaceServer.url}/api/projects/proj-rebind-test/controls/rebind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        expected_binding_revision: 1,
+        target_endpoint: 'ide-primary',
+        new_identity: {
+          conversation_id: newConvId,
+          workspace_identity: testWs,
+          repository_identity: currentRepo
+        },
+        allow_replace_unhandled: false
+      })
+    });
+    assert.equal(blockedRes2.status, 409);
+
+    // 关键回归断言：新会话被精准回滚，而原本的 pre-existing subscription 依然完好无损
+    assert.equal(fs.existsSync(allowlistPath), true);
+    allowlistData = JSON.parse(fs.readFileSync(allowlistPath, 'utf8'));
+    assert.deepEqual(allowlistData.conversations, [preExistingConvId]);
+    assert.equal(allowlistData.conversations.includes(newConvId), false);
+
+    fs.rmSync(testWs, { recursive: true, force: true });
+  });
 });
