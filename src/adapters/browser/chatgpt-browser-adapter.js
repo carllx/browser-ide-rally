@@ -120,7 +120,7 @@ export class ChatGPTBrowserAdapter {
           -- 粗筛：URL 中必须至少包含对话 ID 字符
           if u contains convId then
             -- 精筛：由内置 JS 正则做精确路径边界校验，排除子串和参数伪造
-            set isValid to (execute t javascript "(function() { return new RegExp(" & urlPat & ").test(location.href); })()")
+            set isValid to (execute t javascript "(function() { return new RegExp(" & quoted form of urlPat & ").test(location.href); })()")
             if isValid = true or isValid = "true" then
               set matchCount to matchCount + 1
               set targetWin to i
