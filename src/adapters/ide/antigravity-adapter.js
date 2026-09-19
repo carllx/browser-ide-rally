@@ -303,21 +303,17 @@ export class AntigravityIdeAdapter {
     }
 
     if (!matchesWorkspace(workspacePaths, expectedIde.workspace_identity)) {
-      this._failClosedToUnknown(`workspace_mismatch: expected ${expectedIde.workspace_identity}`);
-      return {
-        accepted: false,
-        reason: `workspace_mismatch: expected ${expectedIde.workspace_identity}`
-      };
+      const reason = `workspace_mismatch: expected ${expectedIde.workspace_identity}`;
+      this._failClosedToUnknown(reason);
+      return { accepted: false, reason };
     }
 
     const matchedWorkspace = (Array.isArray(workspacePaths) ? workspacePaths : [workspacePaths])
       .find(w => normalizePath(w) === normalizePath(expectedIde.workspace_identity));
     if (!matchesRepository(matchedWorkspace, expectedIde.repository_identity)) {
-      this._failClosedToUnknown(`repository_mismatch: expected ${expectedIde.repository_identity}`);
-      return {
-        accepted: false,
-        reason: `repository_mismatch: expected ${expectedIde.repository_identity}`
-      };
+      const reason = `repository_mismatch: expected ${expectedIde.repository_identity}`;
+      this._failClosedToUnknown(reason);
+      return { accepted: false, reason };
     }
 
     if (fullyIdle !== true) {
@@ -328,11 +324,9 @@ export class AntigravityIdeAdapter {
     }
 
     if (!terminationReason || !FINAL_TERMINATION_REASONS.includes(terminationReason)) {
-      this._failClosedToUnknown(`non_final_termination_reason: got ${terminationReason}`);
-      return {
-        accepted: false,
-        reason: `non_final_termination_reason: got ${terminationReason}`
-      };
+      const reason = `non_final_termination_reason: got ${terminationReason}`;
+      this._failClosedToUnknown(reason);
+      return { accepted: false, reason };
     }
 
     if (!isProvenAntigravityTranscript(transcriptPath, expectedIde.conversation_id)) {
@@ -349,6 +343,16 @@ export class AntigravityIdeAdapter {
     const latestTurn = turns[turns.length - 1];
     const opaqueCursor = encodeOpaqueCursor(latestTurn.stepIndex, latestTurn.fingerprint);
     const completedAt = latestTurn.createdAt || new Date().toISOString();
+
+    const currentSnapshot = this._statusCore.getSnapshot();
+    const currentIde = (currentSnapshot.endpoints?.ide_endpoints && currentSnapshot.endpoints.ide_endpoints[this._endpointId])
+      || currentSnapshot.endpoints?.ide
+      || {};
+
+    // 变更感知守卫：若当前已受信任且最新完成游标一致，跳过重复写盘与 Core 状态突变
+    if (currentIde.continuity?.trusted === true && currentIde.latest_completed_cursor === opaqueCursor) {
+      return { accepted: true, unchanged: true, observation: null };
+    }
 
     const observation = this._buildObservation({
       trusted: true,
@@ -377,29 +381,20 @@ export class AntigravityIdeAdapter {
 
     if (!identity?.conversationId || identity.conversationId !== expectedIde.conversation_id) {
       this._failClosedToUnknown('UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION');
-      return {
-        status: 'UNKNOWN',
-        reason: `attribution_mismatch: conversation_id mismatch or unproved`
-      };
+      return { status: 'UNKNOWN', reason: 'attribution_mismatch: conversation_id mismatch or unproved' };
     }
 
     const actualWorkspaces = identity.workspacePaths || identity.workspacePath;
     if (!matchesWorkspace(actualWorkspaces, expectedIde.workspace_identity)) {
       this._failClosedToUnknown('UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION');
-      return {
-        status: 'UNKNOWN',
-        reason: `workspace_mismatch: expected ${expectedIde.workspace_identity}`
-      };
+      return { status: 'UNKNOWN', reason: `workspace_mismatch: expected ${expectedIde.workspace_identity}` };
     }
 
     const matchedWs = (Array.isArray(actualWorkspaces) ? actualWorkspaces : [actualWorkspaces])
       .find(w => normalizePath(w) === normalizePath(expectedIde.workspace_identity));
     if (!matchesRepository(matchedWs, expectedIde.repository_identity)) {
       this._failClosedToUnknown('UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION');
-      return {
-        status: 'UNKNOWN',
-        reason: `repository_mismatch: expected ${expectedIde.repository_identity}`
-      };
+      return { status: 'UNKNOWN', reason: `repository_mismatch: expected ${expectedIde.repository_identity}` };
     }
 
     if (!isProvenAntigravityTranscript(transcriptPath, expectedIde.conversation_id)) {
