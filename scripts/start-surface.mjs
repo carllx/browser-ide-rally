@@ -10,6 +10,7 @@ import os from 'node:os';
 import { createProjectRegistry } from '../src/registry/project-registry.js';
 import { startStatusSurfaceServer } from '../src/surface/surface-server.js';
 import { createProductionControlRuntime } from '../src/adapters/production-runtime-controls.js';
+import { createObservationRuntimeCoordinator } from '../src/runtime/observation-runtime-coordinator.js';
 
 function parseArgs(args) {
   const options = {
@@ -221,13 +222,23 @@ async function main() {
 
   const { browserAdapter, ideAdapters } = buildProductionSurfaceRuntime({ registry });
 
+  const pollIntervalMs = parseInt(process.env.RALLY_BROWSER_POLL_INTERVAL_MS, 10) || 2000;
+  const observationCoordinator = createObservationRuntimeCoordinator({
+    registry,
+    browserAdapter,
+    pollIntervalMs
+  });
+
   const { url, close } = await startStatusSurfaceServer({
     registry,
     browserAdapter,
     ideAdapters,
+    observationCoordinator,
     port: options.port,
     host: '127.0.0.1'
   });
+
+  await observationCoordinator.start();
 
   console.log(`[Rally] Status Surface listening at ${url}`);
   console.log(`[Rally] Press Ctrl+C to shut down.`);
@@ -239,6 +250,7 @@ async function main() {
     }
     isShuttingDown = true;
     console.log('\n[Rally] Shutting down Status Surface...');
+    observationCoordinator.stop();
     const forceExitTimer = setTimeout(() => {
       process.exit(0);
     }, 300);

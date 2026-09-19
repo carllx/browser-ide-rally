@@ -72,8 +72,9 @@ function parseBody(req) {
  * @param {object} [params.browserAdapter]
  * @param {object|Map} [params.ideAdapters]
  * @param {Function} [params.agentApiExecutor]
+ * @param {object} [params.observationCoordinator]
  */
-export function createStatusSurfaceRequestHandler({ registry, browserAdapter = null, ideAdapters = null, agentApiExecutor = null }) {
+export function createStatusSurfaceRequestHandler({ registry, browserAdapter = null, ideAdapters = null, agentApiExecutor = null, observationCoordinator = null }) {
   if (!registry || typeof registry.listProjects !== 'function') {
     throw new Error('Valid ProjectRegistry instance is required for Status Surface Server');
   }
@@ -444,6 +445,27 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
       }
     }
 
+    // 7b. POST /api/hooks/antigravity: 接收 Antigravity Stop Hook 事件
+    if (method === 'POST' && pathname === '/api/hooks/antigravity') {
+      let body;
+      try {
+        body = await parseBody(req);
+      } catch (err) {
+        return sendJson(res, 400, { success: false, reason: err.message });
+      }
+
+      if (!observationCoordinator || typeof observationCoordinator.handleAntigravityHook !== 'function') {
+        return sendJson(res, 503, { success: false, reason: 'observation_coordinator_not_configured' });
+      }
+
+      try {
+        const result = observationCoordinator.handleAntigravityHook(body);
+        return sendJson(res, 200, { success: Boolean(result?.accepted), result });
+      } catch (err) {
+        return sendJson(res, 500, { success: false, reason: err.message });
+      }
+    }
+
     // 8. 其他路由 Fail-Closed 404
     sendJson(res, 404, { error: 'Not Found' });
   };
@@ -456,12 +478,13 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
  * @param {object} [params.browserAdapter]
  * @param {object|Map} [params.ideAdapters]
  * @param {Function} [params.agentApiExecutor]
+ * @param {object} [params.observationCoordinator]
  * @param {number} [params.port=0]
  * @param {string} [params.host='127.0.0.1']
  * @returns {Promise<{ server: http.Server, port: number, url: string, close: () => Promise<void> }>}
  */
-export function startStatusSurfaceServer({ registry, browserAdapter = null, ideAdapters = null, agentApiExecutor = null, port = 0, host = '127.0.0.1' }) {
-  const handler = createStatusSurfaceRequestHandler({ registry, browserAdapter, ideAdapters, agentApiExecutor });
+export function startStatusSurfaceServer({ registry, browserAdapter = null, ideAdapters = null, agentApiExecutor = null, observationCoordinator = null, port = 0, host = '127.0.0.1' }) {
+  const handler = createStatusSurfaceRequestHandler({ registry, browserAdapter, ideAdapters, agentApiExecutor, observationCoordinator });
   const server = http.createServer(handler);
 
   return new Promise((resolve, reject) => {
