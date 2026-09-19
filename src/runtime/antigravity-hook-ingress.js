@@ -29,6 +29,32 @@ export class AntigravityHookIngress {
   }
 
   /**
+   * 获取或实例化指定项目的 IDE 端点适配器
+   * @param {object} params
+   * @param {string} params.bindingId
+   * @param {string} params.endpointId
+   * @returns {AntigravityIdeAdapter}
+   */
+  getOrCreateAdapter({ bindingId, endpointId }) {
+    const adapterKey = `${bindingId}:${endpointId}`;
+    let adapter = this._ideAdapters.get(adapterKey);
+    const core = this._registry.getProject(bindingId);
+    const currentBinding = core.getSnapshot().binding;
+
+    if (!adapter) {
+      adapter = new AntigravityIdeAdapter({
+        binding: currentBinding,
+        statusCore: core,
+        endpointId
+      });
+      this._ideAdapters.set(adapterKey, adapter);
+    } else {
+      adapter.updateBinding(currentBinding);
+    }
+    return adapter;
+  }
+
+  /**
    * 处理传入的 Antigravity Stop Hook 负载
    * @param {object} hookPayload
    * @returns {{ accepted: boolean, reason?: string, binding_id?: string, endpoint_id?: string, observation?: object }}
@@ -45,24 +71,25 @@ export class AntigravityHookIngress {
 
     const targetConvId = conversationId.trim();
 
-    // 1. 在注册表中查找精确包含该 conversation_id 的项目与 IDE 端点
+    // 1. 在注册表中查找所有匹配该 conversation_id 的端点
     const snapshots = this._registry.listProjects();
-    let targetBindingId = null;
-    let targetEndpointId = null;
+    const matchedTargets = [];
 
     for (const snap of snapshots) {
       const binding = snap.binding;
       const ideList = binding?.ide_endpoints || [];
-      const matched = ideList.find(ep => ep.conversation_id === targetConvId);
-      if (matched) {
-        targetBindingId = binding.binding_id;
-        targetEndpointId = matched.endpoint_id;
-        break;
+      for (const ep of ideList) {
+        if (ep.conversation_id === targetConvId) {
+          matchedTargets.push({
+            bindingId: binding.binding_id,
+            endpointId: ep.endpoint_id
+          });
+        }
       }
     }
 
     // 2. 未知或未绑定的会话：Fail-Closed 忽略
-    if (!targetBindingId || !targetEndpointId) {
+    if (matchedTargets.length === 0) {
       return {
         accepted: false,
         reason: 'unknown_conversation_not_bound',
@@ -70,44 +97,32 @@ export class AntigravityHookIngress {
       };
     }
 
-    // 3. 获取或构建对应端点的 AntigravityIdeAdapter 实例
-    const adapterKey = `${targetBindingId}:${targetEndpointId}`;
-    let adapter = this._ideAdapters.get(adapterKey);
-    const core = this._registry.getProject(targetBindingId);
-    const currentBinding = core.getSnapshot().binding;
-
-    if (!adapter) {
-      adapter = new AntigravityIdeAdapter({
-        binding: currentBinding,
-        statusCore: core,
-        endpointId: targetEndpointId
-      });
-      this._ideAdapters.set(adapterKey, adapter);
-    } else {
-      // 保证 binding 版本与拓扑同步
-      adapter.updateBinding(currentBinding);
+    // 3. 分发到所有匹配的目标端点适配器
+    let lastResult = null;
+    for (const target of matchedTargets) {
+      const adapter = this.getOrCreateAdapter(target);
+      try {
+        const res = adapter.handleStopHook(hookPayload);
+        lastResult = {
+          accepted: Boolean(res?.accepted),
+          reason: res?.reason || null,
+          binding_id: target.bindingId,
+          endpoint_id: target.endpointId,
+          observation: res?.observation || null
+        };
+      } catch (err) {
+        this._logger?.error?.(
+          `[AntigravityHookIngress] Unexpected error handling Stop Hook for ${target.bindingId}:${target.endpointId}: ${err.message}`
+        );
+        lastResult = {
+          accepted: false,
+          reason: `internal_adapter_error: ${err.message}`,
+          binding_id: target.bindingId,
+          endpoint_id: target.endpointId
+        };
+      }
     }
 
-    // 4. 委托给 AntigravityIdeAdapter.handleStopHook 执行严密校验与 Core 录入
-    try {
-      const res = adapter.handleStopHook(hookPayload);
-      return {
-        accepted: Boolean(res?.accepted),
-        reason: res?.reason || null,
-        binding_id: targetBindingId,
-        endpoint_id: targetEndpointId,
-        observation: res?.observation || null
-      };
-    } catch (err) {
-      this._logger?.error?.(
-        `[AntigravityHookIngress] Unexpected error handling Stop Hook for ${adapterKey}: ${err.message}`
-      );
-      return {
-        accepted: false,
-        reason: `internal_adapter_error: ${err.message}`,
-        binding_id: targetBindingId,
-        endpoint_id: targetEndpointId
-      };
-    }
+    return lastResult;
   }
 }
