@@ -101,7 +101,11 @@ export function deriveProjectAttentionItems(snapshot) {
       item_id: `human:${bindingId}:${bindingRev}`,
       binding_id: bindingId,
       binding_revision: bindingRev,
+      source_plane: 'human_intervention',
       source_kind: 'HUMAN_INTERVENTION',
+      source_id: 'human_intervention',
+      source_state: 'ACTIVE',
+      source_timestamp: human_intervention.updated_at || null,
       attention_classification: 'HUMAN_INTERVENTION_REQUIRED',
       reason: human_intervention.reason || 'Human decision required',
       updated_at: human_intervention.updated_at || null,
@@ -116,7 +120,11 @@ export function deriveProjectAttentionItems(snapshot) {
       item_id: `endpoint:${bindingId}:browser:${browserFact.latest_completed_cursor ?? ''}`,
       binding_id: bindingId,
       binding_revision: bindingRev,
+      source_plane: 'endpoint',
       source_kind: 'ENDPOINT',
+      source_id: 'browser',
+      source_state: 'NEW',
+      source_timestamp: browserFact.completed_at ?? null,
       attention_classification: 'ENDPOINT_NEW_RESULT',
       target_endpoint: 'browser',
       role: 'browser',
@@ -143,7 +151,11 @@ export function deriveProjectAttentionItems(snapshot) {
         item_id: `endpoint:${bindingId}:${epId}:${epFact.latest_completed_cursor ?? ''}`,
         binding_id: bindingId,
         binding_revision: bindingRev,
+        source_plane: 'endpoint',
         source_kind: 'ENDPOINT',
+        source_id: epId,
+        source_state: 'NEW',
+        source_timestamp: epFact.completed_at ?? null,
         attention_classification: 'ENDPOINT_NEW_RESULT',
         target_endpoint: epId,
         role: 'ide',
@@ -168,7 +180,12 @@ export function deriveProjectAttentionItems(snapshot) {
         item_id: `action:${bindingId}:${act.action_id}`,
         binding_id: bindingId,
         binding_revision: act.binding_revision ?? bindingRev,
+        source_plane: 'action',
         source_kind: 'ACTION',
+        source_id: act.action_id,
+        source_state: act.stage,
+        source_stage: act.stage,
+        source_timestamp: act.updated_at || act.created_at || null,
         attention_classification: classification,
         action_id: act.action_id,
         action_type: act.action_type || 'action',
@@ -200,9 +217,23 @@ export function deriveAttentionTray(registryOrSnapshots) {
   }
 
   const allItems = [];
+  let unknownEndpointCount = 0;
+
   for (const snap of snapshots) {
     const projItems = deriveProjectAttentionItems(snap);
     allItems.push(...projItems);
+
+    // 统计 UNKNOWN 端点（保持不收录进 items 列表）
+    const endpoints = snap?.endpoints || {};
+    if (endpoints.browser?.result_state === 'UNKNOWN') {
+      unknownEndpointCount++;
+    }
+    const ideMap = endpoints.ide_endpoints || (endpoints.ide ? { ide: endpoints.ide } : {});
+    for (const epId of Object.keys(ideMap)) {
+      if (ideMap[epId]?.result_state === 'UNKNOWN') {
+        unknownEndpointCount++;
+      }
+    }
   }
 
   // 统计各类别条目数量 (纯展示统计)
@@ -222,6 +253,7 @@ export function deriveAttentionTray(registryOrSnapshots) {
     items: allItems,
     total_count: allItems.length,
     counts_by_kind: countsByKind,
-    derived_at: new Date().toISOString()
+    unknown_endpoint_count: unknownEndpointCount,
+    has_unknown_endpoints: unknownEndpointCount > 0
   };
 }

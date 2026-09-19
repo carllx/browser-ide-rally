@@ -133,6 +133,22 @@ export function renderAttentionTrayHtml(tray) {
   const counts = tray.counts_by_kind || {};
 
   if (count === 0) {
+    if (tray.has_unknown_endpoints || (tray.unknown_endpoint_count && tray.unknown_endpoint_count > 0)) {
+      return `
+      <section class="attention-tray-container" aria-label="Attention Tray (存在未知端点状态)">
+        <header class="tray-header">
+          <div class="tray-title-group">
+            <h2 class="tray-title">Attention Tray</h2>
+            <span class="badge badge-unknown">端点状态未知 (UNKNOWN)</span>
+          </div>
+        </header>
+        <div class="tray-empty text-warning" style="color: #e3b341;">
+          No Attention Tray items; endpoint state remains UNKNOWN — inspect project cards.
+        </div>
+      </section>
+    `;
+    }
+
     return `
       <section class="attention-tray-container" aria-label="Attention Tray (无需关注)">
         <header class="tray-header">

@@ -229,3 +229,80 @@ test('Human Intervention — 4. 隔离性：Assert / Clear 人工介入绝对不
   assert.equal(afterClear.actions.length, 1);
   assert.equal(afterClear.actions[0].action_id, 'act-existing-1');
 });
+
+test('Human Intervention — 5. [Blocker 1 回归] 规范不变量：active:true 必须有非空 string reason，active:false 强制 reason:null，失败无突变', () => {
+  const binding = createBinding({
+    binding_id: 'proj-invariants',
+    binding_revision: 1,
+    browser: { provider: 'chatgpt', conversation_id: 'conv-br-inv' },
+    ide_endpoints: [{
+      endpoint_id: 'ide-1',
+      endpoint_revision: 1,
+      conversation_id: 'conv-ide-inv',
+      workspace_identity: '/ws/inv',
+      repository_identity: 'repo/inv'
+    }]
+  });
+
+  const core = createProjectStatusCore({ binding });
+
+  // 1. Assert with missing reason => rejected
+  assert.throws(() => {
+    core.setHumanIntervention({ active: true });
+  }, /non-empty string/i);
+
+  // 2. Assert with empty string "" => rejected
+  assert.throws(() => {
+    core.setHumanIntervention({ active: true, reason: '' });
+  }, /non-empty string/i);
+
+  // 3. Assert with whitespace-only reason => rejected
+  assert.throws(() => {
+    core.setHumanIntervention({ active: true, reason: '   \t\n  ' });
+  }, /non-empty string/i);
+
+  // 4. Assert with non-string reason => rejected
+  assert.throws(() => {
+    core.setHumanIntervention({ active: true, reason: 12345 });
+  }, /non-empty string/i);
+  assert.throws(() => {
+    core.setHumanIntervention({ active: true, reason: { text: 'invalid' } });
+  }, /non-empty string/i);
+
+  // 5. 校验失败时原状态不变，且未创建 Action fact
+  const snap1 = core.getSnapshot();
+  assert.equal(snap1.human_intervention.active, false);
+  assert.equal(snap1.human_intervention.reason, null);
+  assert.equal(snap1.actions.length, 0);
+
+  // 6. 合法 Assert：reason 正常 trim 并落盘
+  core.setHumanIntervention({ active: true, reason: '  Valid operator reason  ' });
+  const snap2 = core.getSnapshot();
+  assert.equal(snap2.human_intervention.active, true);
+  assert.equal(snap2.human_intervention.reason, 'Valid operator reason');
+  assert.equal(snap2.actions.length, 0);
+
+  // 7. 再次传入非法 Assert，先前合法的人工介入事实保持不变
+  assert.throws(() => {
+    core.setHumanIntervention({ active: true, reason: '   ' });
+  }, /non-empty string/i);
+  const snap3 = core.getSnapshot();
+  assert.equal(snap3.human_intervention.active, true);
+  assert.equal(snap3.human_intervention.reason, 'Valid operator reason');
+  assert.equal(snap3.actions.length, 0);
+
+  // 8. inactive / clear 无论传入什么 reason，终态必须强制为 reason: null
+  core.setHumanIntervention({ active: false, reason: 'lingering reason should be wiped' });
+  const snap4 = core.getSnapshot();
+  assert.equal(snap4.human_intervention.active, false);
+  assert.equal(snap4.human_intervention.reason, null);
+  assert.equal(snap4.actions.length, 0);
+
+  // 9. clearHumanIntervention 同样产出 active:false + reason:null
+  core.setHumanIntervention({ active: true, reason: 'Another reason' });
+  core.clearHumanIntervention();
+  const snap5 = core.getSnapshot();
+  assert.equal(snap5.human_intervention.active, false);
+  assert.equal(snap5.human_intervention.reason, null);
+  assert.equal(snap5.actions.length, 0);
+});

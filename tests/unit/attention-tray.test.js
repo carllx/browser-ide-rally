@@ -422,3 +422,4 @@ test('Attention Tray — 7. Tray purity：派生 Tray 绝不修改底层规范�
   const snapshotAfter = JSON.stringify(core.getSnapshot());
   assert.equal(snapshotBefore, snapshotAfter, 'Snapshot must not be modified by deriving Attention Tray');
 });
+

@@ -407,6 +407,16 @@ describe('Issue #20 综合契约验收套件', () => {
     const jsonTray = await resTray.json();
     assert.ok(jsonTray.attention_tray);
     assert.equal(jsonTray.attention_tray.items.length, jsonProjects.attention_tray.items.length);
+    assert.equal(typeof jsonTray.attention_tray.unknown_endpoint_count, 'number');
+    assert.equal(typeof jsonTray.attention_tray.has_unknown_endpoints, 'boolean');
+
+    // 校验每个条目携带规范 provenance 溯源字段 (Blocker 3)
+    for (const it of jsonTray.attention_tray.items) {
+      assert.ok(it.binding_id);
+      assert.ok(it.source_plane);
+      assert.ok(it.source_id);
+      assert.ok(it.source_state);
+    }
 
     // 10c. GET / HTML 页面同时包含 Attention Tray 与项目卡片
     const resHtml = await fetch(`${baseUrl}/`);
@@ -431,6 +441,17 @@ describe('Issue #20 综合契约验收套件', () => {
     assert.equal(assertJson.success, true);
     assert.equal(assertJson.human_intervention.active, true);
     assert.equal(assertJson.human_intervention.reason, 'Staging manual migration lock');
+
+    // 10d-2. POST assert human intervention - 空白/非字符串 reason 失败 (Blocker 1)
+    const resBlankReason = await fetch(`${baseUrl}/api/projects/rally-core-staging/human-intervention/assert`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        expected_binding_revision: 1,
+        reason: '   '
+      })
+    });
+    assert.equal(resBlankReason.status === 400 || resBlankReason.status === 409, true);
 
     // 10e. POST assert human intervention - 409 版本失配 fail-closed
     const resStaleAssert = await fetch(`${baseUrl}/api/projects/rally-core-staging/human-intervention/assert`, {
@@ -467,5 +488,34 @@ describe('Issue #20 综合契约验收套件', () => {
       })
     });
     assert.equal(resStaleClear.status, 409);
+
+    // 10h. [Blocker 2 回归] 存在 UNKNOWN 端点且 0 个 Attention Tray 项时的 HTML 渲染：
+    // 创建一个干净的无 Attention 项但含 UNKNOWN 端点的临时项目
+    const emptyUnkReg = createProjectRegistry();
+    emptyUnkReg.registerProject({
+      binding: createBinding({
+        binding_id: 'proj-empty-unk',
+        binding_revision: 1,
+        browser: { provider: 'chatgpt', conversation_id: 'conv-br-eunk' },
+        ide_endpoints: [{
+          endpoint_id: 'ide-1',
+          endpoint_revision: 1,
+          conversation_id: 'conv-ide-eunk',
+          workspace_identity: '/ws/eunk',
+          repository_identity: 'repo/eunk'
+        }]
+      })
+    });
+    const unkServer = await startStatusSurfaceServer({ registry: emptyUnkReg, port: 0 });
+    try {
+      const resUnkHtml = await fetch(unkServer.url);
+      const unkHtmlText = await resUnkHtml.text();
+      // 必须包含 neutral fail-closed 文案，严禁出现 All Caught Up
+      assert.match(unkHtmlText, /No Attention Tray items; endpoint state remains UNKNOWN — inspect project cards\./);
+      assert.doesNotMatch(unkHtmlText, /All Caught Up/);
+      assert.doesNotMatch(unkHtmlText, /全部就绪/);
+    } finally {
+      await unkServer.close();
+    }
   });
 });

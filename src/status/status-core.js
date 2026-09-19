@@ -394,12 +394,26 @@ export class ProjectStatusCore {
   }
 
   setHumanIntervention({ active = true, reason = null } = {}) {
+    const isActive = Boolean(active);
+    let normalizedReason = null;
+
+    if (isActive) {
+      if (typeof reason !== 'string' || reason.trim().length === 0) {
+        throw new Error('Human intervention reason must be a non-empty string when active: true');
+      }
+      normalizedReason = reason.trim();
+    } else {
+      // active: false 终态必须强制为 reason: null，严禁保留传入的 reason
+      normalizedReason = null;
+    }
+
+    const now = new Date().toISOString();
     this._humanIntervention = {
-      active: Boolean(active),
-      reason: reason || null,
-      updated_at: new Date().toISOString()
+      active: isActive,
+      reason: normalizedReason,
+      updated_at: now
     };
-    this._updatedAt = this._humanIntervention.updated_at;
+    this._updatedAt = now;
     if (this._onMutation) {
       this._onMutation();
     }
