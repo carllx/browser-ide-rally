@@ -302,6 +302,38 @@ test('[Onboarding Controller] 5. 诚实未知：若端点结果事实无法确�
   // 验证诚实输出 UNKNOWN，不伪造 NO_NEW_RESULT
   assert.equal(snapshot.endpoints.browser.result_state, 'UNKNOWN');
   assert.equal(snapshot.endpoints.ide_endpoints['ide-primary'].result_state, 'UNKNOWN');
+  assert.equal(snapshot.endpoints.ide_endpoints['ide-primary'].continuity.trusted, false);
+  assert.equal(snapshot.endpoints.ide_endpoints['ide-primary'].continuity.unknown_reason, 'onboarding_transcript_unverified');
+
+  // 变体测试：transcript 存在但 0 条 completed turns，必须诚实保持 UNKNOWN，严禁伪造 trusted NO_NEW_RESULT
+  const mockGetIdeTurnsZero = () => [];
+  const { snapshot: snapZero } = createOnboardingProject({
+    displayName: 'Zero Turns Project',
+    browserUrl: 'https://chatgpt.com/c/conv-browser-unk-2',
+    ideConversationId: 'conv-ide-unk-2',
+    registry: createProjectRegistry(),
+    browserAdapter: createMockBrowserAdapter({
+      tabs: [{ conversationId: 'conv-browser-unk-2' }],
+      probeResult: () => ({ trusted: true, latest_completed_cursor: null })
+    }),
+    agentApiExecutor: createMockAgentApiExecutor({
+      'conv-ide-unk-2': {
+        response: {
+          conversationMetadata: {
+            metadata: {
+              workspaces: [{ workspaceFolderAbsoluteUri: '/Users/test/workspace', repository: { computedName: 'owner/repo' } }]
+            }
+          }
+        }
+      }
+    }),
+    getIdeTurns: mockGetIdeTurnsZero
+  });
+
+  const zeroSlot = snapZero.endpoints.ide_endpoints['ide-primary'];
+  assert.equal(zeroSlot.result_state, 'UNKNOWN');
+  assert.equal(zeroSlot.continuity.trusted, false);
+  assert.equal(zeroSlot.continuity.unknown_reason, 'no_completed_turns_found');
 });
 
 test('[Onboarding Controller] 6. 操作时重验 (Create-time revalidation)：Verify 与 Create 之间标签页若关闭，Create 阶段 Fail-Closed', () => {

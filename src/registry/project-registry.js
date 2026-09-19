@@ -80,7 +80,12 @@ export class ProjectRegistry {
     });
     this._projects.set(binding.binding_id, core);
     if (this._storagePath) {
-      this.saveToFile(this._storagePath);
+      try {
+        this.saveToFile(this._storagePath);
+      } catch (err) {
+        this._projects.delete(binding.binding_id);
+        throw err;
+      }
     }
     return core;
   }

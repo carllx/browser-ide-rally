@@ -340,8 +340,8 @@ export function createOnboardingProject({
         completed_at: null,
         latest_completed_result: null,
         continuity: {
-          trusted: true,
-          unknown_reason: null
+          trusted: false,
+          unknown_reason: 'no_completed_turns_found'
         },
         updated_at: now
       };

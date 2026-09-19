@@ -109,3 +109,32 @@ test('[Onboarding Registry Guards] 4. 首次 registerProject 立即通过持久�
     temp.cleanup();
   }
 });
+
+test('[Onboarding Registry Guards] 5. 事务性 Fail-Closed：持久化写入失败时回滚内存注册，不留半创建状态', () => {
+  // 设置一个无效的只读或非法路径（例如指向一个只读目录或非法文件名）
+  const temp = createTempStorage();
+  try {
+    const reg = createProjectRegistry({ storagePath: temp.filePath });
+    const b1 = createBinding({
+      binding_id: 'proj-fail-persist',
+      display_name: 'Fail Persist Project',
+      browser: { provider: 'chatgpt', conversation_id: 'conv-b-fail' },
+      ide: { conversation_id: 'conv-i-fail', workspace_identity: '/ws/fail', repository_identity: 'repo/fail' }
+    });
+
+    // 人为破坏 saveToFile：模拟磁盘满或原子重命名/权限异常
+    reg.saveToFile = () => {
+      throw new Error('EACCES: permission denied, simulated durable write failure');
+    };
+
+    assert.throws(() => {
+      reg.registerProject({ binding: b1 });
+    }, /simulated durable write failure/i);
+
+    // 关键断言：内存中绝不残留半创建的项目
+    assert.equal(reg.hasProject('proj-fail-persist'), false);
+    assert.equal(reg.listProjects().length, 0);
+  } finally {
+    temp.cleanup();
+  }
+});
