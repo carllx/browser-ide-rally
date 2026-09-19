@@ -43,26 +43,7 @@ async function main() {
     process.exit(0);
   }
 
-  try {
-    const fs = await import('node:fs');
-    fs.appendFileSync('/tmp/antigravity-hook-events.jsonl', JSON.stringify({
-      timestamp: new Date().toISOString(),
-      payload: hookPayload
-    }) + '\n');
-  } catch (_) {}
-
-  let targetUrlStr = process.env.RALLY_SURFACE_URL;
-  if (!targetUrlStr) {
-    try {
-      const fs = await import('node:fs');
-      if (fs.existsSync('/tmp/rally-hook-target-url.txt')) {
-        targetUrlStr = fs.readFileSync('/tmp/rally-hook-target-url.txt', 'utf8').trim();
-      }
-    } catch (_) {}
-  }
-  if (!targetUrlStr) {
-    targetUrlStr = 'http://127.0.0.1:3123/api/hooks/antigravity';
-  }
+  const targetUrlStr = process.env.RALLY_SURFACE_URL || 'http://127.0.0.1:3123/api/hooks/antigravity';
   try {
     const targetUrl = new URL(targetUrlStr);
     const postData = Buffer.from(JSON.stringify(hookPayload), 'utf8');

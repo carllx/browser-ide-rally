@@ -26,7 +26,8 @@ export function isObservationUnchanged(currentBrowserSnapshot, newObservation) {
   // 端点处于 UNKNOWN 状态且未恢复受信任，若未受信原因相同，跳过重复写盘；防止断开连接或找不到标签页时持续无限重写
   if (!currentTrusted && !nextTrusted) {
     const currentReason = currentBrowserSnapshot.continuity?.unknown_reason ?? null;
-    const nextReason = newObservation.reason ?? newObservation.error ?? (newObservation.continuity_lost ? 'continuity_lost' : null);
+    const rawReason = newObservation.reason ?? newObservation.error ?? (newObservation.continuity_lost ? 'continuity_lost' : null);
+    const nextReason = rawReason ?? (currentReason || 'observation_untrusted');
     return currentReason === nextReason;
   }
 

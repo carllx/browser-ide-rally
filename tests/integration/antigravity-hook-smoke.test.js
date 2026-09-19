@@ -32,16 +32,13 @@ describe('Official Antigravity Stop Hook Real Integration Smoke', () => {
       pollIntervalMs: 500
     });
 
+    // 在官方默认端口 3123 上启动临时核验服务
     const server = await startStatusSurfaceServer({
       registry,
       browserAdapter: mockBrowserAdapter,
       observationCoordinator: coordinator,
-      port: 0
+      port: 3123
     });
-
-    const hookUrl = `${server.url}/api/hooks/antigravity`;
-    const ephemeralTargetFile = '/tmp/rally-hook-target-url.txt';
-    fs.writeFileSync(ephemeralTargetFile, hookUrl, 'utf8');
 
     try {
       // 1. 真实派生 Antigravity 会话
@@ -93,11 +90,6 @@ describe('Official Antigravity Stop Hook Real Integration Smoke', () => {
       assert.ok(advancedSnap.latest_completed_result?.result_ref?.startsWith('res_'));
       assert.ok(advancedSnap.latest_completed_result?.text?.includes('PONG'));
     } finally {
-      try {
-        if (fs.existsSync(ephemeralTargetFile)) {
-          fs.unlinkSync(ephemeralTargetFile);
-        }
-      } catch (_) {}
       await server.close();
     }
   });

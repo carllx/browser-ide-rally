@@ -482,6 +482,9 @@ export function startStatusSurfaceServer({ registry, browserAdapter = null, ideA
         port: actualPort,
         url,
         close: () => new Promise(res => {
+          if (observationCoordinator && typeof observationCoordinator.stop === 'function') {
+            observationCoordinator.stop();
+          }
           if (typeof server.closeAllConnections === 'function') {
             server.closeAllConnections();
           }
