@@ -345,4 +345,38 @@ describe('WorkspaceHookManager TDD Suite', () => {
     assert.equal(fs.existsSync(path.join(ws, '.agents', 'rally-conversations.json')), false);
     assert.equal(fs.existsSync(path.join(ws, '.agents', 'hooks.json')), false);
   });
+
+  it('O. Registry reconciliation: prunes stale unreferenced conversations from allowlist to align with canonical truth', () => {
+    const ws = path.join(tempBaseDir, 'ws-o');
+    fs.mkdirSync(ws, { recursive: true });
+
+    // 先模拟工作区遗留了两个会话：conv-stale 和 conv-active
+    manager.ensureWorkspaceHook(ws, 'conv-stale');
+    manager.ensureWorkspaceHook(ws, 'conv-active');
+
+    // Registry 权威真值中只有 conv-active
+    const registry = createProjectRegistry();
+    registry.registerProject({
+      binding: createBinding({
+        binding_id: 'proj-o',
+        display_name: 'Project O',
+        browser: { provider: 'chatgpt', conversation_id: 'chatgpt-o' },
+        ide_endpoints: [{
+          endpoint_id: 'ide-primary',
+          endpoint_revision: 1,
+          conversation_id: 'conv-active',
+          workspace_identity: ws,
+          repository_identity: 'repo-o'
+        }]
+      })
+    });
+
+    // 执行对齐：必须修剪掉失效的 conv-stale，仅保留 conv-active
+    const res = manager.reconcileWorkspaceHooks(registry);
+    assert.equal(res.reconciledWorkspaces, 1);
+
+    const allowlist = JSON.parse(fs.readFileSync(path.join(ws, '.agents', 'rally-conversations.json'), 'utf8'));
+    assert.deepEqual(allowlist.conversations, ['conv-active']);
+    assert.equal(allowlist.conversations.includes('conv-stale'), false);
+  });
 });
