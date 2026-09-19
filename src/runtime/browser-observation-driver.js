@@ -5,10 +5,34 @@
  * 1. 有界周期轮询：定期调用 ChatGPTBrowserAdapter.observeBrowserEndpoint 获取最新 DOM 观察；
  * 2. 变更感知防重写 (Change-Detection Guard)：
  *    - 若 is_generating === true 或 should_record === false，严禁录入 Core；
- *    - 若 latest_completed_cursor、trusted 与 continuity_lost 相比当前快照无变化，跳过录入；
+ *    - 若 latest cursor 与 trusted 状态相同，跳过 recordEndpointObservation(...)；
  *    - 杜绝每个轮询周期无脑 recordEndpointObservation 触发 durable registry 无限重写磁盘！
  * 3. 隔离与容错：单项目观察失败或标签页未打开绝不阻塞其他项目的观察与运行时稳定性。
  */
+
+/**
+ * 校验最新观察事实相比当前快照是否无实质变更
+ * @param {object} currentBrowserSnapshot
+ * @param {object} newObservation
+ * @returns {boolean}
+ */
+export function isObservationUnchanged(currentBrowserSnapshot, newObservation) {
+  if (!currentBrowserSnapshot || !newObservation) return false;
+
+  const currentTrusted = Boolean(currentBrowserSnapshot.continuity?.trusted);
+  const nextTrusted = Boolean(newObservation.trusted);
+  if (currentTrusted !== nextTrusted) return false;
+
+  const currentCursor = currentBrowserSnapshot.latest_completed_cursor ?? null;
+  const nextCursor = newObservation.latest_completed_cursor ?? null;
+  if (currentCursor !== nextCursor) return false;
+
+  const currentLost = Boolean(currentBrowserSnapshot.continuity?.unknown_reason && !currentTrusted);
+  const nextLost = Boolean(newObservation.continuity_lost);
+  if (currentLost !== nextLost) return false;
+
+  return true;
+}
 
 export class BrowserObservationDriver {
   /**
@@ -128,15 +152,7 @@ export class BrowserObservationDriver {
 
           // 2. 变更感知防重写比对 (Change Detection Guard)
           const currentBrowser = snapshot.endpoints?.browser || {};
-          const currentTrusted = Boolean(currentBrowser.continuity?.trusted);
-          const currentCursor = currentBrowser.latest_completed_cursor ?? null;
-          const currentLost = Boolean(currentBrowser.continuity?.unknown_reason && !currentTrusted);
-
-          const nextTrusted = Boolean(observation.trusted);
-          const nextCursor = observation.latest_completed_cursor ?? null;
-          const nextLost = Boolean(observation.continuity_lost);
-
-          if (currentTrusted === nextTrusted && currentCursor === nextCursor && currentLost === nextLost) {
+          if (isObservationUnchanged(currentBrowser, observation)) {
             // 事实无任何变化，跳过 Core 录入与磁盘写
             stats.skippedCount++;
             continue;

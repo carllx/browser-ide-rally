@@ -3,7 +3,7 @@
  * 
  * 核心架构准则 (#27):
  * 1. 统一协调端点观察生命周期，管理启动与安全关闭；
- * 2. 启动时执行一次 IDE Startup Reconciliation (One-shot)，绝不常态周期性轮询 transcript；
+ * 2. 启动时执行一次 IDE Startup Reconciliation (One-shot)，由适配器全权负责身份与凭据校验，绝不在外部截断；
  * 3. 驱动 Browser 周期性观察，并通过变更检测守卫防止冗余写盘；
  * 4. 暴露 Antigravity Stop Hook 入口，精准分发事件到对应端点适配器；
  * 5. 纯净资源清理：在 stop 时彻底停止所有定时器，防止 open handle 泄漏。
@@ -11,10 +11,8 @@
 
 import path from 'node:path';
 import os from 'node:os';
-import fs from 'node:fs';
 import { BrowserObservationDriver } from './browser-observation-driver.js';
 import { AntigravityHookIngress } from './antigravity-hook-ingress.js';
-import { AntigravityIdeAdapter } from '../adapters/ide/antigravity-adapter.js';
 
 export class ObservationRuntimeCoordinator {
   /**
@@ -71,13 +69,14 @@ export class ObservationRuntimeCoordinator {
 
   /**
    * 启动时对所有已注册项目的 IDE 端点执行一次性状态恢复核验 (One-shot)
+   * 遵循单一职责契约：不越权在外层检查 transcript 存在性，全部交付适配器进行正规核验与 fail-closed
    * @param {object} [options]
    * @param {string} [options.brainBaseDir]
-   * @returns {{ reconciledCount: number, skippedCount: number, errorCount: number }}
+   * @returns {{ reconciledCount: number, errorCount: number }}
    */
   reconcileAllIdeEndpointsOnStartup({ brainBaseDir = null } = {}) {
     const snapshots = this._registry.listProjects();
-    const stats = { reconciledCount: 0, skippedCount: 0, errorCount: 0 };
+    const stats = { reconciledCount: 0, errorCount: 0 };
     const effectiveBaseDir = brainBaseDir || this._brainBaseDir;
 
     for (const snap of snapshots) {
@@ -100,26 +99,8 @@ export class ObservationRuntimeCoordinator {
           ? path.join(effectiveBaseDir, convId, '.system_generated', 'logs', 'transcript.jsonl')
           : path.join(os.homedir(), '.gemini', 'antigravity', 'brain', convId, '.system_generated', 'logs', 'transcript.jsonl');
 
-        if (!fs.existsSync(transcriptPath)) {
-          stats.skippedCount++;
-          continue;
-        }
-
         try {
-          const adapterKey = `${bindingId}:${endpointId}`;
-          let adapter = this._hookIngress._ideAdapters.get(adapterKey);
-          const core = this._registry.getProject(bindingId);
-
-          if (!adapter) {
-            adapter = new AntigravityIdeAdapter({
-              binding,
-              statusCore: core,
-              endpointId
-            });
-            this._hookIngress._ideAdapters.set(adapterKey, adapter);
-          } else {
-            adapter.updateBinding(binding);
-          }
+          const adapter = this._hookIngress.getOrCreateAdapter({ bindingId, endpointId });
 
           adapter.reconcileOnStartup({
             transcriptPath,
