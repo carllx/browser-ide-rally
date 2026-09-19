@@ -160,7 +160,7 @@ export class WorkspaceHookManager {
    * @param {string} conversationId
    * @returns {{ success: boolean, reason?: string, workspacePath?: string, conversationId?: string }}
    */
-  ensureWorkspaceHook(workspacePath, conversationId) {
+  ensureWorkspaceHook(workspacePath, conversationId, { surfaceUrl = null } = {}) {
     if (!workspacePath || typeof workspacePath !== 'string') {
       return { success: false, reason: 'invalid_workspace_path' };
     }
@@ -209,12 +209,16 @@ export class WorkspaceHookManager {
       }
     }
 
+    const hookCommand = surfaceUrl
+      ? `node "${bridgePath}" --url "${surfaceUrl}"`
+      : `node "${bridgePath}"`;
+
     // 注入/更新 Rally Stop Hook 节点（严格保留其它 tool 配置）
     hooksData[HOOK_KEY] = {
       Stop: [
         {
           type: 'command',
-          command: `node "${bridgePath}"`,
+          command: hookCommand,
           timeout: 5
         }
       ]
@@ -320,6 +324,34 @@ export class WorkspaceHookManager {
   }
 
   /**
+   * 辅助方法：从 ProjectRegistry 派生所有活跃工作区及其绑定的会话集合
+   * @private
+   * @param {import('../registry/project-registry.js').ProjectRegistry} registry
+   * @returns {Map<string, Set<string>>} workspacePath -> Set<conversationId>
+   */
+  _extractActiveWorkspaces(registry) {
+    const snapshots = registry.listProjects();
+    const workspaceMap = new Map();
+
+    for (const snap of snapshots) {
+      const ideEndpoints = snap.binding?.ide_endpoints || [];
+      for (const ep of ideEndpoints) {
+        const ws = ep.workspace_identity;
+        const convId = ep.conversation_id;
+        if (ws && convId) {
+          const resolvedWs = path.resolve(ws);
+          if (!workspaceMap.has(resolvedWs)) {
+            workspaceMap.set(resolvedWs, new Set());
+          }
+          workspaceMap.get(resolvedWs).add(convId.trim());
+        }
+      }
+    }
+
+    return workspaceMap;
+  }
+
+  /**
    * 根据 ProjectRegistry 的权威真值，重建所有活跃工作区的 Hook 与订阅白名单
    * @param {import('../registry/project-registry.js').ProjectRegistry} registry
    * @returns {{ reconciledWorkspaces: number, errors: string[] }}
@@ -331,28 +363,12 @@ export class WorkspaceHookManager {
 
     this.ensureStableBridge();
 
-    const snapshots = registry.listProjects();
-    const workspaceMap = new Map(); // workspacePath -> Set<conversationId>
-
-    for (const snap of snapshots) {
-      const ideEndpoints = snap.binding?.ide_endpoints || [];
-      for (const ep of ideEndpoints) {
-        const ws = ep.workspace_identity;
-        const convId = ep.conversation_id;
-        if (ws && convId && fs.existsSync(ws)) {
-          const resolvedWs = path.resolve(ws);
-          if (!workspaceMap.has(resolvedWs)) {
-            workspaceMap.set(resolvedWs, new Set());
-          }
-          workspaceMap.get(resolvedWs).add(convId.trim());
-        }
-      }
-    }
-
+    const workspaceMap = this._extractActiveWorkspaces(registry);
     let reconciledCount = 0;
     const errors = [];
 
     for (const [ws, convSet] of workspaceMap.entries()) {
+      if (!fs.existsSync(ws)) continue;
       for (const convId of convSet) {
         const res = this.ensureWorkspaceHook(ws, convId);
         if (!res.success) {
@@ -374,24 +390,7 @@ export class WorkspaceHookManager {
       return { cleanedWorkspaces: 0 };
     }
 
-    const snapshots = registry.listProjects();
-    const workspaceMap = new Map();
-
-    for (const snap of snapshots) {
-      const ideEndpoints = snap.binding?.ide_endpoints || [];
-      for (const ep of ideEndpoints) {
-        const ws = ep.workspace_identity;
-        const convId = ep.conversation_id;
-        if (ws && convId) {
-          const resolvedWs = path.resolve(ws);
-          if (!workspaceMap.has(resolvedWs)) {
-            workspaceMap.set(resolvedWs, new Set());
-          }
-          workspaceMap.get(resolvedWs).add(convId.trim());
-        }
-      }
-    }
-
+    const workspaceMap = this._extractActiveWorkspaces(registry);
     let count = 0;
     for (const [ws, convSet] of workspaceMap.entries()) {
       for (const convId of convSet) {

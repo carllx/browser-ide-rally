@@ -97,7 +97,9 @@ async function main() {
   }
 
   // 已绑定会话：准备转发至 Rally
-  let targetUrlStr = process.env.RALLY_SURFACE_URL;
+  const urlArgIdx = process.argv.indexOf('--url');
+  const cliUrl = urlArgIdx !== -1 && process.argv[urlArgIdx + 1] ? process.argv[urlArgIdx + 1].trim() : null;
+  let targetUrlStr = cliUrl || process.env.RALLY_SURFACE_URL;
   if (!targetUrlStr && matchedWorkspace) {
     try {
       const overrideUrlPath = path.resolve(matchedWorkspace, '.agents', 'hook-url');

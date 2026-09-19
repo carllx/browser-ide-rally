@@ -210,28 +210,49 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
         };
         const projectBefore = registry.getProject(bindingId);
         const oldIde = projectBefore?.binding?.ide_endpoints?.find(e => e.endpoint_id === body.target_endpoint);
-        const result = executeSafeRebind({
-          registry,
-          projectBindingId: bindingId,
-          targetEndpoint: body.target_endpoint,
-          expectedBindingRevision: body.expected_binding_revision,
-          newIdentity: normalizedIdentity,
-          identity: normalizedIdentity,
-          options: {
-            allow_discard_unhandled: body.allow_replace_unhandled === true || body.allow_discard_unhandled === true,
-            confirm_replace_unhandled_new: body.allow_replace_unhandled === true || body.allow_discard_unhandled === true,
-            confirm_replace_unknown: body.allow_replace_unknown === true || body.confirm_replace_unknown === true
+        const isIde = body.target_endpoint !== 'browser';
+        const mgr = observationCoordinator?.workspaceHookManager;
+        let hookInstalled = false;
+
+        // 1. 若为 IDE 端点重绑定，操作前先确立目标工作区 Hook 与订阅；若安装失败则直接拦截，防止残缺落盘
+        if (isIde && mgr && normalizedIdentity?.workspace_identity && normalizedIdentity?.conversation_id) {
+          const hookRes = mgr.ensureWorkspaceHook(normalizedIdentity.workspace_identity, normalizedIdentity.conversation_id);
+          if (!hookRes.success) {
+            throw new Error(`WORKSPACE_HOOK_FAILED: ${hookRes.reason}`);
           }
-        });
-        if (body.target_endpoint !== 'browser' && observationCoordinator?.workspaceHookManager) {
-          const mgr = observationCoordinator.workspaceHookManager;
-          if (normalizedIdentity?.workspace_identity && normalizedIdentity?.conversation_id) {
-            mgr.ensureWorkspaceHook(normalizedIdentity.workspace_identity, normalizedIdentity.conversation_id);
+          hookInstalled = true;
+        }
+
+        // 2. 执行规范 Rebind（失败时回滚预装 hook）
+        let result;
+        try {
+          result = executeSafeRebind({
+            registry,
+            projectBindingId: bindingId,
+            targetEndpoint: body.target_endpoint,
+            expectedBindingRevision: body.expected_binding_revision,
+            newIdentity: normalizedIdentity,
+            identity: normalizedIdentity,
+            options: {
+              allow_discard_unhandled: body.allow_replace_unhandled === true || body.allow_discard_unhandled === true,
+              confirm_replace_unhandled_new: body.allow_replace_unhandled === true || body.allow_discard_unhandled === true,
+              confirm_replace_unknown: body.allow_replace_unknown === true || body.confirm_replace_unknown === true
+            }
+          });
+        } catch (rebindErr) {
+          if (hookInstalled && mgr) {
+            mgr.removeWorkspaceHook(normalizedIdentity.workspace_identity, normalizedIdentity.conversation_id);
           }
-          if (oldIde?.workspace_identity && oldIde?.conversation_id && (oldIde.workspace_identity !== normalizedIdentity?.workspace_identity || oldIde.conversation_id !== normalizedIdentity?.conversation_id)) {
+          throw rebindErr;
+        }
+
+        // 3. 规范重绑成功后，安全清理原工作区孤立订阅
+        if (isIde && mgr && oldIde?.workspace_identity && oldIde?.conversation_id) {
+          if (oldIde.workspace_identity !== normalizedIdentity?.workspace_identity || oldIde.conversation_id !== normalizedIdentity?.conversation_id) {
             mgr.removeWorkspaceHook(oldIde.workspace_identity, oldIde.conversation_id);
           }
         }
+
         return sendJson(res, 200, {
           success: true,
           action_id: result.action?.action_id,
@@ -457,7 +478,15 @@ export function startStatusSurfaceServer({ registry, browserAdapter = null, ideA
           if (typeof server.closeAllConnections === 'function') {
             server.closeAllConnections();
           }
-          server.close(res);
+          const timer = setTimeout(() => {
+            try { server.unref(); } catch (_) {}
+            res();
+          }, 1000);
+          server.close((err) => {
+            clearTimeout(timer);
+            try { server.unref(); } catch (_) {}
+            res(err);
+          });
         })
       });
     });
