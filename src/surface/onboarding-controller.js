@@ -29,44 +29,14 @@ import {
 } from '../adapters/production-runtime-controls.js';
 
 /**
- * 清理并提取 Antigravity 会话 ID
- * 过滤不可见 unicode 控制符 (如 zero-width spaces, BOM)、首尾引号，并支持从 URI 中提取 UUID
+ * 清理并规范化 Antigravity 会话 ID（安全规范化：过滤不可见 unicode 控制符如零宽字符、BOM，以及首尾空白与引号）
+ * 严格保留 fail-closed exact-ID 语义，不放宽为任意文本中抽取 UUID
  * @param {string} input
  * @returns {string}
  */
 export function sanitizeIdeConversationId(input) {
   if (!input || typeof input !== 'string') return '';
-  let cleaned = input.replace(/[\u200B-\u200D\uFEFF]/g, '').trim().replace(/^["']|["']$/g, '').trim();
-  const uuidMatch = cleaned.match(/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i);
-  if (uuidMatch) {
-    return uuidMatch[1];
-  }
-  return cleaned;
-}
-
-/**
- * 带指数退避重试执行操作（确保稳定性）
- */
-function executeWithRetry(fn, { maxRetries = 5, initialDelayMs = 80 } = {}) {
-  let lastErr;
-  let delay = initialDelayMs;
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      return fn();
-    } catch (err) {
-      lastErr = err;
-      if (attempt < maxRetries) {
-        try {
-          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
-        } catch {
-          const start = Date.now();
-          while (Date.now() - start < delay) { /* fallback */ }
-        }
-        delay *= 2;
-      }
-    }
-  }
-  throw lastErr;
+  return input.replace(/[\u200B-\u200D\uFEFF]/g, '').trim().replace(/^["']|["']$/g, '').trim();
 }
 
 /**
@@ -185,10 +155,7 @@ export function verifyOnboardingIdentities({
 
   let rawMeta;
   try {
-    rawMeta = executeWithRetry(() => executor(bin, ['get-conversation-metadata', cleanIdeConvId]), {
-      maxRetries: 5,
-      initialDelayMs: 80
-    });
+    rawMeta = executor(bin, ['get-conversation-metadata', cleanIdeConvId]);
   } catch (err) {
     const errorDetails = err.stderr ? err.stderr.toString().trim() : (err.stdout ? err.stdout.toString().trim() : (err.message || ''));
     const error = new Error(`Antigravity conversation "${cleanIdeConvId}" not found or inaccessible. Please check the conversation ID and ensure Antigravity is running.`);

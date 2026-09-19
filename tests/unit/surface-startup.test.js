@@ -55,10 +55,16 @@ describe('Surface Startup 启动配置与 Fail-Closed 回归测试', () => {
   });
 
   it('4. 默认生产模式启动干净的空注册表，绝不伪造任何项目与状态事实', () => {
-    const reg = initializeStartupRegistry({ storage: null, demo: false });
-    const projects = reg.listProjects();
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rally-startup-fresh-'));
+    const dummyDefault = path.join(tmpDir, 'nonexistent-projects.json');
+    try {
+      const reg = initializeStartupRegistry({ storage: null, demo: false, defaultStoragePath: dummyDefault });
+      const projects = reg.listProjects();
 
-    assert.equal(projects.length, 0);
+      assert.equal(projects.length, 0);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it('5. 禁止同时指定已存在的 --storage 文件与显式 --demo 标志，防止污染生产存储', () => {

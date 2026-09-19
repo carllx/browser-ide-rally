@@ -388,7 +388,7 @@ test('[Onboarding Controller] 6. 操作时重验 (Create-time revalidation)：Ve
   }, /No open Chrome tab found/i);
 });
 
-test('[Onboarding Controller] 10. 容错清洗：过滤零宽字符、引号、URI 前缀，确保复制的会话 ID 稳定可识别', () => {
+test('[Onboarding Controller] 10. 安全规范化：清洗零宽字符、引号与空白，保持 exact-ID fail-closed 语义', () => {
   const registry = createProjectRegistry();
   const mockBrowser = createMockBrowserAdapter({
     tabs: [{ conversationId: 'conv-safe', windowIndex: 1, tabIndex: 1 }]
@@ -405,17 +405,17 @@ test('[Onboarding Controller] 10. 容错清洗：过滤零宽字符、引号、U
     }
   });
 
-  // 带零宽空格、双引号与 URI
-  const dirtyInputs = [
+  // 安全规范化：零宽空格、首尾单双引号、首尾空格均安全清洗为精确 ID
+  const normalizedInputs = [
     '\u200Bb1b193e3-1b2d-4f5c-abee-38efb8179254\uFEFF',
     '"b1b193e3-1b2d-4f5c-abee-38efb8179254"',
-    'conversation://b1b193e3-1b2d-4f5c-abee-38efb8179254',
-    '  /Users/yamlam/.gemini/antigravity/brain/b1b193e3-1b2d-4f5c-abee-38efb8179254  '
+    '\'b1b193e3-1b2d-4f5c-abee-38efb8179254\'',
+    '  b1b193e3-1b2d-4f5c-abee-38efb8179254  '
   ];
 
-  for (const dirtyId of dirtyInputs) {
+  for (const dirtyId of normalizedInputs) {
     const verified = verifyOnboardingIdentities({
-      displayName: 'Dirty Input Test',
+      displayName: 'Normalized Input Test',
       browserUrl: 'https://chatgpt.com/c/conv-safe',
       ideConversationId: dirtyId,
       registry,
@@ -424,4 +424,16 @@ test('[Onboarding Controller] 10. 容错清洗：过滤零宽字符、引号、U
     });
     assert.equal(verified.ide.conversation_id, 'b1b193e3-1b2d-4f5c-abee-38efb8179254');
   }
+
+  // 严格 Fail-Closed：若输入不是 exact-ID 而是无关路径或 URI，不擅自模糊抽取，按 exact ID 查验并失败
+  assert.throws(() => {
+    verifyOnboardingIdentities({
+      displayName: 'Fail Closed URI Test',
+      browserUrl: 'https://chatgpt.com/c/conv-safe',
+      ideConversationId: 'conversation://b1b193e3-1b2d-4f5c-abee-38efb8179254',
+      registry,
+      browserAdapter: mockBrowser,
+      agentApiExecutor: mockAgentApi
+    });
+  }, /not found or inaccessible/i);
 });
