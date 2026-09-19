@@ -387,3 +387,41 @@ test('[Onboarding Controller] 6. 操作时重验 (Create-time revalidation)：Ve
     });
   }, /No open Chrome tab found/i);
 });
+
+test('[Onboarding Controller] 10. 容错清洗：过滤零宽字符、引号、URI 前缀，确保复制的会话 ID 稳定可识别', () => {
+  const registry = createProjectRegistry();
+  const mockBrowser = createMockBrowserAdapter({
+    tabs: [{ conversationId: 'conv-safe', windowIndex: 1, tabIndex: 1 }]
+  });
+  const mockAgentApi = createMockAgentApiExecutor({
+    'b1b193e3-1b2d-4f5c-abee-38efb8179254': {
+      response: {
+        conversationMetadata: {
+          metadata: {
+            workspaces: [{ workspaceFolderAbsoluteUri: '/ws', repository: { computedName: 'o/r' } }]
+          }
+        }
+      }
+    }
+  });
+
+  // 带零宽空格、双引号与 URI
+  const dirtyInputs = [
+    '\u200Bb1b193e3-1b2d-4f5c-abee-38efb8179254\uFEFF',
+    '"b1b193e3-1b2d-4f5c-abee-38efb8179254"',
+    'conversation://b1b193e3-1b2d-4f5c-abee-38efb8179254',
+    '  /Users/yamlam/.gemini/antigravity/brain/b1b193e3-1b2d-4f5c-abee-38efb8179254  '
+  ];
+
+  for (const dirtyId of dirtyInputs) {
+    const verified = verifyOnboardingIdentities({
+      displayName: 'Dirty Input Test',
+      browserUrl: 'https://chatgpt.com/c/conv-safe',
+      ideConversationId: dirtyId,
+      registry,
+      browserAdapter: mockBrowser,
+      agentApiExecutor: mockAgentApi
+    });
+    assert.equal(verified.ide.conversation_id, 'b1b193e3-1b2d-4f5c-abee-38efb8179254');
+  }
+});

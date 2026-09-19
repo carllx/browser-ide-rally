@@ -402,10 +402,11 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
         });
         return sendJson(res, 200, { success: true, preview });
       } catch (err) {
+        console.error(`[Rally] Onboarding verification failed: ${err.message}`, err.details ? `(details: ${err.details})` : '');
         return sendJson(res, 400, {
           success: false,
           reason: err.message,
-          details: err.stack || err.message
+          details: err.details || err.stack || err.message
         });
       }
     }
@@ -434,10 +435,11 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
           project: result.snapshot
         });
       } catch (err) {
+        console.error(`[Rally] Onboarding project creation failed: ${err.message}`, err.details ? `(details: ${err.details})` : '');
         return sendJson(res, 400, {
           success: false,
           reason: err.message,
-          details: err.stack || err.message
+          details: err.details || err.stack || err.message
         });
       }
     }

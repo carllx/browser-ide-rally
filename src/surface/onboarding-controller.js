@@ -29,6 +29,47 @@ import {
 } from '../adapters/production-runtime-controls.js';
 
 /**
+ * 清理并提取 Antigravity 会话 ID
+ * 过滤不可见 unicode 控制符 (如 zero-width spaces, BOM)、首尾引号，并支持从 URI 中提取 UUID
+ * @param {string} input
+ * @returns {string}
+ */
+export function sanitizeIdeConversationId(input) {
+  if (!input || typeof input !== 'string') return '';
+  let cleaned = input.replace(/[\u200B-\u200D\uFEFF]/g, '').trim().replace(/^["']|["']$/g, '').trim();
+  const uuidMatch = cleaned.match(/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i);
+  if (uuidMatch) {
+    return uuidMatch[1];
+  }
+  return cleaned;
+}
+
+/**
+ * 带指数退避重试执行操作（确保稳定性）
+ */
+function executeWithRetry(fn, { maxRetries = 5, initialDelayMs = 80 } = {}) {
+  let lastErr;
+  let delay = initialDelayMs;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt < maxRetries) {
+        try {
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
+        } catch {
+          const start = Date.now();
+          while (Date.now() - start < delay) { /* fallback */ }
+        }
+        delay *= 2;
+      }
+    }
+  }
+  throw lastErr;
+}
+
+/**
  * 解析完整 ChatGPT 会话 URL
  * 支持 https://chatgpt.com/c/<id>、https://chat.openai.com/c/<id>、https://chatgpt.com/g/<gpt>/c/<id>
  * @param {string} url
@@ -124,10 +165,10 @@ export function verifyOnboardingIdentities({
   }
 
   // 3. IDE 会话与元数据派生
-  if (!ideConversationId || typeof ideConversationId !== 'string' || !ideConversationId.trim()) {
+  const cleanIdeConvId = sanitizeIdeConversationId(ideConversationId);
+  if (!cleanIdeConvId) {
     throw new Error('Antigravity conversation ID is required.');
   }
-  const cleanIdeConvId = ideConversationId.trim();
 
   // 排查 registry 内 ide conversation 冲突
   for (const proj of registry.listProjects()) {
@@ -144,9 +185,15 @@ export function verifyOnboardingIdentities({
 
   let rawMeta;
   try {
-    rawMeta = executor(bin, ['get-conversation-metadata', cleanIdeConvId]);
+    rawMeta = executeWithRetry(() => executor(bin, ['get-conversation-metadata', cleanIdeConvId]), {
+      maxRetries: 5,
+      initialDelayMs: 80
+    });
   } catch (err) {
-    throw new Error(`Antigravity conversation "${cleanIdeConvId}" not found or inaccessible. Please check the conversation ID and ensure Antigravity is running.`);
+    const errorDetails = err.stderr ? err.stderr.toString().trim() : (err.stdout ? err.stdout.toString().trim() : (err.message || ''));
+    const error = new Error(`Antigravity conversation "${cleanIdeConvId}" not found or inaccessible. Please check the conversation ID and ensure Antigravity is running.`);
+    error.details = errorDetails;
+    throw error;
   }
 
   let meta;
