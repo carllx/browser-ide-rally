@@ -62,17 +62,19 @@ export class BrowserObservationDriver {
     this._logger = logger;
     this._timer = null;
     this._isPolling = false;
-    this._stopped = true;
+    this._started = false;
+    this._stopped = false;
   }
 
   /**
    * 启动后台观察轮询
    */
   start() {
-    if (!this._stopped && this._timer) {
+    this._started = true;
+    this._stopped = false;
+    if (this._timer) {
       return;
     }
-    this._stopped = false;
     this._scheduleNextPoll();
   }
 
@@ -80,6 +82,7 @@ export class BrowserObservationDriver {
    * 停止后台观察轮询并清理定时器
    */
   stop() {
+    this._started = false;
     this._stopped = true;
     if (this._timer) {
       clearTimeout(this._timer);
@@ -92,7 +95,7 @@ export class BrowserObservationDriver {
    * @returns {boolean}
    */
   isRunning() {
-    return !this._stopped;
+    return this._started && !this._stopped;
   }
 
   /**
@@ -119,7 +122,7 @@ export class BrowserObservationDriver {
    * @returns {Promise<{ recordedCount: number, skippedCount: number, generatingCount: number, errorCount: number }>}
    */
   async pollOnce() {
-    if (this._isPolling) {
+    if (this._stopped || this._isPolling) {
       return { recordedCount: 0, skippedCount: 0, generatingCount: 0, errorCount: 0 };
     }
 
@@ -135,6 +138,9 @@ export class BrowserObservationDriver {
       const snapshots = this._registry.listProjects();
 
       for (const snapshot of snapshots) {
+        if (this._stopped) {
+          break;
+        }
         const binding = snapshot.binding;
         const bindingId = binding?.binding_id;
         const browser = binding?.browser;
