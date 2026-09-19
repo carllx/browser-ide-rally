@@ -225,11 +225,10 @@ async function main() {
   // 仅在生产模式（非 --demo）下启动真实端点观察运行时，防止冲刷演示数据或向外部发起轮询
   let observationCoordinator = null;
   if (!options.demo) {
-    const pollIntervalMs = parseInt(process.env.RALLY_BROWSER_POLL_INTERVAL_MS, 10) || 2000;
     observationCoordinator = createObservationRuntimeCoordinator({
       registry,
       browserAdapter,
-      pollIntervalMs
+      pollIntervalMs: 2000
     });
   }
 

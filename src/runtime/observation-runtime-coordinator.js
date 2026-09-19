@@ -9,8 +9,6 @@
  * 5. 纯净资源清理：在 stop 时彻底停止所有定时器，防止 open handle 泄漏。
  */
 
-import path from 'node:path';
-import os from 'node:os';
 import { BrowserObservationDriver } from './browser-observation-driver.js';
 import { AntigravityHookIngress } from './antigravity-hook-ingress.js';
 import { resolveDefaultAntigravityTranscriptPath } from '../adapters/ide/antigravity-adapter.js';
