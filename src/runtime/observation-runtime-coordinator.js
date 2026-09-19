@@ -11,6 +11,7 @@
 
 import { BrowserObservationDriver } from './browser-observation-driver.js';
 import { AntigravityHookIngress } from './antigravity-hook-ingress.js';
+import { WorkspaceHookManager } from './workspace-hook-manager.js';
 import { resolveDefaultAntigravityTranscriptPath } from '../adapters/ide/antigravity-adapter.js';
 
 export class ObservationRuntimeCoordinator {
@@ -20,6 +21,7 @@ export class ObservationRuntimeCoordinator {
    * @param {object} options.browserAdapter - ChatGPTBrowserAdapter
    * @param {number} [options.pollIntervalMs=2000] - 浏览器轮询间隔
    * @param {string} [options.brainBaseDir] - 自定义 brain 目录（用于测试隔离）
+   * @param {WorkspaceHookManager} [options.workspaceHookManager] - 工作区 Hook 管理器
    * @param {object} [options.logger=console] - 日志记录器
    */
   constructor({
@@ -27,6 +29,7 @@ export class ObservationRuntimeCoordinator {
     browserAdapter,
     pollIntervalMs = 2000,
     brainBaseDir = null,
+    workspaceHookManager = null,
     logger = console
   }) {
     if (!registry || typeof registry.listProjects !== 'function') {
@@ -36,6 +39,8 @@ export class ObservationRuntimeCoordinator {
     this._registry = registry;
     this._brainBaseDir = brainBaseDir;
     this._logger = logger;
+
+    this._workspaceHookManager = workspaceHookManager || new WorkspaceHookManager({ logger });
 
     this._hookIngress = new AntigravityHookIngress({
       registry,
@@ -50,6 +55,10 @@ export class ObservationRuntimeCoordinator {
     });
 
     this._stopped = false;
+  }
+
+  get workspaceHookManager() {
+    return this._workspaceHookManager;
   }
 
   get browserDriver() {
@@ -130,10 +139,17 @@ export class ObservationRuntimeCoordinator {
     this._stopped = false;
     this._hookIngress.resume();
 
-    // 1. 启动时执行一次 IDE 端点核验
+    // 1. 启动时协调并重建工作区本地 Stop Hook 与白名单
+    try {
+      this._workspaceHookManager.reconcileWorkspaceHooks(this._registry);
+    } catch (err) {
+      this._logger?.warn?.(`[ObservationRuntimeCoordinator] Failed to reconcile workspace hooks: ${err.message}`);
+    }
+
+    // 2. 启动时执行一次 IDE 端点核验
     this.reconcileAllIdeEndpointsOnStartup();
 
-    // 2. 启动浏览器端点周期轮询驱动器
+    // 3. 启动浏览器端点周期轮询驱动器
     this._browserDriver.start();
   }
 

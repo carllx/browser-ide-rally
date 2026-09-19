@@ -16,47 +16,7 @@ import { deriveAttentionTray } from './attention-tray.js';
 import { executeSafeRebind, executeSafeOpenFocus, executeSafeSend, executeSafeContinue } from '../controller/safe-controls.js';
 import { verifyOnboardingIdentities, createOnboardingProject } from './onboarding-controller.js';
 import { handleAntigravityHookRequest } from './hook-controller.js';
-
-function sendJson(res, statusCode, data) {
-  const payload = JSON.stringify(data);
-  res.writeHead(statusCode, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Content-Length': Buffer.byteLength(payload)
-  });
-  res.end(payload);
-}
-
-function sendHtml(res, statusCode, html) {
-  const payload = Buffer.from(html, 'utf-8');
-  res.writeHead(statusCode, {
-    'Content-Type': 'text/html; charset=utf-8',
-    'Content-Length': payload.length
-  });
-  res.end(payload);
-}
-
-function parseBody(req) {
-  return new Promise((resolve, reject) => {
-    let body = '';
-    req.on('data', chunk => {
-      body += chunk;
-      if (body.length > 1024 * 1024) {
-        reject(new Error('Payload too large'));
-      }
-    });
-    req.on('end', () => {
-      if (!body) {
-        return resolve({});
-      }
-      try {
-        resolve(JSON.parse(body));
-      } catch (err) {
-        reject(new Error(`Invalid JSON body: ${err.message}`));
-      }
-    });
-    req.on('error', reject);
-  });
-}
+import { sendJson, sendHtml, parseBody } from './http-helpers.js';
 
 /**
  * 创建状态表面 HTTP 处理器
@@ -248,7 +208,8 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
           workspace_identity: rawIdentity.workspace_identity || rawIdentity.workspace,
           repository_identity: rawIdentity.repository_identity || rawIdentity.repository
         };
-
+        const projectBefore = registry.getProject(bindingId);
+        const oldIde = projectBefore?.binding?.ide_endpoints?.find(e => e.endpoint_id === body.target_endpoint);
         const result = executeSafeRebind({
           registry,
           projectBindingId: bindingId,
@@ -258,13 +219,19 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
           identity: normalizedIdentity,
           options: {
             allow_discard_unhandled: body.allow_replace_unhandled === true || body.allow_discard_unhandled === true,
-            allow_replace_unhandled: body.allow_replace_unhandled === true || body.allow_discard_unhandled === true,
             confirm_replace_unhandled_new: body.allow_replace_unhandled === true || body.allow_discard_unhandled === true,
-            allow_replace_unknown: body.allow_replace_unknown === true || body.confirm_replace_unknown === true,
             confirm_replace_unknown: body.allow_replace_unknown === true || body.confirm_replace_unknown === true
           }
         });
-
+        if (body.target_endpoint !== 'browser' && observationCoordinator?.workspaceHookManager) {
+          const mgr = observationCoordinator.workspaceHookManager;
+          if (normalizedIdentity?.workspace_identity && normalizedIdentity?.conversation_id) {
+            mgr.ensureWorkspaceHook(normalizedIdentity.workspace_identity, normalizedIdentity.conversation_id);
+          }
+          if (oldIde?.workspace_identity && oldIde?.conversation_id && (oldIde.workspace_identity !== normalizedIdentity?.workspace_identity || oldIde.conversation_id !== normalizedIdentity?.conversation_id)) {
+            mgr.removeWorkspaceHook(oldIde.workspace_identity, oldIde.conversation_id);
+          }
+        }
         return sendJson(res, 200, {
           success: true,
           action_id: result.action?.action_id,
@@ -421,12 +388,14 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
           ideConversationId: body.ide_conversation_id,
           registry,
           browserAdapter,
+          workspaceHookManager: observationCoordinator?.workspaceHookManager,
           ...(agentApiExecutor ? { agentApiExecutor } : {})
         });
         return sendJson(res, 201, {
           success: true,
           binding_id: result.snapshot.binding.binding_id,
-          project: result.snapshot
+          project: result.snapshot,
+          ...(result.hook_setup ? { hook_setup: result.hook_setup } : {})
         });
       } catch (err) {
         console.error(`[Rally] Onboarding project creation failed: ${err.message}`, err.details ? `(details: ${err.details})` : '');
