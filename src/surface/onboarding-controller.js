@@ -214,7 +214,8 @@ export function createOnboardingProject({
   browserAdapter,
   agentApiBin = DEFAULT_AGENTAPI_BIN,
   agentApiExecutor = defaultAgentApiExecutor,
-  getIdeTurns = null
+  getIdeTurns = null,
+  workspaceHookManager = null
 }) {
   // 1. 操作时实时重验：不信任前端 Verify 缓存，两端重新完全核验
   const verified = verifyOnboardingIdentities({
@@ -408,8 +409,25 @@ export function createOnboardingProject({
     }
   });
 
+  // 6. 配置工作区本地 Stop Hook 与订阅白名单
+  let hookSetupResult = null;
+  if (workspaceHookManager && typeof workspaceHookManager.ensureWorkspaceHook === 'function') {
+    try {
+      const ws = verified.ide.workspace_identity;
+      const convId = verified.ide.conversation_id;
+      hookSetupResult = workspaceHookManager.ensureWorkspaceHook(ws, convId);
+      if (!hookSetupResult.success) {
+        console.warn(`[Onboarding] Workspace hook setup diagnostic for "${ws}": ${hookSetupResult.reason}`);
+      }
+    } catch (err) {
+      console.warn(`[Onboarding] Failed to setup workspace hook: ${err.message}`);
+      hookSetupResult = { success: false, reason: err.message };
+    }
+  }
+
   return {
     core,
-    snapshot: core.getSnapshot()
+    snapshot: core.getSnapshot(),
+    hook_setup: hookSetupResult
   };
 }

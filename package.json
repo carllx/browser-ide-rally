@@ -6,7 +6,9 @@
   "scripts": {
     "test": "node scripts/run-tests.mjs",
     "surface": "node scripts/start-surface.mjs",
-    "surface:demo": "node scripts/start-surface.mjs --demo"
+    "surface:demo": "node scripts/start-surface.mjs --demo",
+    "hooks:cleanup": "node scripts/rally-hooks.mjs cleanup",
+    "hooks:reconcile": "node scripts/rally-hooks.mjs reconcile"
   },
   "repository": {
     "type": "git",
