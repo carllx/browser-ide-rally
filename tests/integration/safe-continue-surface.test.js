@@ -117,10 +117,12 @@ test('Surface Integration — 1. POST /api/projects/:bindingId/controls/continue
     assert.strictEqual(dispatchedPrompts.length, 1);
     assert.ok(dispatchedPrompts[0].text.includes('IDE test code here.'));
 
-    // 验证快照依然保持独立的 NEW
+    // 验证经过双向 Continue 消费后，Browser 与 ide-1 均自动推进为已处理 (NO_NEW_RESULT)
     const snap = core.getSnapshot();
-    assert.strictEqual(snap.endpoints.browser.result_state, 'NEW');
-    assert.strictEqual(snap.endpoints.ide_endpoints['ide-1'].result_state, 'NEW');
+    assert.strictEqual(snap.endpoints.browser.result_state, 'NO_NEW_RESULT');
+    assert.strictEqual(snap.endpoints.browser.last_handled_cursor, 'cur-br-http');
+    assert.strictEqual(snap.endpoints.ide_endpoints['ide-1'].result_state, 'NO_NEW_RESULT');
+    assert.strictEqual(snap.endpoints.ide_endpoints['ide-1'].last_handled_cursor, 'cur-ide-http');
   } finally {
     await close();
   }

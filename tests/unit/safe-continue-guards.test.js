@@ -282,10 +282,12 @@ test('Safe Continue Guards — 6. 失败路径严格只记录单一 action_type:
   assert.strictEqual(actions[0].stage, 'BLOCKED');
 });
 
-test('Safe Continue Guards — 7. Continue 生命周期绝不自动 mark handled', () => {
+test('Safe Continue Guards — 7. Continue 仅在本地提交 (SUBMITTED_LOCALLY) 时绝不 mark handled；证实投递后推进 exact source', () => {
   const { registry, core } = setupMultiEndpointFixture();
-  const dispatchedPrompts = [];
-  const browserAdapter = createMockBrowserAdapter(dispatchedPrompts);
+  const unconfirmedAdapter = {
+    sendTextPrompt: () => ({ delivery_proven: false }),
+    checkComposerPreflight: () => ({ ready: true })
+  };
 
   core.recordEndpointObservation('ide-1', {
     conversation_id: 'conv-ide-1',
@@ -302,6 +304,7 @@ test('Safe Continue Guards — 7. Continue 生命周期绝不自动 mark handled
     }
   });
 
+  // 1. 未证实投递 (停留在 SUBMITTED_LOCALLY) -> 绝不 mark handled
   executeSafeContinue({
     registry,
     bindingId: 'proj-continue-1',
@@ -311,12 +314,30 @@ test('Safe Continue Guards — 7. Continue 生命周期绝不自动 mark handled
     expected_source_result_state: 'NEW',
     expected_source_cursor: 'cur-ide-unhandled',
     expected_source_result_ref: 'ref-unhandled',
-    browserAdapter
+    browserAdapter: unconfirmedAdapter
   });
 
-  const snap = core.getSnapshot();
+  let snap = core.getSnapshot();
   assert.strictEqual(snap.endpoints.ide_endpoints['ide-1'].last_handled_cursor, null);
   assert.strictEqual(snap.endpoints.ide_endpoints['ide-1'].result_state, 'NEW');
+
+  // 2. 证实投递达成 ACCEPTED_OR_DELIVERED -> 仅自动推进 exact source
+  const provenAdapter = createMockBrowserAdapter();
+  executeSafeContinue({
+    registry,
+    bindingId: 'proj-continue-1',
+    expected_binding_revision: 1,
+    target_endpoint: 'browser',
+    source_endpoint: 'ide-1',
+    expected_source_result_state: 'NEW',
+    expected_source_cursor: 'cur-ide-unhandled',
+    expected_source_result_ref: 'ref-unhandled',
+    browserAdapter: provenAdapter
+  });
+
+  snap = core.getSnapshot();
+  assert.strictEqual(snap.endpoints.ide_endpoints['ide-1'].last_handled_cursor, 'cur-ide-unhandled');
+  assert.strictEqual(snap.endpoints.ide_endpoints['ide-1'].result_state, 'NO_NEW_RESULT');
   assert.strictEqual(snap.endpoints.browser.last_handled_cursor, null);
 });
 

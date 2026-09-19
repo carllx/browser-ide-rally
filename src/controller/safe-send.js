@@ -24,6 +24,7 @@ import {
   recordBlockedAction,
   resolveIdeAdapter
 } from './safe-controls-common.js';
+import { reconcileVerifiedConsumption } from './consumption-reconciler.js';
 
 /**
  * 执行安全动作发送
@@ -37,6 +38,7 @@ export function executeSafeSend(params) {
     expected_binding_revision = params.expectedBindingRevision,
     target_endpoint = params.targetEndpoint,
     action_type = params.action_type || params.actionType || 'send',
+    consumptionContext = params.consumptionContext || null,
     browserAdapter = null,
     ideAdapter = params.ideAdapters || null,
     options = {}
@@ -202,6 +204,9 @@ export function executeSafeSend(params) {
         next_stage: 'ACCEPTED_OR_DELIVERED',
         evidence: sendResult.delivery_evidence || 'Browser prompt delivery verified by provider'
       });
+      if (consumptionContext) {
+        reconcileVerifiedConsumption({ core, action, consumptionContext });
+      }
     } else if (sendResult?.delivery_state === 'UNKNOWN') {
       core.advanceActionStage(action.action_id, {
         next_stage: 'UNKNOWN',
@@ -278,6 +283,9 @@ export function executeSafeSend(params) {
         next_stage: 'ACCEPTED_OR_DELIVERED',
         evidence: ideResult.delivery_evidence || 'IDE target accepted task'
       });
+      if (consumptionContext) {
+        reconcileVerifiedConsumption({ core, action, consumptionContext });
+      }
     } else if (ideResult?.delivery_state === 'UNKNOWN') {
       core.advanceActionStage(action.action_id, {
         next_stage: 'UNKNOWN',

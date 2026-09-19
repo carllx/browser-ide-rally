@@ -17,7 +17,7 @@ _Avoid_: owner, baton
 _Avoid_: next turn, current owner
 
 **Handled Result**:
-一个其 attention lifecycle 已被 Rally 明确处理完成的 Endpoint Result。Handled 不等于 relay requested、local submission 或 delivered。
+一个其 attention lifecycle 已被 Rally 可靠消费或明确处理完成的 Endpoint Result。推进途径唯二：(1) 显式手动 Mark handled；(2) 由针对源 NEW 结果、具备完备强关联凭据的 user-directed Continue Action 达到 ACCEPTED_OR_DELIVERED 时自动推进。普通投递、REQUESTED、SUBMITTED_LOCALLY、UNKNOWN 或关联不全的动作绝不推进 Handled；亦无需等待 TARGET_COMPLETED。
 _Avoid_: last relayed as a synonym
 
 **Unknown Result State**:

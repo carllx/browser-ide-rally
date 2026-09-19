@@ -11,7 +11,7 @@
  * 5. 确定性 Outbound Bundle：标准 rally.prompt 操作，携带确定性 text 与 provenance；
  * 6. 载荷超限防御：超过 typed-envelope payload 边界 (64KB) 时严格 BLOCKED，绝不静默截断；
  * 7. 单一规范 Action 事实：委托 executeSafeSend 执行，action_type 固定为 'continue'；
- * 8. 绝对禁止自动 Mark handled。
+ * 8. 消费验证自动推进 (Verified Consumption)：内部组装 consumptionContext 传递给 send 链路，仅在到达 ACCEPTED_OR_DELIVERED 时由 reconciler 推进，形成时绝不提前 mark handled。
  */
 
 import {
@@ -183,7 +183,19 @@ export function executeSafeContinue(params = {}) {
     blockAndThrow(`PAYLOAD_TOO_LARGE: Envelope payload exceeds bound (${MAX_PAYLOAD_BYTES} bytes, got ${estimatedBytes} bytes)`);
   }
 
-  // 6. 委托 executeSafeSend 产生单一规范 Action 事实并派发
+  // 6. 构造仅限内部流转的消费上下文 (不向出站 bundle 泄露 provider cursor)
+  const consumptionContext = {
+    eligible: hasSourceNewResult,
+    binding_id: bindingId,
+    binding_revision: currentBinding.binding_revision,
+    source_endpoint: resolvedSource,
+    source_endpoint_revision: sourceEpRev,
+    expected_cursor: actualCursor,
+    expected_result_ref: sourceResultMaterial ? sourceResultMaterial.result_ref : null,
+    target_endpoint
+  };
+
+  // 7. 委托 executeSafeSend 产生单一规范 Action 事实并派发
   return executeSafeSend({
     registry,
     bindingId,
@@ -194,6 +206,7 @@ export function executeSafeContinue(params = {}) {
       op: 'rally.prompt',
       payload
     },
+    consumptionContext,
     browserAdapter,
     ideAdapter
   });

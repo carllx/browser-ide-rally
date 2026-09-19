@@ -121,8 +121,8 @@ test('Safe Continue — 1. Dual NEW (Browser + IDE) -> 选 Browser: 包含 IDE �
   const snapAfter = core.getSnapshot();
   assert.strictEqual(snapAfter.endpoints.browser.result_state, 'NEW');
   assert.strictEqual(snapAfter.endpoints.browser.last_handled_cursor, null);
-  assert.strictEqual(snapAfter.endpoints.ide_endpoints['ide-1'].result_state, 'NEW');
-  assert.strictEqual(snapAfter.endpoints.ide_endpoints['ide-1'].last_handled_cursor, null);
+  assert.strictEqual(snapAfter.endpoints.ide_endpoints['ide-1'].result_state, 'NO_NEW_RESULT');
+  assert.strictEqual(snapAfter.endpoints.ide_endpoints['ide-1'].last_handled_cursor, 'cur-ide-1');
 });
 
 test('Safe Continue — 2. Dual NEW (Browser + IDE) -> 选 IDE: 包含 Browser 结果，IDE NEW 保留', () => {
@@ -192,8 +192,10 @@ test('Safe Continue — 2. Dual NEW (Browser + IDE) -> 选 IDE: 包含 Browser �
   });
 
   const snap = core.getSnapshot();
-  assert.strictEqual(snap.endpoints.browser.result_state, 'NEW');
+  assert.strictEqual(snap.endpoints.browser.result_state, 'NO_NEW_RESULT');
+  assert.strictEqual(snap.endpoints.browser.last_handled_cursor, 'cur-br-2');
   assert.strictEqual(snap.endpoints.ide_endpoints['ide-1'].result_state, 'NEW');
+  assert.strictEqual(snap.endpoints.ide_endpoints['ide-1'].last_handled_cursor, null);
 });
 
 test('Safe Continue — 3. Source 为 NO_NEW_RESULT: 允许派发，不回放陈旧历史', () => {
