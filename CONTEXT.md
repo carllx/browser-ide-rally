@@ -8,6 +8,10 @@ Rally 是 Browser Agent 与 IDE Agent 协作时的状态与通信伴侣。它以
 Rally 拥有的稳定项目关联，把一个 Rally 项目连接到明确的 Browser conversation 与 IDE conversation；重新绑定会产生新的 binding revision，而不是新建项目。
 _Avoid_: window position, tab index, UI position
 
+**Project Display Name**:
+面向人类操作者的项目显示标签，可读且便于识别，在当前 Rally 注册表内唯一。它独立于且绝不替代规范的 Project Binding 身份、会话 ID、工作区或仓库身份。
+_Avoid_: canonical binding ID, project identity synonym
+
 **Endpoint Result**:
 一个能够被可靠归属到某个 bound Browser 或 IDE conversation 的已完成 Agent turn。Browser 与 IDE 的 Endpoint Result 彼此独立。
 _Avoid_: owner, baton

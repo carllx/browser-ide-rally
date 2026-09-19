@@ -43,6 +43,33 @@ export class ProjectRegistry {
       throw new Error(`Project binding_id "${binding.binding_id}" is already registered`);
     }
 
+    // 唯一性守卫：排查 display_name、browser conversation 与 ide conversations
+    const newDisplayName = binding.display_name ? binding.display_name.trim().toLowerCase() : null;
+    const newBrowserConvId = binding.browser?.conversation_id ? binding.browser.conversation_id.trim() : null;
+    const newIdeConvIds = new Set(
+      (binding.ide_endpoints || []).map(ep => ep.conversation_id?.trim()).filter(Boolean)
+    );
+
+    for (const [existingId, existingCore] of this._projects.entries()) {
+      const existingBinding = existingCore.getBinding();
+      if (newDisplayName && existingBinding.display_name) {
+        if (existingBinding.display_name.trim().toLowerCase() === newDisplayName) {
+          throw new Error(`Project display_name "${binding.display_name}" is already registered in project "${existingId}"`);
+        }
+      }
+
+      if (newBrowserConvId && existingBinding.browser?.conversation_id?.trim() === newBrowserConvId) {
+        throw new Error(`Browser conversation_id "${binding.browser.conversation_id}" is already registered in project "${existingId}"`);
+      }
+
+      for (const ep of existingBinding.ide_endpoints || []) {
+        const existingIdeConv = ep.conversation_id?.trim();
+        if (existingIdeConv && newIdeConvIds.has(existingIdeConv)) {
+          throw new Error(`IDE conversation_id "${existingIdeConv}" is already registered in project "${existingId}"`);
+        }
+      }
+    }
+
     const core = createProjectStatusCore({
       binding,
       initial_endpoints,
@@ -53,6 +80,9 @@ export class ProjectRegistry {
       }
     });
     this._projects.set(binding.binding_id, core);
+    if (this._storagePath) {
+      this.saveToFile(this._storagePath);
+    }
     return core;
   }
 

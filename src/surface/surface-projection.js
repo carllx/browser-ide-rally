@@ -135,6 +135,7 @@ export function projectStatusSurface(snapshot) {
 
   return {
     binding_id: binding.binding_id,
+    display_name: binding.display_name !== undefined ? binding.display_name : null,
     binding_revision: binding.binding_revision,
     paused: Boolean(binding.paused),
     capabilities: Array.isArray(binding.capabilities) ? [...binding.capabilities] : [],

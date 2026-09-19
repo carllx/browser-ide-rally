@@ -74,4 +74,48 @@ describe('Surface Startup 启动配置与 Fail-Closed 回归测试', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it('6. 默认生产模式首次启动从干净空注册表开始，创建项目后自动落盘且重启后成功恢复', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rally-startup-durability-'));
+    const dummyDefault = path.join(tmpDir, 'default-projects.json');
+
+    try {
+      // 首次启动，文件不存在，空注册表
+      const reg1 = initializeStartupRegistry({ storage: null, demo: false, defaultStoragePath: dummyDefault });
+      assert.equal(reg1.listProjects().length, 0);
+      assert.equal(fs.existsSync(dummyDefault), false);
+
+      // 注册项目，触发落盘
+      reg1.registerProject({
+        binding: {
+          binding_id: 'proj-auto-1',
+          display_name: 'Auto Project',
+          binding_revision: 1,
+          browser: { provider: 'chatgpt', conversation_id: 'cb-1' },
+          ide_endpoints: [
+            {
+              endpoint_id: 'ide-primary',
+              endpoint_revision: 1,
+              conversation_id: 'ci-1',
+              workspace_identity: '/ws',
+              repository_identity: 'o/r'
+            }
+          ],
+          capabilities: ['rally.echo'],
+          paused: false
+        }
+      });
+
+      assert.equal(fs.existsSync(dummyDefault), true);
+
+      // 模拟重启恢复
+      const reg2 = initializeStartupRegistry({ storage: null, demo: false, defaultStoragePath: dummyDefault });
+      assert.equal(reg2.listProjects().length, 1);
+      assert.equal(reg2.hasProject('proj-auto-1'), true);
+      const snap = reg2.getProject('proj-auto-1').getSnapshot();
+      assert.equal(snap.binding.display_name, 'Auto Project');
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });

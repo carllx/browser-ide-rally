@@ -19,6 +19,10 @@ import {
   executeSafeSend,
   executeSafeContinue
 } from '../controller/safe-controls.js';
+import {
+  verifyOnboardingIdentities,
+  createOnboardingProject
+} from './onboarding-controller.js';
 
 function sendJson(res, statusCode, data) {
   const payload = JSON.stringify(data);
@@ -374,6 +378,56 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
         });
       } catch (err) {
         return handleControlError(res, err);
+      }
+    }
+
+    // 7b. POST /api/onboarding/verify: 校验待引导项目的 Browser + IDE 身份与派生元数据
+    if (method === 'POST' && pathname === '/api/onboarding/verify') {
+      let body = {};
+      try {
+        body = await parseBody(req);
+      } catch (err) {
+        return sendJson(res, 400, { success: false, reason: err.message });
+      }
+
+      try {
+        const preview = verifyOnboardingIdentities({
+          displayName: body.display_name,
+          browserUrl: body.browser_url,
+          ideConversationId: body.ide_conversation_id,
+          registry,
+          browserAdapter
+        });
+        return sendJson(res, 200, { success: true, preview });
+      } catch (err) {
+        return sendJson(res, 400, { success: false, reason: err.message });
+      }
+    }
+
+    // 7c. POST /api/onboarding/create: 确认创建新项目绑定（两端实时重验并诚实确立基线）
+    if (method === 'POST' && pathname === '/api/onboarding/create') {
+      let body = {};
+      try {
+        body = await parseBody(req);
+      } catch (err) {
+        return sendJson(res, 400, { success: false, reason: err.message });
+      }
+
+      try {
+        const result = createOnboardingProject({
+          displayName: body.display_name,
+          browserUrl: body.browser_url,
+          ideConversationId: body.ide_conversation_id,
+          registry,
+          browserAdapter
+        });
+        return sendJson(res, 201, {
+          success: true,
+          binding_id: result.snapshot.binding.binding_id,
+          project: result.snapshot
+        });
+      } catch (err) {
+        return sendJson(res, 400, { success: false, reason: err.message });
       }
     }
 

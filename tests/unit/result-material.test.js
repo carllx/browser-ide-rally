@@ -213,8 +213,10 @@ test('Result Material — 5. Production endpoint observations are durably persis
       repository_identity: 'owner/repo'
     }]
   });
-  // 2. register project
+  // 2. register project (Issue #25 规定 registerProject 在配置了 durable storage 时必须立即真正持久化)
   const core1 = reg1.registerProject({ binding });
+  assert.strictEqual(fs.existsSync(storagePath), true, 'registerProject must immediately persist');
+  fs.unlinkSync(storagePath);
 
   // 证明 generation-in-progress 不会触发写盘
   core1.recordEndpointObservation('browser', {

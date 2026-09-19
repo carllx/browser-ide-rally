@@ -59,6 +59,12 @@ export function validateBinding(binding) {
     errors.push('binding_revision must be an integer >= 1');
   }
 
+  if (binding.display_name !== undefined && binding.display_name !== null) {
+    if (typeof binding.display_name !== 'string' || !binding.display_name.trim()) {
+      errors.push('display_name must be a non-empty string when supplied');
+    }
+  }
+
   // Browser 身份校验
   if (!binding.browser || typeof binding.browser !== 'object') {
     errors.push('browser identity object is required');
@@ -140,6 +146,7 @@ function attachReadOnlyIdeAccessor(obj) {
  */
 export function createBinding({
   binding_id,
+  display_name = null,
   binding_revision = 1,
   browser,
   ide,
@@ -179,8 +186,18 @@ export function createBinding({
     }
   }
 
+  let normalizedDisplayName = null;
+  if (display_name !== undefined && display_name !== null) {
+    if (typeof display_name === 'string') {
+      normalizedDisplayName = display_name.trim();
+    } else {
+      normalizedDisplayName = display_name;
+    }
+  }
+
   const binding = {
     binding_id,
+    display_name: normalizedDisplayName,
     binding_revision,
     is_legacy_single_ide: isLegacySingleIde,
     browser: {

@@ -6,6 +6,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { createProjectRegistry } from '../src/registry/project-registry.js';
 import { startStatusSurfaceServer } from '../src/surface/surface-server.js';
 import { createProductionControlRuntime } from '../src/adapters/production-runtime-controls.js';
@@ -165,6 +166,10 @@ function populateDemoRegistry(registry) {
   });
 }
 
+export function getDefaultStoragePath() {
+  return path.join(os.homedir(), '.browser-ide-rally', 'projects.json');
+}
+
 export function initializeStartupRegistry(options = {}) {
   // 1. 显式指定了 --storage 路径：严格 Fail-Closed，绝不静默伪造 demo 数据
   if (options.storage) {
@@ -184,8 +189,17 @@ export function initializeStartupRegistry(options = {}) {
     return registry;
   }
 
-  // 3. 默认生产模式：空注册表，绝不伪造任何 NEW、UNKNOWN、Human 或 Action 事实
-  return createProjectRegistry();
+  // 3. 默认生产模式：绑定 Rally 默认持久化存储路径
+  // 首次运行文件不存在属于正常 first-run，以空注册表启动并在首次创建项目时落盘
+  const defaultPath = options.defaultStoragePath !== undefined
+    ? options.defaultStoragePath
+    : getDefaultStoragePath();
+
+  if (defaultPath === null) {
+    return createProjectRegistry();
+  }
+
+  return createProjectRegistry({ storagePath: defaultPath });
 }
 
 function buildProductionSurfaceRuntime({ registry, scriptExecutor = null } = {}) {
@@ -201,7 +215,8 @@ async function main() {
   } else if (options.demo) {
     console.log(`[Rally] Initialized in-memory demo registry with 3 sample projects (--demo mode)`);
   } else {
-    console.log(`[Rally] Started clean production surface (0 registered projects)`);
+    const storagePath = registry._storagePath || getDefaultStoragePath();
+    console.log(`[Rally] Started production surface with default storage at ${storagePath} (${registry.listProjects().length} projects)`);
   }
 
   const { browserAdapter, ideAdapters } = buildProductionSurfaceRuntime({ registry });

@@ -16,6 +16,8 @@ import { ATTENTION_TRAY_CSS } from './attention-styles.js';
 import { SURFACE_CLIENT_JS } from './surface-client.js';
 import { ATTENTION_CLIENT_JS } from './attention-client.js';
 import { renderAttentionTrayHtml } from './attention-template.js';
+import { renderAddProjectButtonHtml, renderAddProjectModalHtml } from './onboarding-template.js';
+import { ONBOARDING_CLIENT_JS } from './onboarding-client.js';
 
 function escapeHtml(str) {
   if (str === null || str === undefined) return '';
@@ -301,11 +303,15 @@ function renderProjectCard(proj) {
   const browserCardHtml = renderEndpointCard(proj.browser, bindingId, bRev, 'Browser');
   const ideCardsHtml = (proj.ide_endpoints || []).map(ide => renderEndpointCard(ide, bindingId, bRev, 'IDE')).join('');
 
+  const displayName = proj.display_name || bindingId;
+  const isCustomName = Boolean(proj.display_name && proj.display_name !== bindingId);
+
   return `
     <article class="project-card" data-binding-id="${escapeHtml(bindingId)}" id="card-${escapeHtml(bindingId)}">
       <header class="project-header">
         <div class="project-identity">
-          <h2 class="project-title">${escapeHtml(bindingId)}</h2>
+          <h2 class="project-title">${escapeHtml(displayName)}</h2>
+          ${isCustomName ? `<span class="project-canonical-id" title="Canonical Binding ID" style="font-size: 13px; color: #8b949e; font-weight: normal; margin-left: 6px;">(${escapeHtml(bindingId)})</span>` : ''}
           <span class="badge badge-rev">rev ${escapeHtml(bRev)}</span>
           ${isPaused ? '<span class="badge badge-paused">PAUSED</span>' : ''}
           ${disambiguationTags}
@@ -372,11 +378,16 @@ export function renderStatusSurfaceHtml({ projects = [], attentionTray = null } 
     </div>
   </header>
 
-  <nav class="filter-bar" aria-label="项目筛选器">
-    <span class="meta-label">筛选展示:</span>
-    <button type="button" class="filter-btn active" data-filter="all">全部 (${projects.length})</button>
-    <button type="button" class="filter-btn" data-filter="new">仅含 NEW</button>
-    <button type="button" class="filter-btn" data-filter="unknown">仅含 UNKNOWN</button>
+  <nav class="filter-bar" aria-label="项目筛选器" style="display: flex; justify-content: space-between; align-items: center;">
+    <div>
+      <span class="meta-label">筛选展示:</span>
+      <button type="button" class="filter-btn active" data-filter="all">全部 (${projects.length})</button>
+      <button type="button" class="filter-btn" data-filter="new">仅含 NEW</button>
+      <button type="button" class="filter-btn" data-filter="unknown">仅含 UNKNOWN</button>
+    </div>
+    <div>
+      ${renderAddProjectButtonHtml()}
+    </div>
   </nav>
 
   <main class="surface-container">
@@ -400,8 +411,11 @@ export function renderStatusSurfaceHtml({ projects = [], attentionTray = null } 
     </div>
   </div>
 
+  ${renderAddProjectModalHtml()}
+
   <script>${SURFACE_CLIENT_JS}</script>
   <script>${ATTENTION_CLIENT_JS}</script>
+  <script>${ONBOARDING_CLIENT_JS}</script>
 </body>
 </html>
 `;
