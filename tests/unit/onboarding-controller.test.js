@@ -334,6 +334,12 @@ test('[Onboarding Controller] 5. 诚实未知：若端点结果事实无法确�
   assert.equal(zeroSlot.result_state, 'UNKNOWN');
   assert.equal(zeroSlot.continuity.trusted, false);
   assert.equal(zeroSlot.continuity.unknown_reason, 'no_completed_turns_found');
+
+  // 同时验证 Browser 端点在 0 completed turns 时也必须诚实保持 UNKNOWN，绝不冒领 NO_NEW_RESULT
+  const zeroBrowser = snapZero.endpoints.browser;
+  assert.equal(zeroBrowser.result_state, 'UNKNOWN');
+  assert.equal(zeroBrowser.continuity.trusted, false);
+  assert.equal(zeroBrowser.continuity.unknown_reason, 'no_completed_turns_found');
 });
 
 test('[Onboarding Controller] 6. 操作时重验 (Create-time revalidation)：Verify 与 Create 之间标签页若关闭，Create 阶段 Fail-Closed', () => {

@@ -234,13 +234,13 @@ export function createOnboardingProject({
   if (browserAdapter && typeof browserAdapter.observeBrowserEndpoint === 'function') {
     try {
       const obs = browserAdapter.observeBrowserEndpoint({ conversationId: verified.browser.conversation_id });
-      if (obs && obs.trusted && !obs.continuity_lost) {
+      if (obs && obs.trusted && !obs.continuity_lost && obs.latest_completed_cursor) {
         browserBaselineFact = {
           endpoint: 'browser',
           role: 'browser',
           endpoint_revision: 1,
-          latest_completed_cursor: obs.latest_completed_cursor || null,
-          last_handled_cursor: obs.latest_completed_cursor || null,
+          latest_completed_cursor: obs.latest_completed_cursor,
+          last_handled_cursor: obs.latest_completed_cursor,
           completed_at: obs.completed_at || now,
           latest_completed_result: obs.latest_completed_result || null,
           continuity: {
@@ -260,7 +260,7 @@ export function createOnboardingProject({
           latest_completed_result: null,
           continuity: {
             trusted: false,
-            unknown_reason: obs?.reason || 'onboarding_unverified_baseline'
+            unknown_reason: obs?.reason || (!obs?.latest_completed_cursor ? 'no_completed_turns_found' : 'onboarding_unverified_baseline')
           },
           updated_at: now
         };
