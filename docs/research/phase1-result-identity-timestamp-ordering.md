@@ -3,20 +3,20 @@
 > **研究任务标识**：GitHub Issue #35 (Phase 1 Result Identity & Timestamp Ordering)  
 > **关联规范与映射**：#33 (Spec), #15 (ChatGPT Browser Seam), #16 (Antigravity IDE Seam), #27 (Observation Runtime)  
 > **交付物定位**：`docs/research/phase1-result-identity-timestamp-ordering.md`  
-> **研究时间**：2026-09-20  
+> **当前修订版本**：Rev 2 (基于 Browser Review 要求修正：离线并发前进 Fail-Closed、指标与 NEW/handled 彻底解耦、收紧语义措辞、补入 reload 实测)  
 > **执行环境**：macOS (Darwin arm64), Google Chrome (AppleScript JS 注入), Antigravity Runtime/Filesystem (`~/.gemini/antigravity`)
 
 ---
 
 ## 1. 核心分类结论 (Required Classifications)
 
-依据本报告在真实 ChatGPT 浏览器环境与 Antigravity 本地运行时/文件系统获得的现场实证，给出三项核心裁决：
+依据在真实 ChatGPT 浏览器环境与 Antigravity 本地运行时/文件系统获得的现场实证，给出三项核心裁决：
 
 | 分类维度 | 裁决结果 | 核心判据概述 |
 |---|---|---|
-| **Antigravity 来源策略** | **`HYBRID_PRIMARY`** | 单独依赖运行时 Stop Hook 无法满足进程重启/休眠后的离线恢复（错过瞬态事件）；单独依赖 `transcript.jsonl` 在并发生成时缺乏终结性凭据，且可能因中间思考步骤产生虚假完成。必须以**运行时 Stop Hook 作为终结性证据 (Finality Evidence)**，以**已落盘 transcript.jsonl 作为持久化顺序与重建真值 (Persisted Ordering & Reconstruction Truth)**。 |
-| **跨端点最新结果排序** | **`PROVIDER_LOCAL_ORDER_ONLY`** | 两个端点各自在其内部均具备严格且单调的偏序（Browser 依 DOM 树文档序与 UUIDv4，IDE 依单调 `step_index`）；但跨端点时间戳语义严重不对称（Browser 缺乏原生时间戳，仅有 Rally 观察时间；IDE `step.created_at` 仅为步骤创建时间而非推理完成时间，且精度仅到秒）。**严禁跨端点直接进行时间戳比对 (`DIRECT_TIMESTAMP_ORDERING`)**。全局“最新结果”必须由 Rally 协调中心依据受信观察事件时序维护。 |
-| **Browser 端点最小充分性** | **`BROWSER_MINIMUM_SUFFICIENT`** | 现有基于 `#15` 的 DOM 探针缝隙（原子核验 URL + 排除 `stop-button` 生成中 + 过滤占位 ID + 提取最终 `data-message-id`）对于 Phase 1 所需的**结果身份唯一定位、完成状态判定与页面重载持久性已完全充分**。实证表明无需亦严禁擅自引入重型的全量 Message Ledger。 |
+| **Antigravity 来源策略** | **`HYBRID_PRIMARY`** | 单独依赖运行时 Stop Hook 无法满足进程重启/休眠后的离线恢复（错过瞬态 IPC 事件）；单独依赖 `transcript.jsonl` 在并发/多步执行时缺乏终结性凭据，且可能因中间思考步骤产生虚假完成。必须以**运行时 Stop Hook 作为终结性证据 (Finality Evidence)**，以**落盘 transcript.jsonl 作为持久化顺序与重建真值 (Persisted Ordering & Reconstruction Truth)**。 |
+| **跨端点最新结果排序** | **`PROVIDER_LOCAL_ORDER_ONLY`** | 两个端点各自在其内部具备严格且单调的偏序（Browser 依 DOM 树文档序与 UUIDv4，IDE 依单调 `step_index`）；但跨端点时间戳**语义严重不对称且不可比**（Browser 无原生时间戳，仅有 Rally 观测时间；IDE `step.created_at` 精度仅到秒且相邻记录共享时间戳，不能安全作为完成时间）。**严禁跨端点直接进行时间戳比对 (`DIRECT_TIMESTAMP_ORDERING`)**。若在观察空白期两端游标均发生推进，必须 fail-closed 判定为 `UNCERTAIN`。 |
+| **Browser 端点最小充分性** | **`BROWSER_MINIMUM_SUFFICIENT`** | 现有基于 `#15` 的 DOM 探针缝隙（原子核验 URL + 排除 `stop-button` 生成中 + 过滤占位 ID + 提取最终 `data-message-id`）经现场 reload 实测验证，对于 Phase 1 所需的**结果身份唯一定位、完成状态判定与页面重载持久性已完全充分**。实证表明无需亦严禁擅自引入重型的全量 Message Ledger。 |
 
 ---
 
@@ -31,16 +31,23 @@
 
 ## 3. 真实探针与受检上下文 (Executed Probes & Targets)
 
-本研究针对本地真实活跃环境执行了无副作用的只读探测：
+本研究针对本地真实活跃环境执行了无副作用的只读探测与极窄专项检验：
 
-1. **ChatGPT 真实会话探测**：
+1. **ChatGPT 真实会话与 Reload 稳定性探测**：
    - **目标会话**：`6aaf3983-844c-83e9-bcdb-5fcb59afd442`（URL: `https://chatgpt.com/g/g-p-6aa6259857808191af5554e99e447495-browser-ide-rally/c/6aaf3983-844c-83e9-bcdb-5fcb59afd442`）。
-   - **探测方法**：利用 `ChatGPTBrowserAdapter` 封装的非抢焦 AppleScript 执行 DOM 深度属性遍历探针与客户端状态检测。
-   - **检查项**：DOM `data-message-*` 属性、`<time>` 标签、文本时间戳、React Fiber 挂载节点、`window.__NEXT_DATA__`、全局状态变量。
+   - **DOM 属性深度探针**：遍历提取所有 Assistant 消息属性，全面排查 `<time>` 标签、文本时间戳、React Fiber 内部挂载节点、`window.__NEXT_DATA__`、全局状态变量。
+   - **[Verified] 极窄 Reload/Reopen 现场实测**：
+     - 刷新前读取：`count: 3, lastId: 'd9356c40-53ea-442a-b534-f407bb05e1aa'`；
+     - 通过 AppleScript 触发标签页 `reload`，轮询等待 `document.readyState === 'complete'`；
+     - 刷新后读取：`ready: true, count: 3, lastId: 'd9356c40-53ea-442a-b534-f407bb05e1aa'`；
+     - 比对结果：前后 ID 严格一致（`EXACT MATCH`），一手证明最后完成 Assistant 消息 ID 在重载后完全稳定。
 2. **Antigravity 真实会话与文件系统探测**：
    - **当前活跃会话**：`0212808d-3d2f-43e2-80ad-dcd4c247287b`。
    - **多轮历史样本会话**：`0010e3c5-0bb8-47ec-ae51-8ebcef46f5d4`、`00ed06b9-bfa5-43e7-8c42-bf354dfb3aec`（提取自本地 `~/.gemini/antigravity/brain/` 下 579 个真实对话目录）。
-   - **探测方法**：对 `transcript.jsonl` 执行逐行序列分析、时间戳递进分析、并发半行尾部 (Partial Tail) 截断解析压力测试、文件系统 Inode 与大小增长追踪。
+   - **时序与时间戳分析**：逐行分析 `transcript.jsonl`，检验 `step.created_at` 变化与相邻 step 共享时间戳现象。
+   - **并发与追加写入观察**：
+     - **[Verified] 合成残缺尾部 (Synthetic Partial Tail) 容错实测**：构造尾部含残缺 JSON 行的文件，验证适配器解析器安全抛弃残缺行，不崩溃亦不虚构完成；
+     - **[Observed] 当前环境文件布局观察**：追踪会话期间 `transcript.jsonl`，在当前测试环境中观察到 Inode 固定为 369447098 且文件大小持续单调递增。
 
 ---
 
@@ -48,11 +55,11 @@
 
 | 探测字段 / 特性 | 是否可用 | 稳定身份/顺序? | 语义类别 | 提供方来源? | 重启/刷新可查? | Phase 1 判定与证据说明 |
 |---|---|---|---|---|---|---|
-| `data-message-id` | **可用** [Verified] | **是**（唯一 UUID）[Verified] | Result Identity (消息唯一身份) | **是**（服务端分配）[Verified] | **是** [Verified] | **SAFE**：在 DOM 中稳定存在（如 `13395b0b-...`），刷新后保持不变；严格过滤 `placeholder-*` 与 `request-placeholder-*` 后作为 `chatgpt_msg_<id>` 游标。 |
+| `data-message-id` | **可用** [Verified] | **是**（唯一 UUID）[Verified] | Result Identity (消息唯一身份) | **是**（服务端分配）[Verified] | **是** [Verified] | **SAFE**：在 DOM 中稳定存在；经实机 reload 探测证实刷新前后严格一致；严格过滤 `placeholder-*` 与 `request-placeholder-*` 后作为 `chatgpt_msg_<id>` 游标。 |
 | `<time>` 元素 | **不可用** (数量: 0) [Verified] | 否 | N/A | 否 | 否 | **UNSAFE**：DOM 树中不存在 `<time>` 标签。 |
 | `data-message-time` 等时间属性 | **不可用** (匹配数: 0) [Verified] | 否 | N/A | 否 | 否 | **UNSAFE**：遍历所有属性及子元素，无任何包含 `time/date/created/updated/timestamp` 的 DOM 属性。 |
 | `window.__NEXT_DATA__` | **不可用** (`false`) [Verified] | 否 | N/A | 否 | 否 | **UNSAFE**：客户端运行时未暴露该全局对象。 |
-| React Fiber Internal Props | **不可用** (`hasFiberKey: false`) [Verified] | 否 | 内部实现私有状态 | 否 | 否 | **UNSAFE**：DOM 元素未暴露可访问的 Fiber 状态，侵入抓取脆弱且不可靠。 |
+| React Fiber Internal Props | **不可用** (`hasFiberKey: false`) [Verified] | 否 | 内部私有状态 | 否 | 否 | **UNSAFE**：DOM 元素未暴露可访问的 Fiber 状态，侵入抓取脆弱且不可靠。 |
 | `button[data-testid="stop-button"]` | **可用** [Verified] | **是**（生成中瞬态）[Verified] | Generation In-Progress Indicator | **是**（前端状态）[Verified] | **是** [Verified] | **SAFE**：严格用于区分正在生成与完成状态，生成中不更新结果事实。 |
 | DOM 树节点位置顺序 | **可用** [Verified] | **是**（局部单调序列）[Verified] | Provider-Local Document Order | **是**（页面渲染序）[Verified] | **是** [Verified] | **SAFE**：同一会话内 Assistant 消息的物理索引（第 0, 1, 2 条）在 DOM 内绝对单调有序。 |
 | Rally Adapter `completed_at` | **可用** [Verified] | 仅为观察序，非原生序 [Inferred] | Rally Observation Time (本地观测时刻) | **否**（Rally 本地时钟）[Verified] | 否（重启会变）[Inferred] | **CONDITIONAL**：仅能作为本地观测登记时间，绝对不能作为跨端点权威完成时间进行数学比较。 |
@@ -77,13 +84,13 @@
 
 | 探测字段 / 特性 | 是否可用 | 稳定身份/顺序? | 语义类别 | 提供方来源? | 重启/刷新可查? | Phase 1 判定与证据说明 |
 |---|---|---|---|---|---|---|
-| `step.step_index` | **可用** [Verified] | **是**（严格自增整型）[Verified] | Monotonic Sequence Identity | **是**（IDE 核心逻辑）[Verified] | **是** [Verified] | **SAFE**：单调递增整数（0, 1, 2, ...），构成端点内部完美严格全序。 |
-| Content Fingerprint | **可用** [Verified] | **是**（SHA-256 前 16 位）[Verified] | Content Tamper & Drift Detection | **是**（派生自内容）[Verified] | **Yes** [Verified] | **SAFE**：与 `step_index` 组合构成不透明游标 `ag-step:<idx>:<hash>`，防御历史截断或漂移。 |
-| `step.created_at` | **可用** [Verified] | 弱单调（存在同秒）[Verified] | **Step Creation Time** (步骤创建时间) | **是**（IDE 后端系统时钟）[Verified] | **是** [Verified] | **CONDITIONAL**：格式为 UTC ISO 8601 (`YYYY-MM-DDTHH:mm:ssZ`)，秒级精度。实测证实：其为步骤**创建时刻**，与紧邻的 `USER_INPUT` 经常完全同秒，**绝非模型推理完成时刻**！不可用于跨端点精准比对。 |
+| `step.step_index` | **可用** [Verified] | **是**（严格自增整型）[Verified] | Monotonic Sequence Identity | **是**（IDE 核心逻辑）[Verified] | **是** [Verified] | **SAFE**：单调递增整数（0, 1, 2, ...），构成端点内部严格全序。 |
+| Content Fingerprint | **可用** [Verified] | **是**（SHA-256 前 16 位）[Verified] | Content Drift Detection | **是**（派生自内容）[Verified] | **Yes** [Verified] | **SAFE**：与 `step_index` 组合构成不透明游标 `ag-step:<idx>:<hash>`，防御历史截断或漂移。 |
+| `step.created_at` | **可用** [Verified] | 弱单调（存在相邻同秒）[Verified] | **精确内部语义未验证 (Unverified)**；实测证实非可信完成时间 [Verified] | **是**（系统时钟）[Verified] | **是** [Verified] | **UNSAFE 作为跨端完成时序**：格式为 UTC ISO 8601 (`YYYY-MM-DDTHH:mm:ssZ`)，秒级精度。实测证实其与紧邻的 `USER_INPUT` 频繁共享同一秒数值；因缺乏官方源码定义，精确内部语义归类为 Unverified，但已充分证实其**不能安全作为跨端点完成时间戳**。 |
 | `step.type === 'PLANNER_RESPONSE'` & `status === 'DONE'` & `tool_calls.length === 0` | **可用** [Verified] | **是**（完成轮次模式）[Verified] | Completed Result Identification | **是** | **是** [Verified] | **SAFE**：准确从众多中间工具调用中过滤出最终呈现给用户的响应。 |
-| 写入方式 (Append vs Replace) | **追加写入** [Verified] | Inode 保持不变，文件持续累加 [Verified] | Append-Only Stream | **是** | **是** [Verified] | **SAFE**：实测 Inode 固定为 369447098，文件大小随调用递增，不存在写临时文件原子覆盖引起的读竞争丢失。 |
-| 并发读取半行尾部 (Partial Tail) | **可被安全隔离** [Verified] | 格式校验守卫 [Verified] | Fault-Tolerant Parse | **是**（适配器防卫能力）[Verified] | **是** [Verified] | **SAFE**：实测解析器通过 `try...catch(JSON.parse)` 忽略截断尾行，不会崩溃，亦不会发明虚假完成。 |
-| 文件系统 `mtime` | **可用但不稳定** [Verified] | 易受污染 [Verified] | OS File Modified Time | 否（受 OS / 外部工具影响） | 否 | **STRICTLY UNSAFE**：整个会话仅单个日志文件，`mtime` 仅反映最后一次写入；任何工具、Spotlight 索引或 touch 都会改动它，严禁作为结果真值。 |
+| 写入方式 (当前环境观察) | **追加写入** [Observed] | Inode 保持不变，文件持续累加 [Observed] | Current Observed Stream Layout | **是** | **是** [Observed] | **OBSERVED**：在当前 macOS 测试环境下观察到 Inode 固定且大小递增；但这属于当前环境实测表现，不作为提供方跨版本永久保证的不变公理。 |
+| 并发读取半行尾部 (Partial Tail) | **解析器具备容错** [Verified] | 格式校验守卫 [Verified] | Fault-Tolerant Parse Robustness | **是**（适配器防卫能力）[Verified] | **是** [Verified] | **SAFE**：通过合成残缺 JSON 行实测证明，适配器解析器在读取到半行尾部时安全忽略该行，不崩溃亦不虚构完成。 |
+| 文件系统 `mtime` | **可用但不稳定** [Verified] | 易受污染 [Verified] | OS File Modified Time | 否（受 OS / 外部工具影响） | 否 | **STRICTLY UNSAFE**：整个会话仅单个日志文件，`mtime` 仅反映最后一次写操作；任何工具访问、Spotlight 索引或 touch 都会改动它，严禁作为结果真值。 |
 
 ---
 
@@ -102,89 +109,61 @@
 
 ## 8. 跨端点时间戳与排序对比 (Cross-Provider Comparison)
 
-针对 Issue #35 要求的跨端点比较项，给出实证分析：
+### 8.1 语义不对称与精度缺失
+- **Antigravity**：`step.created_at` 精度仅到秒。在会话 `0010e3c5...` 中，Step 59 (`USER_INPUT`) 与 Step 60 (`PLANNER_RESPONSE`) 的 `created_at` 完全相同（`02:59:19Z`）。实证表明其无法反映亚秒级时序，亦不能断言代表了推理结束时刻。
+- **ChatGPT**：DOM 中完全不存在原生时间戳，仅有适配器在本地执行探针时的 `completed_at` (Observation Time)。
+- **严禁直接比对**：若长耗时任务在 IDE 运行，两端时间戳不仅时钟源不同，而且一个是服务端的秒级记录，一个是本地毫秒级观测，数学大小比对毫无物理意义。
 
-### 8.1 语义不对称性 (Semantic Asymmetry)
-- **Antigravity**：`step.created_at` 记录的是**步骤创建/初始化时间 (Creation Time)**。
-  - 实测证据：在会话 `0010e3c5...` 中，Step 59 (`USER_INPUT`) 与 Step 60 (`PLANNER_RESPONSE`) 的 `created_at` 均为 `2026-08-19T02:59:19Z`。
-  - 如果一个包含多次工具调用的复杂任务耗时 2 分钟，最终回答 step 的创建时间通常落在推理开始之前或之中，绝非完成之时。
-- **ChatGPT**：DOM 中**完全不存在原生时间戳**。
-  - 当前适配器记录的 `completed_at` 实为 **Rally 本地观测时间 (Observation Time)**。
-  - 若直接比较：当 IDE 在 10:00:00 创建步骤并执行至 10:05:00 完成，而 Browser 在 10:02:00 完成，此时 IDE 时间戳（10:00:00）会被判定早于 Browser（10:02:00），导致“明明 IDE 刚刚完成，红点却指向 Browser”的严重逻辑翻转！
-
-### 8.2 精度与碰撞风险 (Precision & Tie Risks)
-- Antigravity 仅提供**秒级**精度（格式 `YYYY-MM-DDTHH:mm:ssZ`，不含毫秒）。
-- ChatGPT 的本地观测时间为毫秒级（`toISOString()`）。
-- 两个异步系统在秒级粒度极易发生碰撞（Tie），且由于时钟不同源，无法确定因果序。
-
-### 8.3 时钟漂移与离线重构漂移 (Clock Skew & Reconstruction Skew)
-- **物理时钟偏差**：云端/服务端生成的 Antigravity 时间与运行 Chrome 的本地主机时钟天然存在未知偏差（毫秒至秒级）。
-- **离线重构时间灾难**：如果 Rally 在系统休眠或关机 3 小时后重新启动并重新扫描 Browser 标签页，此时重新为 Browser 打上当前时间戳（`new Date()`），会导致陈旧的 Browser 历史结果瞬间“覆盖”IDE 在离线前产生的较新结果。
-
-### 8.4 裁决小结
-跨端点原生时间戳在语义、物理时钟源和精度上**均不可直接比较**。跨端点时序策略必须定为 **`PROVIDER_LOCAL_ORDER_ONLY`**。
+### 8.2 离线并发推进导致的跨端时序缺失 (Offline Concurrent-Advance Gap)
+- **核心场景**：当 Rally 离线（未运行、休眠或崩溃）期间，Browser 和 IDE 两个端点**均发生了新的完成 (Both cursors advanced offline)**。
+- **扫描顺序不可作为时序**：Rally 启动时，无论先扫描 Chrome 标签页还是先读取 IDE transcript，其先后顺序纯属内部调度细节，**绝不能**作为物理发生顺序。
+- **确定性裁决**：此时跨端点完全缺乏可信的先后时序证据，**必须 Fail-Closed 判定为 UNCERTAIN / UNKNOWN**。
 
 ---
 
-## 9. Phase 1 最新结果指示器确定性规则 (Deterministic Rule)
+## 9. Phase 1 最新结果指示器规则 (Deterministic Latest Result Indicator Rule)
 
-在 `PROVIDER_LOCAL_ORDER_ONLY` 约束下，Phase 1 最新结果指示器（红点 / Latest Result Indicator）遵循以下确定性无歧义规则：
+### 9.1 与 Canonical `NEW / handled` 彻底解耦
+- **职责划分**：
+  - **Canonical Attention Lifecycle (`NEW / handled`)**：回答“此端点结果是否已被用户/动作流转处理”。
+  - **Latest Result Indicator (最新结果指示器 / 红点)**：纯粹回答**“最新发生的可靠 completion 在哪一个端点”**。
+- **解耦关键不变量**：
+  - **Mark handled 绝不移动或清除红点**：将某端点标记为 handled 仅更新其注意力事实，绝不改变“它是最后完成的一端”这一物理历史；
+  - **Dual NEW 不是红点不确定的定义**：两端可以同时为 `NEW`（均未处理）；只要 Rally 实时目睹了先完成 A、后完成 B，红点依然能够明确指向 B；
+  - **红点模糊 (Ambiguity) 的唯一根源是跨端时序证据缺失**（即观察空白期两端均有推进）。
 
-### 9.1 端点本地事实派生规则
-1. **Browser 侧**：
-   - 依赖原子核验后的 Chrome DOM。
-   - 若 `isGenerating === true`：作为非变异瞬态，不改变现有规范结果事实。
-   - 若稳定存在非占位最后一条 Assistant 消息：计算 `chatgpt_msg_<id>`。
-   - 若该游标不等于上次 handled 游标，则 Browser 端点状态派生为 `NEW`。
-2. **IDE 侧**：
-   - 依赖 `HYBRID_PRIMARY` 机制。
-   - 运行时通过 Stop Hook 触发；启动时通过 `transcript.jsonl` 重建。
-   - 提取最新完成 turn 的 `ag-step:<stepIndex>:<fingerprint>`。
-   - 若该游标不等于上次 handled 游标，则 IDE 端点状态派生为 `NEW`。
+### 9.2 确定性红点裁决算法
+定义系统处于以下三种最新结果指示态之一：`BROWSER_LATEST`、`IDE_LATEST`、`UNCERTAIN`（以及两端均无任何完成时的 `NONE`）：
 
-### 9.2 全局红点显示裁决规则 (Deterministic Red-Dot Rule)
-根据 Phase 1 产品定义与 `CONTEXT.md` 规范：**Endpoint Result 彼此独立，Browser 与 IDE 可以同时各自拥有 NEW 结果**。
-
-1. **红点激活条件**：
-   $$\text{HasAttention} = (\text{Browser.State} == \text{NEW}) \lor (\text{IDE.State} == \text{NEW}) \lor (\text{HumanIntervention} == \text{ACTIVE})$$
-2. **红点位置指示（单指示器模式下的偏序裁决）**：
-   - **单端 NEW**：若仅有一端为 `NEW`（如 Browser=NEW, IDE=NO_NEW_RESULT），指示器明确指向该端点。
-   - **两端均为 NEW (Dual NEW)**：
-     - 在 Phase 1 中，状态界面应**并列呈现两端的独立 NEW 状态徽标**，绝不强行消除其中一个。
-     - 若紧凑托盘中仅存在单个指示器且两端均为 NEW，由 **Rally 协调器本地记录的最近一次进入受信任 NEW 状态的观察时序 (`latest_observed_transition_seq`)** 裁决视觉高亮，或显示 `BOTH_NEW` 联合状态；
-     - **严禁**使用跨端点 `max(completed_at)` 数值进行比较。
-   - **两端均无未处理结果 (Both Caught Up)**：指示器熄灭。
-   - **任一端为 UNKNOWN**：该端点显示 UNKNOWN 警示，绝不掩盖另一端的 NEW，亦不推断为 caught-up。
+1. **单端推进 (Single-Endpoint Advance)**：
+   - 若在离线重构或当前状态下，仅有一端较基线推进了新游标，另一端未动，则指示器明确指向发生推进的端点（`BROWSER_LATEST` 或 `IDE_LATEST`）。
+2. **在线单调见证 (Live Monitored Succession)**：
+   - 若 Rally 持续在线运行，并在物理时间轴上先后接收到两端的完成观察（即具有明确的 Rally 观察序列号 `seq_A < seq_B`），则指示器指向后观察到的一端。
+3. **离线并发推进 (Offline Concurrent Advance -> UNCERTAIN)**：
+   - 若在 Rally 离线/观察空白期之后，检测到 **Browser 游标与 IDE 游标较上次已知状态双双发生前进**；
+   - 此时无法从端点元数据中证明谁真正更晚；
+   - **严格 Fail-Closed**：指示器置为 **`UNCERTAIN`**（界面呈现为中立警示或双向不确定状态，绝不伪造单向指示）。
+4. **单端结果处理 (`markEndpointHandled`)**：
+   - 仅改变对应端点的 `NEW -> NO_NEW_RESULT`；
+   - **红点位置保持不变**。
 
 ---
 
 ## 10. 明确的 Fail-Closed 边界 (Explicit Fail-Closed Cases)
 
-以下情况必须坚决 **Fail-Closed** 至 `UNKNOWN` 或阻断推进，严禁进行便利性猜测：
-
-1. **会话/仓库归属失配 (Attribution Mismatch)**：
-   - Browser 标签页 URL 与绑定 `conversation_id` 不符；
-   - IDE Stop Hook 或 transcript 路径对应的目录与绑定的 `conversation_id`、`workspace_identity`、`repository_identity` 无法严格三合一对齐。
-2. **占位符污染 (Placeholder Result)**：
-   - Browser 检测到最后一条消息为 `request-placeholder-*` 或空 ID；
-   - 拒绝将其录入为完成游标，端点标记为 `continuity_lost`。
-3. **历史游标漂移与截断 (Cursor Drift / Truncation)**：
-   - 重启恢复时，先前记录的 `last_handled_cursor` 在 `transcript.jsonl` 中无法按 `stepIndex` 与 `fingerprint` 精确对齐（例如会话历史被裁剪或重置）；
-   - 立即 fail-closed 至 `UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION`。
-4. **生成中状态不可升级 (In-Progress Guard)**：
-   - 检测到 `button[data-testid="stop-button"]` 存在时，不得将已有 UNKNOWN 错误升级为 TRUSTED，不得更新现有游标。
-5. **Git 跟踪保护 (Tracked Hook Protection)**：
-   - 若工作区 `.agents/hooks.json` 已被 Git 跟踪，拒绝自动静默修改，返回待用户决策。
+1. **观察空白期双端推进**：Rally 离线恢复时若两端均推进新游标，Latest Result Indicator 强制判定为 `UNCERTAIN`。
+2. **会话/仓库归属失配**：Browser URL 不匹配或 IDE 目录/仓库三合一失配，对应端点进入 `continuity_lost`，指示器判定为 `UNCERTAIN`。
+3. **占位符过滤**：检测到 `request-placeholder-*` 拒绝提交完成游标。
+4. **历史游标截断/漂移**：重启时 `handled_cursor` 在 transcript 中无法按 `stepIndex` 与 `fingerprint` 精确对齐，强制 fail-closed 至 `UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION`。
+5. **生成中不更新**：`stop-button` 存在时作为运行时暂态，不升级 trust，不改写最新结果。
 
 ---
 
 ## 11. 剩余风险与工作边界 (Remaining Risks & Scope Guardrails)
 
-1. **ChatGPT 历史编辑/重新生成 (Branch Switch)**：
-   - 实测表明：当用户在 ChatGPT 界面点击分支切换按钮时，DOM 中的最后一条消息 ID 会立刻变更。
-   - 影响与处理：现有 DOM 探针始终读取当前激活分支的最后一条消息，符合“以当前展示页面为准”的直觉；如果切到旧分支，游标发生变化可能触发新的观察，这在 Phase 1 中应被作为端点内容更新安全吸收，不破坏系统稳定性。
-2. **边界守卫 (Scope Guardrails)**：
-   - 本研究成果**不包含**消息发送确认 (#32 delivery receipt)；
+1. **ChatGPT 分支切换 (Branch Navigation)**：DOM 探针跟踪当前激活分支的最后消息；切换分支会触发游标更新，在 Phase 1 中被作为端点内容更新安全吸收。
+2. **工作边界守卫**：
+   - 本研究**不包含**消息发送确认 (#32 delivery receipt)；
    - **不构建**浏览器全量 Message Ledger；
    - **不实现** #27 的代码变更或红点 UI 渲染。
-   - 调查到此完整满足 Issue #35 交付条件。
+   - 调查与修订到此完整满足 Issue #35 Review 要求。
