@@ -48,22 +48,24 @@ export class BrowserObservationDriver {
    * @param {number} [options.pollIntervalMs=2000] - 轮询间隔 (毫秒)
    * @param {object} [options.logger=console] - 日志记录器
    */
-  constructor({ registry, browserAdapter, pollIntervalMs = 2000, logger = console }) {
+  constructor({ registry, browserAdapter, pollIntervalMs = 2000, timeoutMs = 3000, logger = console }) {
     if (!registry || typeof registry.listProjects !== 'function') {
       throw new Error('Valid ProjectRegistry is required for BrowserObservationDriver');
     }
-    if (!browserAdapter || typeof browserAdapter.observeBrowserEndpoint !== 'function') {
+    if (!browserAdapter || (typeof browserAdapter.observeBrowserEndpoint !== 'function' && typeof browserAdapter.observeBrowserEndpointAsync !== 'function')) {
       throw new Error('Valid browserAdapter with observeBrowserEndpoint is required for BrowserObservationDriver');
     }
 
     this._registry = registry;
     this._browserAdapter = browserAdapter;
     this._pollIntervalMs = Math.max(100, pollIntervalMs);
+    this._timeoutMs = Math.max(100, timeoutMs);
     this._logger = logger;
     this._timer = null;
     this._isPolling = false;
     this._started = false;
     this._stopped = false;
+    this._witnessState = new Map();
   }
 
   /**
@@ -88,6 +90,7 @@ export class BrowserObservationDriver {
       clearTimeout(this._timer);
       this._timer = null;
     }
+    this._witnessState.clear();
   }
 
   /**
@@ -96,6 +99,17 @@ export class BrowserObservationDriver {
    */
   isRunning() {
     return this._started && !this._stopped;
+  }
+
+  /**
+   * 获取指定项目的当前 witness 状态 (用于观测诊断与测试)
+   * @param {string} bindingId
+   * @returns {{ stage: 'generating' | 'idle', pending?: boolean }}
+   */
+  getWitnessState(bindingId) {
+    const state = this._witnessState.get(bindingId);
+    if (!state) return { stage: 'idle' };
+    return { ...state };
   }
 
   /**
@@ -151,26 +165,68 @@ export class BrowserObservationDriver {
         }
 
         try {
-          const observation = this._browserAdapter.observeBrowserEndpoint({
-            conversationId,
-            bindingRevision: binding.binding_revision
-          });
+          let observation;
+          if (typeof this._browserAdapter.observeBrowserEndpointAsync === 'function') {
+            observation = await this._browserAdapter.observeBrowserEndpointAsync({
+              conversationId,
+              bindingRevision: binding.binding_revision,
+              timeoutMs: this._timeoutMs
+            });
+          } else {
+            observation = this._browserAdapter.observeBrowserEndpoint({
+              conversationId,
+              bindingRevision: binding.binding_revision
+            });
+          }
 
-          // 1. 正在生成或明确指示不可录入的瞬态
-          if (observation.is_generating === true || observation.should_record === false) {
+          if (this._stopped) break;
+
+          // Witness 状态机维护 (Delta 4 & Delta 5)
+          // 若发生超时、连续性丢失或异常未受信，重置该项目的 pending witness
+          if (observation.timed_out === true || observation.continuity_lost === true || (!observation.trusted && !observation.is_generating)) {
+            this._witnessState.delete(bindingId);
+          }
+
+          // 1. 正在生成中：记录 pending witness，不录入 Core
+          if (observation.is_generating === true) {
+            this._witnessState.set(bindingId, {
+              pending: true,
+              stage: 'generating',
+              conversationId,
+              revision: binding.binding_revision
+            });
             stats.generatingCount++;
             continue;
           }
 
-          // 2. 变更感知防重写比对 (Change Detection Guard)
+          // 超时或其他明确指示不可录入的非突变瞬态：直接跳过 Core 录入
+          if (observation.should_record === false) {
+            continue;
+          }
+
+          // 2. 检查是否满足 live witnessed 闭环
           const currentBrowser = snapshot.endpoints?.browser || {};
+          const currentCursor = currentBrowser.latest_completed_cursor ?? null;
+          const nextCursor = observation.latest_completed_cursor ?? null;
+          const isNewCursor = nextCursor !== currentCursor;
+
+          const witness = this._witnessState.get(bindingId);
+          let isLiveWitnessed = false;
+          if (witness && witness.pending && witness.conversationId === conversationId && witness.revision === binding.binding_revision && isNewCursor) {
+            isLiveWitnessed = true;
+            this._witnessState.delete(bindingId);
+          } else {
+            this._witnessState.delete(bindingId);
+          }
+          observation.live_witnessed = isLiveWitnessed;
+
+          // 3. 变更感知防重写比对 (Change Detection Guard)
           if (isObservationUnchanged(currentBrowser, observation)) {
-            // 事实无任何变化，跳过 Core 录入与磁盘写
             stats.skippedCount++;
             continue;
           }
 
-          // 3. 确实产生新完成轮次或状态变化，录入 Core
+          // 4. 录入 Core
           const core = this._registry.getProject(bindingId);
           core.recordEndpointObservation('browser', observation);
           stats.recordedCount++;

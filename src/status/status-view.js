@@ -29,6 +29,7 @@ export function formatStatusSnapshot({
   endpoints,
   humanIntervention,
   actions = [],
+  orderingEvidence = null,
   updatedAt
 }) {
   const browserFact = endpoints?.browser || null;
@@ -97,6 +98,13 @@ export function formatStatusSnapshot({
       ide: primaryIdeSnapshot,
       ide_endpoints: ideEndpointsMap
     },
+    ordering_evidence: orderingEvidence ? {
+      ...orderingEvidence,
+      checkpoint_cursors: {
+        browser: orderingEvidence.checkpoint_cursors?.browser ?? null,
+        ide: { ...(orderingEvidence.checkpoint_cursors?.ide || {}) }
+      }
+    } : null,
     human_intervention: {
       active: Boolean(humanIntervention?.active),
       reason: humanIntervention?.reason || null,

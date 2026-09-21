@@ -43,3 +43,20 @@ _Avoid_: Baton Location, turn owner, next actor
 **Action Lifecycle**:
 一次 open/focus/send/handoff 操作的独立事实序列：Action Requested、Submitted Locally、Accepted/Delivered、Target Completed。后一个阶段不能由前一个阶段自动推断。
 _Avoid_: sent, handoff complete
+
+**Result Identity**:
+端点本地唯一的稳定结果标识（例如 message ID、turn UUID 或 monotonic turn cursor）。它由各 provider 本地生成与管理，不等同于跨端点的全局 message ledger，绝对不能跨端点直接做大小比较。
+_Avoid_: global message ID, universal turn clock
+
+**Result Time Evidence**:
+端点结果的时间凭据。明确区分三类性质不同的时间信息：(1) provider-attested result timestamp（若端点提供）；(2) observer-witnessed event timestamp（Rally 实时见证完成时的受信任单调时间戳）；(3) observation-time monotonic sequence counter（观测时序计数器）。绝不将不同 provider 的本地物理时间戳直接混同做跨端因果比较。
+_Avoid_: synchronized wall clock, cross-provider NTP equivalence
+
+**Latest Result Indicator**:
+面向人类操作者的派生 UI 视觉指示（如 `BROWSER_LATEST`、`IDE_LATEST`、`UNCERTAIN`、`NONE`），用于快速呈现哪个端点在时序上最后完成产出。它完全从各端点事实及 Ordering Evidence 纯函数派生，绝不作为第二套持久化 UI 状态存储，且与结果的 New/Handled 状态严格解耦。
+_Avoid_: turn owner, baton, unread badge store
+
+**Ordering Evidence / Trusted Ordering Checkpoint**:
+Rally 内部记录的跨端点完成顺序凭证与持久检查点。包含各端点已知的最新完成游标与最后受信任完成的端点标识。仅在实时见证（live-witnessed）完成或重启/gap 后的单侧受控事实推进时更新；任何存在未受信任观测间隙（untrusted gap）且无法确定确切先后的情况，必须裁决为 UNCERTAIN。
+_Avoid_: speculative ordering, wall-clock arbitration
+

@@ -132,6 +132,26 @@ export class ObservationRuntimeCoordinator {
   }
 
   /**
+   * 对所有注册项目执行一次原子时序证据对账 (Project-Atomic Ordering Reconciliation)
+   * 确保两端游标齐备后执行原子裁决，杜绝扫描顺序决定最新结果
+   */
+  reconcileAllProjectsOrdering() {
+    const snapshots = this._registry.listProjects();
+    for (const snap of snapshots) {
+      const bindingId = snap.binding?.binding_id;
+      if (bindingId) {
+        try {
+          this._registry.reconcileProjectOrdering(bindingId);
+        } catch (err) {
+          this._logger?.warn?.(
+            `[ObservationRuntimeCoordinator] Failed to reconcile ordering for project "${bindingId}": ${err.message}`
+          );
+        }
+      }
+    }
+  }
+
+  /**
    * 启动持续观察运行时
    */
   async start() {
@@ -146,10 +166,20 @@ export class ObservationRuntimeCoordinator {
       this._logger?.warn?.(`[ObservationRuntimeCoordinator] Failed to reconcile workspace hooks: ${err.message}`);
     }
 
-    // 2. 启动时执行一次 IDE 端点核验
+    // 2. 启动时执行一次 IDE 端点核验 (更新 IDE 端点事实)
     this.reconcileAllIdeEndpointsOnStartup();
 
-    // 3. 启动浏览器端点周期轮询驱动器
+    // 3. 执行一次首轮浏览器观察 (更新 Browser 端点事实)
+    try {
+      await this._browserDriver.pollOnce();
+    } catch (err) {
+      this._logger?.warn?.(`[ObservationRuntimeCoordinator] Initial browser poll failed: ${err.message}`);
+    }
+
+    // 4. 执行所有项目的项目级原子时序证据对账 (Project-Atomic Gap Reconciliation)
+    this.reconcileAllProjectsOrdering();
+
+    // 5. 启动浏览器端点周期轮询驱动器
     this._browserDriver.start();
   }
 

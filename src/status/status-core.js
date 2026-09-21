@@ -31,15 +31,26 @@ import {
   executeRebindEndpoint
 } from './endpoint-lifecycle.js';
 import { formatStatusSnapshot, formatCompactStatus } from './status-view.js';
+import {
+  createInitialOrderingEvidence,
+  hydrateOrderingEvidence,
+  recordLiveWitnessedCompletion,
+  reconcileProjectOrdering
+} from './ordering-ledger.js';
 
 export { deriveEndpointResult, ALLOWED_ACTION_STAGES };
 
-export function createProjectStatusCore({ binding, initial_endpoints = null, onMutation = null }) {
-  return new ProjectStatusCore({ binding, initial_endpoints, onMutation });
+export function createProjectStatusCore({
+  binding,
+  initial_endpoints = null,
+  initial_ordering_evidence = null,
+  onMutation = null
+}) {
+  return new ProjectStatusCore({ binding, initial_endpoints, initial_ordering_evidence, onMutation });
 }
 
 export class ProjectStatusCore {
-  constructor({ binding, initial_endpoints = null, onMutation = null }) {
+  constructor({ binding, initial_endpoints = null, initial_ordering_evidence = null, onMutation = null }) {
     const validation = validateBinding(binding);
     if (!validation.valid) {
       throw new Error(`Invalid Binding for Status Core: ${validation.errors.join('; ')}`);
@@ -84,38 +95,36 @@ export class ProjectStatusCore {
     };
 
     this._actions = [];
+    this._orderingEvidence = hydrateOrderingEvidence(initial_ordering_evidence, {
+      fallbackUpdatedAt: this._updatedAt,
+      initialEndpointsCursors: this._getAllCurrentCursors()
+    });
+  }
+
+  _getAllCurrentCursors() {
+    const ideCursors = {};
+    for (const [id, fact] of this._ideEndpoints.entries()) {
+      ideCursors[id] = fact.latest_completed_cursor ?? null;
+    }
+    return {
+      browser: this._browserEndpoint.latest_completed_cursor ?? null,
+      ide: ideCursors
+    };
   }
 
   _resolveEndpoint(endpointIdentifier) {
-    if (!endpointIdentifier || typeof endpointIdentifier !== 'string') {
-      return null;
-    }
+    if (!endpointIdentifier || typeof endpointIdentifier !== 'string') return null;
     if (endpointIdentifier === 'browser') {
-      return {
-        role: 'browser',
-        id: 'browser',
-        fact: this._browserEndpoint,
-        config: this._binding.browser
-      };
+      return { role: 'browser', id: 'browser', fact: this._browserEndpoint, config: this._binding.browser };
     }
     if (this._ideEndpoints.has(endpointIdentifier)) {
       const config = (this._binding.ide_endpoints || []).find(e => e.endpoint_id === endpointIdentifier);
-      return {
-        role: 'ide',
-        id: endpointIdentifier,
-        fact: this._ideEndpoints.get(endpointIdentifier),
-        config
-      };
+      return { role: 'ide', id: endpointIdentifier, fact: this._ideEndpoints.get(endpointIdentifier), config };
     }
     if (endpointIdentifier === 'ide' && this._ideEndpoints.size === 1) {
       const onlyId = Array.from(this._ideEndpoints.keys())[0];
       const config = (this._binding.ide_endpoints || []).find(e => e.endpoint_id === onlyId);
-      return {
-        role: 'ide',
-        id: onlyId,
-        fact: this._ideEndpoints.get(onlyId),
-        config
-      };
+      return { role: 'ide', id: onlyId, fact: this._ideEndpoints.get(onlyId), config };
     }
     return null;
   }
@@ -174,6 +183,7 @@ export class ProjectStatusCore {
           ? { ...Array.from(this._ideEndpoints.values())[0], continuity: { ...Array.from(this._ideEndpoints.values())[0].continuity } }
           : null
       },
+      ordering_evidence: this.getOrderingEvidence(),
       human_intervention: { ...this._humanIntervention },
       actions: this._actions.map(a => ({ ...a })),
       updated_at: this._updatedAt
@@ -356,6 +366,16 @@ export class ProjectStatusCore {
       this._ideEndpoints.set(resolved.id, updatedFact);
     }
 
+    // 仅在受信任且明确声明 live_witnessed 时推进 ordering evidence
+    if (trusted && observation.live_witnessed === true && latestCursor !== null && latestCursor !== undefined) {
+      this._orderingEvidence = recordLiveWitnessedCompletion(this._orderingEvidence, {
+        endpointId: resolved.role === 'browser' ? 'browser' : resolved.id,
+        cursor: latestCursor,
+        allCurrentCursors: this._getAllCurrentCursors(),
+        now
+      });
+    }
+
     this._updatedAt = now;
     if (this._onMutation) {
       this._onMutation();
@@ -396,27 +416,16 @@ export class ProjectStatusCore {
   setHumanIntervention({ active = true, reason = null } = {}) {
     const isActive = Boolean(active);
     let normalizedReason = null;
-
     if (isActive) {
-      if (typeof reason !== 'string' || reason.trim().length === 0) {
+      if (typeof reason !== 'string' || !reason.trim()) {
         throw new Error('Human intervention reason must be a non-empty string when active: true');
       }
       normalizedReason = reason.trim();
-    } else {
-      // active: false 终态必须强制为 reason: null，严禁保留传入的 reason
-      normalizedReason = null;
     }
-
     const now = new Date().toISOString();
-    this._humanIntervention = {
-      active: isActive,
-      reason: normalizedReason,
-      updated_at: now
-    };
+    this._humanIntervention = { active: isActive, reason: normalizedReason, updated_at: now };
     this._updatedAt = now;
-    if (this._onMutation) {
-      this._onMutation();
-    }
+    if (this._onMutation) this._onMutation();
   }
 
   clearHumanIntervention() {
@@ -524,6 +533,31 @@ export class ProjectStatusCore {
     this._updatedAt = new Date().toISOString();
   }
 
+  reconcileProjectOrdering() {
+    const cursors = this._getAllCurrentCursors();
+    const now = new Date().toISOString();
+    this._orderingEvidence = reconcileProjectOrdering(this._orderingEvidence, {
+      browserCursor: cursors.browser,
+      ideCursorsMap: cursors.ide,
+      now
+    });
+    this._updatedAt = now;
+    if (this._onMutation) {
+      this._onMutation();
+    }
+    return this.getSnapshot();
+  }
+
+  getOrderingEvidence() {
+    return {
+      ...this._orderingEvidence,
+      checkpoint_cursors: {
+        browser: this._orderingEvidence.checkpoint_cursors?.browser ?? null,
+        ide: { ...(this._orderingEvidence.checkpoint_cursors?.ide || {}) }
+      }
+    };
+  }
+
   getSnapshot() {
     return formatStatusSnapshot({
       binding: this._binding,
@@ -531,6 +565,7 @@ export class ProjectStatusCore {
         browser: this._browserEndpoint,
         ide_endpoints: this._ideEndpoints
       },
+      orderingEvidence: this._orderingEvidence,
       humanIntervention: this._humanIntervention,
       actions: this._actions,
       updatedAt: this._updatedAt

@@ -202,26 +202,42 @@ export class WorkspaceHookManager {
       };
     }
 
-    // 2. 确保稳定桥接可用
-    const bridgePath = this.ensureStableBridge();
-
-    // 3. 配置 Git 本地排除，确保零 Git 污染
-    this.ensureGitExclusion(resolvedWs);
-
-    // 4. 更新 .agents/hooks.json
+    // 2. Preflight 检查已存在的 .agents/hooks.json 格式合规性 (Blocker A & Delta 6)
+    // 强制契约：在执行任何 workspace 改动（写入 hooks、写入 allowlist、修改 .git/info/exclude）之前严格 Fail-Closed
     const agentsDir = path.join(resolvedWs, '.agents');
-    if (!fs.existsSync(agentsDir)) {
-      fs.mkdirSync(agentsDir, { recursive: true });
-    }
-
     const hooksJsonPath = path.join(agentsDir, 'hooks.json');
     let hooksData = {};
+
     if (fs.existsSync(hooksJsonPath)) {
       try {
-        hooksData = JSON.parse(fs.readFileSync(hooksJsonPath, 'utf8'));
-      } catch (_) {
-        hooksData = {};
+        const raw = fs.readFileSync(hooksJsonPath, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+          throw new Error('hooks.json content must be a JSON object');
+        }
+        hooksData = parsed;
+      } catch (err) {
+        this._logger?.warn?.(
+          `[WorkspaceHookManager] Malformed existing hooks.json in ${resolvedWs}: ${err.message}. Refusing to modify.`
+        );
+        return {
+          success: false,
+          reason: 'MALFORMED_HOOKS_JSON',
+          workspacePath: resolvedWs,
+          conversationId: cleanConvId
+        };
       }
+    }
+
+    // 3. 确保稳定桥接可用
+    const bridgePath = this.ensureStableBridge();
+
+    // 4. 配置 Git 本地排除，确保零 Git 污染
+    this.ensureGitExclusion(resolvedWs);
+
+    // 5. 更新 .agents/hooks.json
+    if (!fs.existsSync(agentsDir)) {
+      fs.mkdirSync(agentsDir, { recursive: true });
     }
 
     const hookCommand = surfaceUrl

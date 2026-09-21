@@ -10,6 +10,10 @@
  * 6. 精确端点处理资格：计算 can_mark_handled，仅当端点受信且处于 NEW 并持有有效完成游标时方可触发。
  */
 
+import { deriveLatestResultIndicator } from '../status/ordering-ledger.js';
+
+export { deriveLatestResultIndicator };
+
 /**
  * 计算端点是否具备调用 Mark Handled 的资格
  * @param {object|null} fact - 端点规范事实
@@ -35,7 +39,11 @@ export function projectStatusSurface(snapshot) {
     throw new Error('Valid project status snapshot is required for surface projection');
   }
 
-  const { binding, endpoints = {}, human_intervention = {}, actions = [], updated_at } = snapshot;
+  const { binding, endpoints = {}, human_intervention = {}, actions = [], updated_at, ordering_evidence = null } = snapshot;
+
+  const orderingEvidence = ordering_evidence;
+  const latestResultIndicator = deriveLatestResultIndicator(orderingEvidence);
+  const isBrowserLatest = Boolean(orderingEvidence?.certainty === 'DEFINITE' && orderingEvidence?.latest_endpoint === 'browser');
 
   // 1. Browser 端点投影（显式呈现会话与分支标识，不推断主线或 Baton）
   const browserFact = endpoints.browser || null;
@@ -60,7 +68,8 @@ export function projectStatusSurface(snapshot) {
       trusted: browserTrusted,
       unknown_reason: browserFact?.continuity?.unknown_reason ?? null
     },
-    can_mark_handled: canEndpointMarkHandled(browserFact)
+    can_mark_handled: canEndpointMarkHandled(browserFact),
+    is_latest_result: isBrowserLatest
   };
 
   // 2. 多 IDE 端点投影
@@ -110,7 +119,8 @@ export function projectStatusSurface(snapshot) {
         trusted: epTrusted,
         unknown_reason: epFact?.continuity?.unknown_reason ?? null
       },
-      can_mark_handled: canEndpointMarkHandled(epFact)
+      can_mark_handled: canEndpointMarkHandled(epFact),
+      is_latest_result: Boolean(orderingEvidence?.certainty === 'DEFINITE' && orderingEvidence?.latest_endpoint === epId)
     };
   });
 
@@ -141,6 +151,9 @@ export function projectStatusSurface(snapshot) {
     capabilities: Array.isArray(binding.capabilities) ? [...binding.capabilities] : [],
     browser: browserSlot,
     ide_endpoints: ideSlots,
+    ide: ideSlots.length === 1 ? ideSlots[0] : null,
+    latest_result_indicator: latestResultIndicator,
+    ordering_evidence: orderingEvidence ? { ...orderingEvidence } : null,
     human_intervention: humanInterventionPlane,
     actions: actionFactsPlane,
     disambiguation: {

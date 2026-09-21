@@ -244,4 +244,54 @@ describe('ChatGPTBrowserAdapter 单元与契约测试', () => {
     assert.equal(obs.continuity_lost, true);
     assert.match(obs.reason, /AppleScript process terminated/);
   });
+
+  it('13. observeBrowserEndpointAsync 探测超时安全 fail-closed 且标记 should_record: false', async () => {
+    const mockAsyncExecutor = async () => {
+      const err = new Error('Command timed out after 3000ms');
+      err.timedOut = true;
+      throw err;
+    };
+
+    const adapter = new ChatGPTBrowserAdapter({ asyncExecutor: mockAsyncExecutor });
+    const obs = await adapter.observeBrowserEndpointAsync({
+      conversationId: targetConvId,
+      bindingRevision: 1,
+      timeoutMs: 3000
+    });
+
+    assert.equal(obs.trusted, false);
+    assert.equal(obs.timed_out, true);
+    assert.equal(obs.should_record, false);
+    assert.equal(obs.continuity_lost, false); // 超时是暂态，不破坏连续性
+    assert.match(obs.reason, /timeout/i);
+  });
+
+  it('14. observeBrowserEndpointAsync 正常探测返回受信任结果', async () => {
+    const mockAsyncExecutor = async (script) => {
+      if (script.includes('set matchCount to 0')) {
+        return `SUCCESS:1:1:https://chatgpt.com/c/${targetConvId}`;
+      }
+      return JSON.stringify({
+        isGenerating: false,
+        assistantCount: 2,
+        lastMessageId: '4d8a113a-4ec6-4f46-9cf4-c0811e5f80b2',
+        hasValidLastMessage: true,
+        isPlaceholder: false
+      });
+    };
+
+    const adapter = new ChatGPTBrowserAdapter({ asyncExecutor: mockAsyncExecutor });
+    const obs = await adapter.observeBrowserEndpointAsync({
+      conversationId: targetConvId,
+      bindingRevision: 1
+    });
+
+    assert.equal(obs.trusted, true);
+    assert.equal(obs.should_record, true);
+    assert.equal(!obs.timed_out, true);
+    assert.equal(obs.latest_completed_cursor, 'chatgpt_msg_4d8a113a-4ec6-4f46-9cf4-c0811e5f80b2');
+  });
+
+
 });
+

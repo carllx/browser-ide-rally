@@ -379,4 +379,31 @@ describe('WorkspaceHookManager TDD Suite', () => {
     assert.deepEqual(allowlist.conversations, ['conv-active']);
     assert.equal(allowlist.conversations.includes('conv-stale'), false);
   });
+
+  it('P. Malformed hooks.json preflight fail-closed: preserves byte-for-byte and mutates no workspace files', () => {
+    const ws = path.join(tempBaseDir, 'ws-p');
+    const agentsDir = path.join(ws, '.agents');
+    fs.mkdirSync(agentsDir, { recursive: true });
+
+    const malformedContent = '{\n  "unclosed_json": true,\n';
+    const hooksPath = path.join(agentsDir, 'hooks.json');
+    fs.writeFileSync(hooksPath, malformedContent, 'utf8');
+
+    const res = manager.ensureWorkspaceHook(ws, 'conv-p');
+    assert.equal(res.success, false);
+    assert.equal(res.reason, 'MALFORMED_HOOKS_JSON');
+
+    // hooks.json byte-for-byte 完全不变
+    const afterContent = fs.readFileSync(hooksPath, 'utf8');
+    assert.equal(afterContent, malformedContent);
+
+    // 没有创建 allowlist 文件
+    const allowlistPath = path.join(agentsDir, 'rally-conversations.json');
+    assert.equal(fs.existsSync(allowlistPath), false);
+
+    // 没有在 git 排除文件中注入任何条目
+    const excludePath = path.join(ws, '.git', 'info', 'exclude');
+    assert.equal(fs.existsSync(excludePath), false);
+  });
 });
+

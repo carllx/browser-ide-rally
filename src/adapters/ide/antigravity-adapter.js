@@ -359,6 +359,7 @@ export class AntigravityIdeAdapter {
 
     const observation = this._buildObservation({
       trusted: true,
+      live_witnessed: true,
       latest_completed_cursor: opaqueCursor,
       completed_at: completedAt,
       latest_completed_result: this._buildCompletedResult(opaqueCursor, latestTurn.text, completedAt)

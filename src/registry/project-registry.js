@@ -33,7 +33,7 @@ export class ProjectRegistry {
     this._projects = new Map();
   }
 
-  registerProject({ binding, initial_endpoints = null }) {
+  registerProject({ binding, initial_endpoints = null, initial_ordering_evidence = null }) {
     const validation = validateBinding(binding);
     if (!validation.valid) {
       throw new Error(`Cannot register invalid binding: ${validation.errors.join('; ')}`);
@@ -72,6 +72,7 @@ export class ProjectRegistry {
     const core = createProjectStatusCore({
       binding,
       initial_endpoints,
+      initial_ordering_evidence,
       onMutation: () => {
         if (this._storagePath) {
           this.saveToFile(this._storagePath);
@@ -142,6 +143,15 @@ export class ProjectRegistry {
     return result;
   }
 
+  reconcileProjectOrdering(bindingId) {
+    const core = this.getProject(bindingId);
+    const snapshot = core.reconcileProjectOrdering();
+    if (this._storagePath) {
+      this.saveToFile(this._storagePath);
+    }
+    return snapshot;
+  }
+
   setProjectHumanIntervention(bindingId, { active = true, reason = null, expected_binding_revision } = {}) {
     const core = this.getProject(bindingId);
     const snapshot = core.getSnapshot();
@@ -204,7 +214,7 @@ export class ProjectRegistry {
     };
   }
 
-  saveToFile(filePath) {
+  saveToFile(filePath = this._storagePath) {
     if (!filePath || typeof filePath !== 'string') {
       throw new Error('Valid storage filePath is required for saveToFile');
     }
@@ -312,7 +322,8 @@ export class ProjectRegistry {
 
       const core = createProjectStatusCore({
         binding: bindingToLoad,
-        initial_endpoints: endpointsToLoad
+        initial_endpoints: endpointsToLoad,
+        initial_ordering_evidence: projData.ordering_evidence || null
       });
 
       if (projData.human_intervention) {
