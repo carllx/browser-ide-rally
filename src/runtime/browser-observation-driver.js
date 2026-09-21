@@ -164,6 +164,12 @@ export class BrowserObservationDriver {
           continue;
         }
 
+        // Witness 状态机守卫：身份或版本发生变化时绝不继承陈旧 witness
+        const existingWitness = this._witnessState.get(bindingId);
+        if (existingWitness && (existingWitness.conversationId !== conversationId || existingWitness.revision !== binding.binding_revision)) {
+          this._witnessState.delete(bindingId);
+        }
+
         try {
           let observation;
           if (typeof this._browserAdapter.observeBrowserEndpointAsync === 'function') {

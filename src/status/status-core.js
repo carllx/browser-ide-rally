@@ -35,7 +35,8 @@ import {
   createInitialOrderingEvidence,
   hydrateOrderingEvidence,
   recordLiveWitnessedCompletion,
-  reconcileProjectOrdering
+  reconcileProjectOrdering,
+  rebaselineOrderingOnLifecycle
 } from './ordering-ledger.js';
 
 export { deriveEndpointResult, ALLOWED_ACTION_STAGES };
@@ -215,6 +216,13 @@ export class ProjectStatusCore {
     this._binding = res.nextBinding;
     this._ideEndpoints.set(res.cleanId, res.newFact);
     this._updatedAt = res.now;
+    this._orderingEvidence = rebaselineOrderingOnLifecycle(this._orderingEvidence, {
+      mutationType: 'ADD',
+      targetRole: 'ide',
+      targetId: res.cleanId,
+      allCurrentCursors: this._getAllCurrentCursors(),
+      now: res.now
+    });
     return this.getSnapshot();
   }
 
@@ -237,6 +245,13 @@ export class ProjectStatusCore {
     this._binding = res.nextBinding;
     this._ideEndpoints.delete(res.removedId);
     this._updatedAt = res.now;
+    this._orderingEvidence = rebaselineOrderingOnLifecycle(this._orderingEvidence, {
+      mutationType: 'REMOVE',
+      targetRole: 'ide',
+      targetId: res.removedId,
+      allCurrentCursors: this._getAllCurrentCursors(),
+      now: res.now
+    });
     return this.getSnapshot();
   }
 
@@ -261,6 +276,13 @@ export class ProjectStatusCore {
       this._ideEndpoints.set(res.targetId, res.newIdeFact);
     }
     this._updatedAt = res.now;
+    this._orderingEvidence = rebaselineOrderingOnLifecycle(this._orderingEvidence, {
+      mutationType: 'REBIND',
+      targetRole: res.targetRole,
+      targetId: res.targetId,
+      allCurrentCursors: this._getAllCurrentCursors(),
+      now: res.now
+    });
     return this.getSnapshot();
   }
 
@@ -432,38 +454,14 @@ export class ProjectStatusCore {
     this.setHumanIntervention({ active: false, reason: null });
   }
 
-  recordActionFact({
-    action_id,
-    action_type = 'action',
-    target_endpoint,
-    stage = 'REQUESTED',
-    binding_revision,
-    payload = null,
-    nonce = null,
-    correlation_id = null,
-    evidence = null,
-    created_at = null,
-    updated_at = null
-  }) {
+  recordActionFact(actionParams = {}) {
     const fact = createActionFact({
-      action_id,
-      action_type,
-      target_endpoint,
-      stage,
-      binding_revision: binding_revision ?? this._binding.binding_revision,
-      payload,
-      nonce,
-      correlation_id,
-      evidence,
-      created_at,
-      updated_at
+      ...actionParams,
+      binding_revision: actionParams.binding_revision ?? this._binding.binding_revision
     });
-
     this._actions.push(fact);
     this._updatedAt = fact.updated_at;
-    if (this._onMutation) {
-      this._onMutation();
-    }
+    if (this._onMutation) this._onMutation();
     return fact;
   }
 

@@ -405,5 +405,54 @@ describe('WorkspaceHookManager TDD Suite', () => {
     const excludePath = path.join(ws, '.git', 'info', 'exclude');
     assert.equal(fs.existsSync(excludePath), false);
   });
+
+  it('Q. Malformed hooks.json skips entire reconciliation pass: preserves allowlist byte-for-byte without pruning (Blocker 2)', () => {
+    const ws = path.join(tempBaseDir, 'ws-q');
+    const agentsDir = path.join(ws, '.agents');
+    fs.mkdirSync(agentsDir, { recursive: true });
+
+    // 1. 构造损坏的 hooks.json
+    const malformedContent = '{\n  "broken": true,\n';
+    const hooksPath = path.join(agentsDir, 'hooks.json');
+    fs.writeFileSync(hooksPath, malformedContent, 'utf8');
+
+    // 2. 预先存在包含 active 和 stale 会话的 allowlist 文件
+    const initialAllowlist = {
+      conversations: ['conv-active', 'conv-stale'],
+      updated_at: '2026-09-20T00:00:00.000Z'
+    };
+    const allowlistPath = path.join(agentsDir, 'rally-conversations.json');
+    const initialAllowlistBytes = JSON.stringify(initialAllowlist, null, 2);
+    fs.writeFileSync(allowlistPath, initialAllowlistBytes, 'utf8');
+
+    // 3. 构造仅包含 conv-active 的 Registry
+    const registry = createProjectRegistry();
+    registry.registerProject({
+      binding: createBinding({
+        binding_id: 'proj-q',
+        display_name: 'Project Q',
+        browser: { provider: 'chatgpt', conversation_id: 'chatgpt-q' },
+        ide_endpoints: [{
+          endpoint_id: 'ide-primary',
+          endpoint_revision: 1,
+          conversation_id: 'conv-active',
+          workspace_identity: ws,
+          repository_identity: 'repo-q'
+        }]
+      })
+    });
+
+    // 4. 执行全量对账：由于 hooks.json 损坏，必须跳过该工作区所有改动（绝不能 prune 掉 conv-stale）
+    const res = manager.reconcileWorkspaceHooks(registry);
+    assert.equal(res.reconciledWorkspaces, 0);
+    assert.ok(res.errors.some(e => e.includes('MALFORMED_HOOKS_JSON')));
+
+    // 5. 校验 hooks.json 与 allowlist 保持 byte-for-byte 100% 不变
+    const afterHooksContent = fs.readFileSync(hooksPath, 'utf8');
+    assert.equal(afterHooksContent, malformedContent);
+
+    const afterAllowlistContent = fs.readFileSync(allowlistPath, 'utf8');
+    assert.equal(afterAllowlistContent, initialAllowlistBytes);
+  });
 });
 

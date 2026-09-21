@@ -170,26 +170,17 @@ export class WorkspaceHookManager {
   }
 
   /**
-   * 确保目标工作区具备 Rally Stop Hook 并将指定会话录入白名单
+   * 预检工作区 hooks.json 状态与安全性 (Blocker 2 & Delta 6)
    * @param {string} workspacePath
-   * @param {string} conversationId
-   * @returns {{ success: boolean, reason?: string, workspacePath?: string, conversationId?: string }}
+   * @param {string|null} [conversationId=null]
+   * @returns {{ success: boolean, reason?: string, workspacePath: string, conversationId?: string|null, hooksData?: object, agentsDir?: string, hooksJsonPath?: string }}
    */
-  ensureWorkspaceHook(workspacePath, conversationId, { surfaceUrl = null } = {}) {
-    if (!workspacePath || typeof workspacePath !== 'string') {
-      return { success: false, reason: 'invalid_workspace_path' };
-    }
-    const cleanConvId = conversationId ? String(conversationId).trim() : null;
-    if (!cleanConvId) {
-      return { success: false, reason: 'missing_conversation_id' };
-    }
-
+  _validateWorkspaceSafety(workspacePath, conversationId = null) {
     const resolvedWs = path.resolve(workspacePath);
     if (!fs.existsSync(resolvedWs)) {
-      return { success: false, reason: 'workspace_directory_not_found' };
+      return { success: false, reason: 'workspace_directory_not_found', workspacePath: resolvedWs };
     }
 
-    // 1. 检查已跟踪守卫 (Tracked Hook Protection)
     if (this.isHookTrackedByGit(resolvedWs)) {
       this._logger?.warn?.(
         `[WorkspaceHookManager] .agents/hooks.json in ${resolvedWs} is tracked by Git. Refusing to modify.`
@@ -198,12 +189,10 @@ export class WorkspaceHookManager {
         success: false,
         reason: 'WORKSPACE_HOOK_REQUIRES_USER_DECISION',
         workspacePath: resolvedWs,
-        conversationId: cleanConvId
+        conversationId
       };
     }
 
-    // 2. Preflight 检查已存在的 .agents/hooks.json 格式合规性 (Blocker A & Delta 6)
-    // 强制契约：在执行任何 workspace 改动（写入 hooks、写入 allowlist、修改 .git/info/exclude）之前严格 Fail-Closed
     const agentsDir = path.join(resolvedWs, '.agents');
     const hooksJsonPath = path.join(agentsDir, 'hooks.json');
     let hooksData = {};
@@ -224,10 +213,39 @@ export class WorkspaceHookManager {
           success: false,
           reason: 'MALFORMED_HOOKS_JSON',
           workspacePath: resolvedWs,
-          conversationId: cleanConvId
+          conversationId
         };
       }
     }
+
+    return { success: true, workspacePath: resolvedWs, hooksData, agentsDir, hooksJsonPath };
+  }
+
+  /**
+   * 确保目标工作区具备 Rally Stop Hook 并将指定会话录入白名单
+   * @param {string} workspacePath
+   * @param {string} conversationId
+   * @returns {{ success: boolean, reason?: string, workspacePath?: string, conversationId?: string }}
+   */
+  ensureWorkspaceHook(workspacePath, conversationId, { surfaceUrl = null } = {}) {
+    if (!workspacePath || typeof workspacePath !== 'string') {
+      return { success: false, reason: 'invalid_workspace_path' };
+    }
+    const cleanConvId = conversationId ? String(conversationId).trim() : null;
+    if (!cleanConvId) {
+      return { success: false, reason: 'missing_conversation_id' };
+    }
+
+    // 1. 统一安全性预检
+    const safety = this._validateWorkspaceSafety(workspacePath, cleanConvId);
+    if (!safety.success) {
+      return safety;
+    }
+
+    const { resolvedWs, hooksData, agentsDir, hooksJsonPath } = {
+      resolvedWs: safety.workspacePath,
+      ...safety
+    };
 
     // 3. 确保稳定桥接可用
     const bridgePath = this.ensureStableBridge();
@@ -389,6 +407,17 @@ export class WorkspaceHookManager {
 
     for (const [ws, convSet] of workspaceMap.entries()) {
       if (!fs.existsSync(ws)) continue;
+
+      // 前置检查工作区安全性 (Blocker 2)
+      // 若 hooks.json 损坏或被 Git 跟踪，必须跳过该工作区的全部 mutation (包括 allowlist/prune/remove)
+      const safety = this._validateWorkspaceSafety(ws);
+      if (!safety.success) {
+        this._logger?.warn?.(
+          `[WorkspaceHookManager] Preflight failed for workspace ${ws}: ${safety.reason}. Skipping workspace reconciliation mutation.`
+        );
+        errors.push(`Workspace ${ws}: ${safety.reason}`);
+        continue;
+      }
 
       // 1. 确保活跃会话均被安装
       for (const convId of convSet) {

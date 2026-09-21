@@ -29,7 +29,9 @@ export const ALLOWED_EVIDENCE_TYPES = ['INITIAL', 'LIVE_WITNESSED', 'RECONCILED_
 export function createInitialOrderingEvidence({ updatedAt = new Date().toISOString() } = {}) {
   return {
     certainty: 'NONE',
+    latest_side: null,
     latest_endpoint: null,
+    candidate_endpoints: [],
     checkpoint_cursors: {
       browser: null,
       ide: {}
@@ -59,10 +61,11 @@ export function deriveLatestResultIndicator(evidence) {
   }
   if (certainty === 'DEFINITE') {
     const latest = evidence.latest_endpoint;
-    if (latest === 'browser') {
+    const side = evidence.latest_side;
+    if (latest === 'browser' || side === 'browser') {
       return 'BROWSER_LATEST';
     }
-    if (typeof latest === 'string' && latest.trim().length > 0) {
+    if ((typeof latest === 'string' && latest.trim().length > 0) || side === 'ide') {
       return 'IDE_LATEST';
     }
   }
@@ -115,9 +118,19 @@ export function hydrateOrderingEvidence(
     ? persistedEvidence.evidence_type
     : 'INITIAL';
 
+  const latestSide = persistedEvidence.latest_side === 'browser' || persistedEvidence.latest_side === 'ide'
+    ? persistedEvidence.latest_side
+    : (latestEndpoint === 'browser' ? 'browser' : (latestEndpoint ? 'ide' : null));
+
+  const candidateEndpoints = Array.isArray(persistedEvidence.candidate_endpoints)
+    ? [...persistedEvidence.candidate_endpoints]
+    : (latestEndpoint ? [latestEndpoint] : []);
+
   return {
     certainty,
+    latest_side: certainty === 'DEFINITE' ? latestSide : null,
     latest_endpoint: certainty === 'DEFINITE' ? latestEndpoint : null,
+    candidate_endpoints: certainty === 'DEFINITE' ? candidateEndpoints : [],
     checkpoint_cursors: checkpointCursors,
     witness_seq: witnessSeq,
     evidence_type: evidenceType,
@@ -158,10 +171,13 @@ export function recordLiveWitnessedCompletion(currentEvidence, {
   }
 
   const nextSeq = (currentEvidence?.witness_seq || 0) + 1;
+  const isBrowser = endpointId === 'browser';
 
   return {
     certainty: 'DEFINITE',
+    latest_side: isBrowser ? 'browser' : 'ide',
     latest_endpoint: endpointId,
+    candidate_endpoints: [endpointId],
     checkpoint_cursors: {
       browser: nextBrowserCp,
       ide: baseIde
@@ -231,13 +247,30 @@ export function reconcileProjectOrdering(currentEvidence, {
     };
   }
 
-  // 分枝 2: Browser 未变，仅 IDE 推进 -> 明确判定为 IDE 最新 (并保留 exact IDE endpoint ID)
+  // 分枝 2: Browser 未变，仅 IDE 推进 (Blocker 1)
   if (!browserChanged && ideChanged) {
-    // 若仅有一个 IDE 变动，精确指向该 IDE；若多个 IDE 推进，指向第一个变动的 IDE（或保持内部标识）
-    const targetIdeId = changedIdeIds[0];
+    if (changedIdeIds.length === 1) {
+      // 恰好 1 个 IDE 端点推进：保留 exact-endpoint DEFINITE 证明
+      const targetIdeId = changedIdeIds[0];
+      return {
+        certainty: 'DEFINITE',
+        latest_side: 'ide',
+        latest_endpoint: targetIdeId,
+        candidate_endpoints: [targetIdeId],
+        checkpoint_cursors: nextCheckpointCursors,
+        witness_seq: nextSeq,
+        evidence_type: 'RECONCILED_IDE_ONLY',
+        updated_at: now
+      };
+    }
+
+    // 多个 IDE 端点在 gap 中同时推进：确认 IDE 端为最新 (side-level)，但绝不伪造 exact endpoint
+    const sortedCandidates = [...changedIdeIds].sort();
     return {
       certainty: 'DEFINITE',
-      latest_endpoint: targetIdeId,
+      latest_side: 'ide',
+      latest_endpoint: null,
+      candidate_endpoints: sortedCandidates,
       checkpoint_cursors: nextCheckpointCursors,
       witness_seq: nextSeq,
       evidence_type: 'RECONCILED_IDE_ONLY',
@@ -249,7 +282,9 @@ export function reconcileProjectOrdering(currentEvidence, {
   if (browserChanged && !ideChanged) {
     return {
       certainty: 'UNCERTAIN',
+      latest_side: null,
       latest_endpoint: null,
+      candidate_endpoints: [],
       checkpoint_cursors: nextCheckpointCursors,
       witness_seq: nextSeq,
       evidence_type: 'GAP_UNCERTAIN',
@@ -260,10 +295,126 @@ export function reconcileProjectOrdering(currentEvidence, {
   // 分枝 4: Browser 与 IDE 双端均推进 (跨端物理时序不可比) -> Fail-Closed UNCERTAIN
   return {
     certainty: 'UNCERTAIN',
+    latest_side: null,
     latest_endpoint: null,
+    candidate_endpoints: [],
     checkpoint_cursors: nextCheckpointCursors,
     witness_seq: nextSeq,
     evidence_type: 'GAP_UNCERTAIN',
+    updated_at: now
+  };
+}
+
+/**
+ * 响应拓扑与端点身份生命周期变更，重置并对齐 Ordering Evidence (Blocker 3)
+ * 
+ * 强制生命周期不变式：
+ * 1. 绝不保留已失效端点身份/修订版本的游标或 exact-latest 声明；
+ * 2. 变更后的 Checkpoint 游标必须严格对齐 mutation 后的端点集合；
+ * 3. 仅当先前的 definite latest exact endpoint 仍然完好存在且未被本次变更废弃时，保留该 latest；
+ * 4. 若先前的 latest 端点本身被 rebind 或 remove，旧证据立即失效并 Fail-Closed (若无剩余完成结果则为 NONE，否则为 UNCERTAIN)；
+ * 5. 新增空端点绝不错误挪动或改变现有指示器。
+ * 
+ * @param {object} currentEvidence
+ * @param {object} params
+ * @param {'REBIND' | 'REMOVE' | 'ADD'} params.mutationType
+ * @param {'browser' | 'ide'} params.targetRole
+ * @param {string} params.targetId - 'browser' 或具体的 ide endpoint_id
+ * @param {object} params.allCurrentCursors - { browser: string|null, ide: { [id]: string|null } }
+ * @param {string} [params.now]
+ * @returns {object} 新的 ordering evidence
+ */
+export function rebaselineOrderingOnLifecycle(currentEvidence, {
+  mutationType,
+  targetRole,
+  targetId,
+  allCurrentCursors = {},
+  now = new Date().toISOString()
+}) {
+  if (!currentEvidence || typeof currentEvidence !== 'object') {
+    return createInitialOrderingEvidence({ updatedAt: now });
+  }
+
+  // 1. 基于 mutation 后的最新端点集合更新 checkpoint cursors
+  const nextCheckpointCursors = {
+    browser: allCurrentCursors.browser ?? null,
+    ide: typeof allCurrentCursors.ide === 'object' && allCurrentCursors.ide !== null
+      ? { ...allCurrentCursors.ide }
+      : {}
+  };
+
+  const nextSeq = (currentEvidence.witness_seq || 0) + 1;
+
+  // 检查当前所有端点中是否还有任何非 null 的已完成游标
+  const hasRemainingCompletedCursors = Boolean(
+    nextCheckpointCursors.browser !== null ||
+    Object.values(nextCheckpointCursors.ide).some(c => c !== null && c !== undefined)
+  );
+
+  // 2. 检查 prior latest endpoint 是否受到 mutation 影响
+  const priorLatest = currentEvidence.latest_endpoint;
+  const priorSide = currentEvidence.latest_side;
+  const wasDefinite = currentEvidence.certainty === 'DEFINITE';
+
+  // 受影响端点标识
+  const affectedEndpointId = targetRole === 'browser' ? 'browser' : targetId;
+  const isPriorLatestAffected = wasDefinite && (
+    priorLatest === affectedEndpointId ||
+    (priorLatest === null && priorSide === 'ide' && targetRole === 'ide')
+  );
+
+  if (!wasDefinite) {
+    if (!hasRemainingCompletedCursors) {
+      return {
+        certainty: 'NONE',
+        latest_side: null,
+        latest_endpoint: null,
+        candidate_endpoints: [],
+        checkpoint_cursors: nextCheckpointCursors,
+        witness_seq: nextSeq,
+        evidence_type: 'INITIAL',
+        updated_at: now
+      };
+    }
+    return {
+      ...currentEvidence,
+      checkpoint_cursors: nextCheckpointCursors,
+      witness_seq: nextSeq,
+      updated_at: now
+    };
+  }
+
+  // 先前为 DEFINITE 且 latest 端点受损
+  if (isPriorLatestAffected) {
+    if (!hasRemainingCompletedCursors) {
+      return {
+        certainty: 'NONE',
+        latest_side: null,
+        latest_endpoint: null,
+        candidate_endpoints: [],
+        checkpoint_cursors: nextCheckpointCursors,
+        witness_seq: nextSeq,
+        evidence_type: 'INITIAL',
+        updated_at: now
+      };
+    }
+    return {
+      certainty: 'UNCERTAIN',
+      latest_side: null,
+      latest_endpoint: null,
+      candidate_endpoints: [],
+      checkpoint_cursors: nextCheckpointCursors,
+      witness_seq: nextSeq,
+      evidence_type: 'GAP_UNCERTAIN',
+      updated_at: now
+    };
+  }
+
+  // 先前的 latest 端点完好存活（例如添加新空端点，或变更非 latest 端点）
+  return {
+    ...currentEvidence,
+    checkpoint_cursors: nextCheckpointCursors,
+    witness_seq: nextSeq,
     updated_at: now
   };
 }
