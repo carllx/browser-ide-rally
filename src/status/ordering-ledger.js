@@ -351,18 +351,14 @@ export function rebaselineOrderingOnLifecycle(currentEvidence, {
     Object.values(nextCheckpointCursors.ide).some(c => c !== null && c !== undefined)
   );
 
-  // 2. 检查 prior latest endpoint 是否受到 mutation 影响
+  const wasDefinite = currentEvidence.certainty === 'DEFINITE';
   const priorLatest = currentEvidence.latest_endpoint;
   const priorSide = currentEvidence.latest_side;
-  const wasDefinite = currentEvidence.certainty === 'DEFINITE';
+  const priorCandidates = Array.isArray(currentEvidence.candidate_endpoints)
+    ? [...currentEvidence.candidate_endpoints]
+    : (priorLatest ? [priorLatest] : []);
 
-  // 受影响端点标识
-  const affectedEndpointId = targetRole === 'browser' ? 'browser' : targetId;
-  const isPriorLatestAffected = wasDefinite && (
-    priorLatest === affectedEndpointId ||
-    (priorLatest === null && priorSide === 'ide' && targetRole === 'ide')
-  );
-
+  // 若先前并非 DEFINITE
   if (!wasDefinite) {
     if (!hasRemainingCompletedCursors) {
       return {
@@ -384,37 +380,113 @@ export function rebaselineOrderingOnLifecycle(currentEvidence, {
     };
   }
 
-  // 先前为 DEFINITE 且 latest 端点受损
-  if (isPriorLatestAffected) {
-    if (!hasRemainingCompletedCursors) {
+  // 受影响端点标识
+  const affectedEndpointId = targetRole === 'browser' ? 'browser' : targetId;
+
+  // 场景 1: mutation 为 ADD
+  // 新增端点（如新增空 IDE 端点）绝不破坏已有的 DEFINITE 证明与候选集
+  if (mutationType === 'ADD') {
+    return {
+      ...currentEvidence,
+      checkpoint_cursors: nextCheckpointCursors,
+      witness_seq: nextSeq,
+      updated_at: now
+    };
+  }
+
+  // 场景 2: mutation 为 REMOVE 或 REBIND
+  // 2.1 先前持有具体的 exact latest endpoint
+  if (priorLatest !== null) {
+    if (affectedEndpointId === priorLatest) {
+      // 具体的最新端点自身被移除或重绑，证明失效，Fail-Closed
       return {
-        certainty: 'NONE',
+        certainty: hasRemainingCompletedCursors ? 'UNCERTAIN' : 'NONE',
         latest_side: null,
         latest_endpoint: null,
         candidate_endpoints: [],
         checkpoint_cursors: nextCheckpointCursors,
         witness_seq: nextSeq,
-        evidence_type: 'INITIAL',
+        evidence_type: hasRemainingCompletedCursors ? 'GAP_UNCERTAIN' : 'INITIAL',
         updated_at: now
       };
     }
+
+    // 变动的端点非 exact latest，先前的确凿证明完好保留
     return {
-      certainty: 'UNCERTAIN',
+      ...currentEvidence,
+      checkpoint_cursors: nextCheckpointCursors,
+      witness_seq: nextSeq,
+      updated_at: now
+    };
+  }
+
+  // 2.2 先前为 side-level IDE_LATEST (latest_endpoint === null, latest_side === 'ide')
+  if (priorSide === 'ide') {
+    if (targetRole === 'browser') {
+      // Browser 端点被变更：先前的 IDE_LATEST 证明依赖于相对不变的 Browser 游标基准，Browser 变动使得相对证明失效
+      return {
+        certainty: hasRemainingCompletedCursors ? 'UNCERTAIN' : 'NONE',
+        latest_side: null,
+        latest_endpoint: null,
+        candidate_endpoints: [],
+        checkpoint_cursors: nextCheckpointCursors,
+        witness_seq: nextSeq,
+        evidence_type: hasRemainingCompletedCursors ? 'GAP_UNCERTAIN' : 'INITIAL',
+        updated_at: now
+      };
+    }
+
+    // targetRole === 'ide'
+    const isCandidateAffected = priorCandidates.includes(affectedEndpointId);
+    if (!isCandidateAffected) {
+      // 变更的端点不属于 candidate 集合（例如移除非 candidate ide-c）
+      // 先前的 A+B side-level 证明完好保留
+      return {
+        ...currentEvidence,
+        checkpoint_cursors: nextCheckpointCursors,
+        witness_seq: nextSeq,
+        updated_at: now
+      };
+    }
+
+    // 变动的端点属于 candidate 集合：执行安全缩减 (Safe Candidate Pruning)
+    const remainingCandidates = priorCandidates.filter(id => id !== affectedEndpointId);
+    if (remainingCandidates.length > 0) {
+      // 仍有剩余 candidate：保留 side-level IDE_LATEST，修剪后的候选集绝无 stale candidate
+      return {
+        ...currentEvidence,
+        certainty: 'DEFINITE',
+        latest_side: 'ide',
+        latest_endpoint: null,
+        candidate_endpoints: remainingCandidates,
+        checkpoint_cursors: nextCheckpointCursors,
+        witness_seq: nextSeq,
+        updated_at: now
+      };
+    }
+
+    // 所有 candidate 均被移除/失效：Fail-Closed
+    return {
+      certainty: hasRemainingCompletedCursors ? 'UNCERTAIN' : 'NONE',
       latest_side: null,
       latest_endpoint: null,
       candidate_endpoints: [],
       checkpoint_cursors: nextCheckpointCursors,
       witness_seq: nextSeq,
-      evidence_type: 'GAP_UNCERTAIN',
+      evidence_type: hasRemainingCompletedCursors ? 'GAP_UNCERTAIN' : 'INITIAL',
       updated_at: now
     };
   }
 
-  // 先前的 latest 端点完好存活（例如添加新空端点，或变更非 latest 端点）
+  // 兜底 Fail-Closed
   return {
-    ...currentEvidence,
+    certainty: hasRemainingCompletedCursors ? 'UNCERTAIN' : 'NONE',
+    latest_side: null,
+    latest_endpoint: null,
+    candidate_endpoints: [],
     checkpoint_cursors: nextCheckpointCursors,
     witness_seq: nextSeq,
+    evidence_type: hasRemainingCompletedCursors ? 'GAP_UNCERTAIN' : 'INITIAL',
     updated_at: now
   };
 }

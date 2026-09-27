@@ -228,3 +228,139 @@ test('Blocker 3 Regression 5: Remove/Rebind 非 latest 端点，现有有效的 
   assert.equal(afterRemoveSnap.ordering_evidence.checkpoint_cursors.ide['ide-beta'], undefined);
   assert.equal(projectStatusSurface(afterRemoveSnap).latest_result_indicator, 'IDE_LATEST');
 });
+
+test('Side-level IDE_LATEST Regression 1: Side-level A+B + add empty C -> 仍为 definite side-level IDE_LATEST 且 candidates 仍 A+B', () => {
+  const binding = createBinding({
+    binding_id: 'proj-side-add-empty',
+    display_name: 'Side-Level Add Empty Test',
+    browser: { provider: 'chatgpt', conversation_id: 'b-conv-1' },
+    ide_endpoints: [
+      { endpoint_id: 'ide-a', endpoint_revision: 1, conversation_id: 'c-a', workspace_identity: '/ws/a', repository_identity: 'repo/a' },
+      { endpoint_id: 'ide-b', endpoint_revision: 1, conversation_id: 'c-b', workspace_identity: '/ws/b', repository_identity: 'repo/b' }
+    ]
+  });
+  const core = createProjectStatusCore({ binding });
+
+  // 1. 基准对齐
+  core.recordEndpointObservation('browser', { endpoint_revision: 1, conversation_id: 'b-conv-1', trusted: true, latest_completed_cursor: 'b_0' });
+  core.recordEndpointObservation('ide-a', { endpoint_revision: 1, conversation_id: 'c-a', trusted: true, latest_completed_cursor: 'a_0' });
+  core.recordEndpointObservation('ide-b', { endpoint_revision: 1, conversation_id: 'c-b', trusted: true, latest_completed_cursor: 'b_0' });
+  core.reconcileProjectOrdering();
+
+  // 2. 离线 gap 推进：Browser 未变，ide-a 与 ide-b 同时推进
+  core.recordEndpointObservation('ide-a', { endpoint_revision: 1, conversation_id: 'c-a', trusted: true, latest_completed_cursor: 'a_1' });
+  core.recordEndpointObservation('ide-b', { endpoint_revision: 1, conversation_id: 'c-b', trusted: true, latest_completed_cursor: 'b_1' });
+  core.reconcileProjectOrdering();
+
+  // 验证当前状态：DEFINITE, side-level ide, latest_endpoint: null, candidate_endpoints: ['ide-a', 'ide-b']
+  const snapBefore = core.getSnapshot();
+  assert.equal(snapBefore.ordering_evidence.certainty, 'DEFINITE');
+  assert.equal(snapBefore.ordering_evidence.latest_side, 'ide');
+  assert.equal(snapBefore.ordering_evidence.latest_endpoint, null);
+  assert.deepEqual(snapBefore.ordering_evidence.candidate_endpoints, ['ide-a', 'ide-b']);
+
+  // 3. 动态添加新的空 IDE 端点 ide-c
+  const snapAfterAdd = core.addIdeEndpoint({
+    endpoint_id: 'ide-c',
+    identity: { conversation_id: 'c-c', workspace_identity: '/ws/c', repository_identity: 'repo/c' }
+  });
+
+  // 验证：仍为 definite side-level IDE_LATEST，candidates 仍保持 ['ide-a', 'ide-b']，checkpoint 包含 ide-c: null
+  assert.equal(snapAfterAdd.ordering_evidence.certainty, 'DEFINITE');
+  assert.equal(snapAfterAdd.ordering_evidence.latest_side, 'ide');
+  assert.equal(snapAfterAdd.ordering_evidence.latest_endpoint, null);
+  assert.deepEqual(snapAfterAdd.ordering_evidence.candidate_endpoints, ['ide-a', 'ide-b']);
+  assert.equal(snapAfterAdd.ordering_evidence.checkpoint_cursors.ide['ide-c'], null);
+  assert.equal(projectStatusSurface(snapAfterAdd).latest_result_indicator, 'IDE_LATEST');
+  assert.equal(projectStatusSurface(snapAfterAdd).ide_endpoints.find(e => e.endpoint_id === 'ide-c').is_latest_result, false);
+});
+
+test('Side-level IDE_LATEST Regression 2: Side-level A+B + remove/rebind non-candidate C -> 仍保持 definite side-level IDE_LATEST', () => {
+  const binding = createBinding({
+    binding_id: 'proj-side-remove-non-cand',
+    display_name: 'Side-Level Remove Non-Candidate Test',
+    browser: { provider: 'chatgpt', conversation_id: 'b-conv-1' },
+    ide_endpoints: [
+      { endpoint_id: 'ide-a', endpoint_revision: 1, conversation_id: 'c-a', workspace_identity: '/ws/a', repository_identity: 'repo/a' },
+      { endpoint_id: 'ide-b', endpoint_revision: 1, conversation_id: 'c-b', workspace_identity: '/ws/b', repository_identity: 'repo/b' },
+      { endpoint_id: 'ide-c', endpoint_revision: 1, conversation_id: 'c-c', workspace_identity: '/ws/c', repository_identity: 'repo/c' }
+    ]
+  });
+  const core = createProjectStatusCore({ binding });
+
+  // 1. 基准对齐
+  core.recordEndpointObservation('browser', { endpoint_revision: 1, conversation_id: 'b-conv-1', trusted: true, latest_completed_cursor: 'b_0' });
+  core.recordEndpointObservation('ide-a', { endpoint_revision: 1, conversation_id: 'c-a', trusted: true, latest_completed_cursor: 'a_0' });
+  core.recordEndpointObservation('ide-b', { endpoint_revision: 1, conversation_id: 'c-b', trusted: true, latest_completed_cursor: 'b_0' });
+  core.recordEndpointObservation('ide-c', { endpoint_revision: 1, conversation_id: 'c-c', trusted: true, latest_completed_cursor: 'c_0' });
+  core.reconcileProjectOrdering();
+
+  // 2. 离线 gap 推进：仅 ide-a 和 ide-b 推进，ide-c 与 browser 未变
+  core.recordEndpointObservation('ide-a', { endpoint_revision: 1, conversation_id: 'c-a', trusted: true, latest_completed_cursor: 'a_1' });
+  core.recordEndpointObservation('ide-b', { endpoint_revision: 1, conversation_id: 'c-b', trusted: true, latest_completed_cursor: 'b_1' });
+  core.reconcileProjectOrdering();
+
+  // 验证当前状态：candidates 为 ['ide-a', 'ide-b']，不含 ide-c
+  const snapBefore = core.getSnapshot();
+  assert.equal(snapBefore.ordering_evidence.certainty, 'DEFINITE');
+  assert.equal(snapBefore.ordering_evidence.latest_side, 'ide');
+  assert.deepEqual(snapBefore.ordering_evidence.candidate_endpoints, ['ide-a', 'ide-b']);
+
+  // 3. 移除未在 candidate 集合中的端点 ide-c
+  const snapAfterRemove = core.removeIdeEndpoint('ide-c', { allow_discard_unhandled: true });
+
+  // 验证：先前的 side-level IDE_LATEST 完好保持，candidates 仍为 ['ide-a', 'ide-b']，checkpoint 已剔除 ide-c
+  assert.equal(snapAfterRemove.ordering_evidence.certainty, 'DEFINITE');
+  assert.equal(snapAfterRemove.ordering_evidence.latest_side, 'ide');
+  assert.equal(snapAfterRemove.ordering_evidence.latest_endpoint, null);
+  assert.deepEqual(snapAfterRemove.ordering_evidence.candidate_endpoints, ['ide-a', 'ide-b']);
+  assert.equal(snapAfterRemove.ordering_evidence.checkpoint_cursors.ide['ide-c'], undefined);
+  assert.equal(projectStatusSurface(snapAfterRemove).latest_result_indicator, 'IDE_LATEST');
+});
+
+test('Side-level IDE_LATEST Regression 3: Side-level A+B + remove/rebind candidate -> 不残留 stale candidate，并安全裁决', () => {
+  const binding = createBinding({
+    binding_id: 'proj-side-remove-cand',
+    display_name: 'Side-Level Remove Candidate Test',
+    browser: { provider: 'chatgpt', conversation_id: 'b-conv-1' },
+    ide_endpoints: [
+      { endpoint_id: 'ide-a', endpoint_revision: 1, conversation_id: 'c-a', workspace_identity: '/ws/a', repository_identity: 'repo/a' },
+      { endpoint_id: 'ide-b', endpoint_revision: 1, conversation_id: 'c-b', workspace_identity: '/ws/b', repository_identity: 'repo/b' },
+      { endpoint_id: 'ide-other', endpoint_revision: 1, conversation_id: 'c-other', workspace_identity: '/ws/other', repository_identity: 'repo/other' }
+    ]
+  });
+  const core = createProjectStatusCore({ binding });
+
+  // 1. 基准对齐并离线推进 A+B (ide-other 未变)
+  core.recordEndpointObservation('browser', { endpoint_revision: 1, conversation_id: 'b-conv-1', trusted: true, latest_completed_cursor: 'b_0' });
+  core.recordEndpointObservation('ide-a', { endpoint_revision: 1, conversation_id: 'c-a', trusted: true, latest_completed_cursor: 'a_0' });
+  core.recordEndpointObservation('ide-b', { endpoint_revision: 1, conversation_id: 'c-b', trusted: true, latest_completed_cursor: 'b_0' });
+  core.recordEndpointObservation('ide-other', { endpoint_revision: 1, conversation_id: 'c-other', trusted: true, latest_completed_cursor: 'other_0' });
+  core.reconcileProjectOrdering();
+
+  core.recordEndpointObservation('ide-a', { endpoint_revision: 1, conversation_id: 'c-a', trusted: true, latest_completed_cursor: 'a_1' });
+  core.recordEndpointObservation('ide-b', { endpoint_revision: 1, conversation_id: 'c-b', trusted: true, latest_completed_cursor: 'b_1' });
+  core.reconcileProjectOrdering();
+
+  assert.deepEqual(core.getSnapshot().ordering_evidence.candidate_endpoints, ['ide-a', 'ide-b']);
+
+  // 2. 移除真正的 candidate ide-a
+  const snapAfterRemoveA = core.removeIdeEndpoint('ide-a', { allow_discard_unhandled: true });
+
+  // 验证：绝不残留 stale candidate 'ide-a'，缩减为 ['ide-b']，checkpoint 剔除 ide-a
+  assert.equal(snapAfterRemoveA.ordering_evidence.certainty, 'DEFINITE');
+  assert.equal(snapAfterRemoveA.ordering_evidence.latest_side, 'ide');
+  assert.equal(snapAfterRemoveA.ordering_evidence.latest_endpoint, null);
+  assert.deepEqual(snapAfterRemoveA.ordering_evidence.candidate_endpoints, ['ide-b']);
+  assert.equal(snapAfterRemoveA.ordering_evidence.checkpoint_cursors.ide['ide-a'], undefined);
+  assert.ok(!snapAfterRemoveA.ordering_evidence.candidate_endpoints.includes('ide-a'));
+
+  // 3. 继续移除剩余的最后一个 candidate ide-b (此时还有 ide-other，合法满足至少保留一个端点约束)
+  const snapAfterRemoveB = core.removeIdeEndpoint('ide-b', { allow_discard_unhandled: true });
+
+  // 验证：所有 candidate 均已失效，证据安全 Fail-Closed，绝无陈旧 candidate 残留
+  assert.ok(snapAfterRemoveB.ordering_evidence.certainty === 'UNCERTAIN' || snapAfterRemoveB.ordering_evidence.certainty === 'NONE');
+  assert.deepEqual(snapAfterRemoveB.ordering_evidence.candidate_endpoints, []);
+  assert.equal(snapAfterRemoveB.ordering_evidence.latest_endpoint, null);
+  assert.equal(snapAfterRemoveB.ordering_evidence.latest_side, null);
+});
