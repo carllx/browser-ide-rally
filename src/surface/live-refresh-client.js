@@ -389,13 +389,22 @@ export const LIVE_REFRESH_CLIENT_JS = `
     }
 
     window.__triggerSurfaceRefresh = fetchAndApplyProjects;
-    setInterval(fetchAndApplyProjects, 1500);
 
-    document.addEventListener('visibilitychange', function() {
-      if (!document.hidden) {
-        fetchAndApplyProjects();
+    var isHttpPage = Boolean(window.location && (window.location.protocol === 'http:' || window.location.protocol === 'https:'));
+    if (isHttpPage) {
+      var refreshTimer = setInterval(fetchAndApplyProjects, 1500);
+      if (typeof refreshTimer !== 'undefined' && refreshTimer && typeof refreshTimer.unref === 'function') {
+        try { refreshTimer.unref(); } catch (_) {}
       }
-    });
+      window.__stopSurfaceRefresh = function() {
+        if (refreshTimer) clearInterval(refreshTimer);
+      };
+      document.addEventListener('visibilitychange', function() {
+        if (!document.hidden) {
+          fetchAndApplyProjects();
+        }
+      });
+    }
 
     setSurfaceStaleStatus(document, { isStale: false, lastSyncTime: lastSuccessfulSyncTime });
   })();
