@@ -4,11 +4,11 @@
  * 严格遵循 Issue #34 契约与 Browser Lead 指令
  * 
  * 核心验证：
- * 1. 现场重新读取本地真实 durable bindings (Rally + PBR)；
- * 2. 动态发现本地活动 Antigravity 会话身份（严禁在代码或 Git 历史中硬编码私有 UUID）；
+ * 1. 严格使用本地权威 durable bindings (Rally + PBR) 作为唯一端点身份来源；
+ * 2. 严禁使用动态最新 transcript 扫描或静默替换预期端点；
  * 3. 真实 Browser 完成观察腿：通过 ChatGPTBrowserAdapter 在 Chrome 中实时捕获用户触发的真实 Assistant 完成；
- * 4. 真实 Antigravity IDE 完成观察腿：启动真实本地 Surface HTTP 服务，通过外部真实子进程
- *    执行 scripts/antigravity-stop-hook.mjs，验证 Stop Hook 事件完整穿透外部 Bridge 脚本与 HTTP 路由 POST /api/hooks/antigravity；
+ * 4. 真实 Antigravity IDE 完成观察腿：严格依赖官方 Stop Hook 自然触发并经由生产 HTTP 路由
+ *    POST /api/hooks/antigravity 送达，严禁由 runner 构造或向 bridge 子进程注入 payload；
  * 5. PBR 隔离性验证：在 Rally 两端完成流转全程，PBR 项目保持不受任何影响 (NO_NEW_RESULT / NONE)；
  * 6. Handled 与重启保持验证：显式推进 markEndpointHandled 后，模拟服务重启，验证 caught-up 状态完整持久化。
  */
@@ -16,57 +16,19 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { spawn } from 'node:child_process';
+import http from 'node:http';
 import { JSDOM } from 'jsdom';
 import { createProjectRegistry } from '../src/registry/project-registry.js';
 import { projectRegistrySurface } from '../src/surface/surface-projection.js';
 import { renderStatusSurfaceHtml } from '../src/surface/surface-template.js';
 import { applyProjectionToDom } from '../src/surface/live-refresh-client.js';
 import { ChatGPTBrowserAdapter } from '../src/adapters/browser/chatgpt-browser-adapter.js';
-import { ObservationRuntimeCoordinator } from '../src/runtime/observation-runtime-coordinator.js';
-import { startStatusSurfaceServer } from '../src/surface/surface-server.js';
-import { resolveDefaultAntigravityTranscriptPath } from '../src/adapters/ide/transcript-paths.js';
 
-/**
- * 动态发现当前本地活跃的 Antigravity 会话 ID（无硬编码）
- * @returns {string|null}
- */
-export function discoverActiveAntigravityConversationId() {
-  if (process.env.ANTIGRAVITY_CONVERSATION_ID && process.env.ANTIGRAVITY_CONVERSATION_ID.trim()) {
-    return process.env.ANTIGRAVITY_CONVERSATION_ID.trim();
-  }
-
-  const brainDir = path.join(os.homedir(), '.gemini', 'antigravity', 'brain');
-  if (!fs.existsSync(brainDir)) return null;
-
-  try {
-    const entries = fs.readdirSync(brainDir, { withFileTypes: true })
-      .filter(d => d.isDirectory() && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(d.name));
-
-    let latestId = null;
-    let latestMtime = 0;
-
-    for (const e of entries) {
-      const tPath = path.join(brainDir, e.name, '.system_generated', 'logs', 'transcript.jsonl');
-      if (fs.existsSync(tPath)) {
-        const stat = fs.statSync(tPath);
-        if (stat.mtimeMs > latestMtime) {
-          latestMtime = stat.mtimeMs;
-          latestId = e.name;
-        }
-      }
-    }
-    return latestId;
-  } catch {
-    return null;
-  }
-}
-
-function sanitizeText(str, liveConvId = null) {
+function sanitizeText(str, boundConvId = null) {
   if (typeof str !== 'string') return str;
   let out = str.replace(new RegExp(os.homedir(), 'g'), '<HOME>');
-  if (liveConvId && liveConvId.length >= 8) {
-    out = out.replace(new RegExp(liveConvId, 'g'), '<ACTIVE_IDE_CONVERSATION>');
+  if (boundConvId && boundConvId.length >= 8) {
+    out = out.replace(new RegExp(boundConvId, 'g'), '<BOUND_IDE_CONVERSATION>');
   }
   return out;
 }
@@ -75,13 +37,30 @@ function printDivider() {
   console.log('='.repeat(80));
 }
 
+async function fetchSurfaceProjects(serverUrl = 'http://127.0.0.1:3123') {
+  return new Promise((resolve) => {
+    http.get(`${serverUrl}/api/projects`, { timeout: 2000 }, (res) => {
+      let body = '';
+      res.on('data', c => body += c);
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(body);
+          resolve(json?.projects || null);
+        } catch {
+          resolve(null);
+        }
+      });
+    }).on('error', () => resolve(null));
+  });
+}
+
 async function runAcceptance() {
   printDivider();
-  console.log('=== Issue #34: Real Two-Project Acceptance & External Production Observation Gate ===');
+  console.log('=== Issue #34: Real Two-Project Acceptance & Production Observation Gate ===');
   console.log(`执行时间: ${new Date().toISOString()}`);
   printDivider();
 
-  // 1. 现场重新读取本地真实 durable bindings
+  // 1. 现场重新读取本地真实 durable bindings (以权威持久化注册表为准，严禁动态推断)
   const localStorePath = path.join(os.homedir(), '.browser-ide-rally', 'projects.json');
   if (!fs.existsSync(localStorePath)) {
     console.error(`[Error] 未在本地找到持久化注册表: ${localStorePath}`);
@@ -97,18 +76,18 @@ async function runAcceptance() {
     process.exit(1);
   }
 
-  // 动态发现活动 IDE 会话
-  const liveIdeConvId = discoverActiveAntigravityConversationId();
-  if (!liveIdeConvId) {
-    console.error('[Error] 未能在本地动态发现活跃的 Antigravity 会话 identity');
+  const authoritativeIdeEndpoint = rallyData.binding?.ide_endpoints?.[0];
+  const boundIdeConvId = authoritativeIdeEndpoint?.conversation_id;
+  if (!boundIdeConvId) {
+    console.error('[Error] 权威 Rally 绑定中缺少有效的 ide_endpoints[0].conversation_id');
     process.exit(1);
   }
 
-  console.log('1. 本地真实绑定与动态会话读取成功:');
+  console.log('1. 本地权威持久化绑定读取成功 (Authoritative Identity):');
   console.log(`   - Rally: [${rallyData.binding?.binding_id}] ${rallyData.binding?.display_name} (rev: ${rallyData.binding?.binding_revision})`);
   console.log(`     Browser 会话: ${rallyData.binding?.browser?.conversation_id}`);
-  console.log(`     IDE 端点: ${rallyData.binding?.ide_endpoints?.[0]?.endpoint_id}`);
-  console.log(`     动态发现活动 IDE 会话: <REDACTED_ACTIVE_IDE_CONV> (长度: ${liveIdeConvId.length})`);
+  console.log(`     IDE 端点: ${authoritativeIdeEndpoint.endpoint_id} (rev: ${authoritativeIdeEndpoint.endpoint_revision})`);
+  console.log(`     权威绑定的 IDE 会话: <REDACTED_BOUND_IDE_CONV> (长度: ${boundIdeConvId.length})`);
   console.log(`   - PBR:   [${pbrData.binding?.binding_id}] ${pbrData.binding?.display_name} (rev: ${pbrData.binding?.binding_revision})`);
   console.log(`     Browser 会话: ${pbrData.binding?.browser?.conversation_id}`);
   console.log(`     IDE 端点: ${pbrData.binding?.ide_endpoints?.[0]?.endpoint_id}`);
@@ -117,35 +96,12 @@ async function runAcceptance() {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rally-real-acceptance-'));
   const sandboxStore = path.join(tempDir, 'projects.json');
 
-  let serverHandle = null;
-  const allowlistPath = path.join(process.cwd(), '.agents', 'rally-conversations.json');
-  let originalAllowlist = null;
-  if (fs.existsSync(allowlistPath)) {
-    try { originalAllowlist = fs.readFileSync(allowlistPath, 'utf8'); } catch {}
-  }
-
   try {
     const registry = createProjectRegistry({ storagePath: sandboxStore });
     const rCore = registry.registerProject({ binding: rallyData.binding });
     const pCore = registry.registerProject({ binding: pbrData.binding });
 
     const rallyBrowserConv = rallyData.binding.browser.conversation_id;
-
-    // 动态规范重绑定：将 Rally IDE 端点现场重绑定至当前动态发现的活动会话
-    if (rallyData.binding.ide_endpoints[0].conversation_id !== liveIdeConvId) {
-      registry.rebindProjectEndpoint('proj-rally-11ca0931', {
-        endpoint_id: 'ide-primary',
-        identity: {
-          conversation_id: liveIdeConvId,
-          workspace_identity: process.cwd(),
-          repository_identity: 'carllx/browser-ide-rally'
-        },
-        allow_discard_unhandled: true,
-        confirm_replace_unknown: true
-      });
-      console.log('   - Rally IDE 端点已现场规范重绑定至动态发现的活动会话');
-    }
-
     const rallyIdeEp = rCore.getSnapshot().binding.ide_endpoints[0];
     const pbrIdeEp = pCore.getSnapshot().binding.ide_endpoints[0];
 
@@ -166,7 +122,7 @@ async function runAcceptance() {
       completed_at: new Date(Date.now() - 110000).toISOString(),
       endpoint_id: rallyIdeEp.endpoint_id,
       endpoint_revision: rallyIdeEp.endpoint_revision,
-      conversation_id: liveIdeConvId,
+      conversation_id: boundIdeConvId,
       workspace_identity: process.cwd(),
       repository_identity: 'carllx/browser-ide-rally'
     });
@@ -244,65 +200,44 @@ async function runAcceptance() {
     console.log(`     * PBR 项目保持受隔离 (未受干扰): ${pbrAfterB.latest_result_indicator === 'NONE'}`);
 
     // ==========================================
-    // 事件 2: 真实 Antigravity IDE Stop Hook 外部生产链路
+    // 事件 2: 真实 Antigravity IDE Completion 生产观察核验
+    // 严格依赖官方安装的 Stop Hook 自然触发并由运行中的生产 Surface 接收
+    // Runner 仅通过 HTTP 接口只读观测外部事件送达，严禁构造或注入 payload
     // ==========================================
-    console.log('\n4. 事件 2 [Real External Antigravity Stop Hook] 生产网络入口分发中...');
+    console.log('\n4. 事件 2 [Genuine Antigravity IDE Stop Hook] 生产端点事实核验...');
 
-    // A. 启动真实本地状态表面 HTTP 服务 (监听沙箱端口)
-    const coordinator = new ObservationRuntimeCoordinator({
-      registry,
-      browserAdapter: bAdapter
-    });
+    // 检查生产 Surface 服务的实时投影
+    const liveProjects = await fetchSurfaceProjects('http://127.0.0.1:3123');
+    if (!liveProjects) {
+      throw new Error('生产 Surface 服务未运行在 http://127.0.0.1:3123');
+    }
+    const liveRally = liveProjects.find(p => p.binding_id === rallyData.binding.binding_id);
+    const liveRallyIde = liveRally?.ide_endpoints?.[0] || liveRally?.ide;
 
-    serverHandle = await startStatusSurfaceServer({
-      registry,
-      observationCoordinator: coordinator,
-      port: 0
-    });
-    console.log(`   - Rally Surface HTTP 服务已在本地端口 ${serverHandle.port} 成功启动`);
+    console.log('   - 生产 Surface HTTP 探针状态:');
+    console.log(`     * 生产服务运行状态: LISTENING (http://127.0.0.1:3123)`);
+    console.log(`     * 生产端点 result_state: ${liveRallyIde?.result_state}`);
+    console.log(`     * 生产端点 cursor: ${liveRallyIde?.latest_completed_cursor || '(none)'}`);
 
-    // B. 更新本地工作区白名单包含动态活动会话
-    fs.mkdirSync(path.join(process.cwd(), '.agents'), { recursive: true });
-    fs.writeFileSync(allowlistPath, JSON.stringify({ conversations: [liveIdeConvId] }, null, 2));
-
-    // C. 通过独立子进程执行真实官方 Bridge 脚本 (scripts/antigravity-stop-hook.mjs)
-    const bridgeScript = path.resolve('scripts/antigravity-stop-hook.mjs');
-    const tPath = resolveDefaultAntigravityTranscriptPath(liveIdeConvId);
-    const hookPayload = {
-      conversationId: liveIdeConvId,
-      fullyIdle: true,
-      terminationReason: 'NO_TOOL_CALL',
-      workspacePaths: [process.cwd()],
-      transcriptPath: tPath
-    };
-
-    const bridgeExit = await new Promise((resolve, reject) => {
-      const child = spawn(
-        process.execPath,
-        [bridgeScript, '--url', `${serverHandle.url}/api/hooks/antigravity`],
-        { cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'] }
-      );
-      let stdoutData = '';
-      child.stdout.on('data', d => stdoutData += d);
-      child.on('close', code => resolve({ code, stdoutData }));
-      child.on('error', reject);
-      child.stdin.write(JSON.stringify(hookPayload));
-      child.stdin.end();
-    });
-
-    console.log(`   - 外部 Bridge 脚本执行完成: exit code ${bridgeExit.code}, stdout: ${bridgeExit.stdoutData.trim()}`);
-    if (bridgeExit.code !== 0 || bridgeExit.stdoutData.trim() !== '{}') {
-      throw new Error(`Bridge execution failed: code=${bridgeExit.code}, stdout=${bridgeExit.stdoutData}`);
+    if (liveRallyIde?.result_state !== 'NEW' || !liveRallyIde?.latest_completed_cursor) {
+      throw new Error(`Production Surface Rally IDE endpoint has not observed natural Stop Hook completion yet: state=${liveRallyIde?.result_state}`);
     }
 
-    const currentIdeSnapshot = rCore.getSnapshot().endpoints.ide_endpoints['ide-primary'];
-    const iCursor = currentIdeSnapshot?.latest_completed_cursor;
-    console.log(`   - 经由真实 HTTP 生产路由成功捕获 IDE 完成游标: ${iCursor}`);
-    console.log(`   - IDE 端点最新状态: result_state=${currentIdeSnapshot?.result_state}`);
+    const iCursor = liveRallyIde.latest_completed_cursor;
+    console.log(`   - 成功捕获外部自然触发的真实 IDE 完成游标: ${iCursor}`);
 
-    if (currentIdeSnapshot?.result_state !== 'NEW' || !iCursor) {
-      throw new Error(`Real IDE Stop-Hook transition failed: state=${currentIdeSnapshot?.result_state}, cursor=${iCursor}`);
-    }
+    // 将生产服务经由真实 Hook 观察到的真实端点状态同步至沙箱 Surface 渲染层验证红点
+    rCore.recordEndpointObservation(rallyIdeEp.endpoint_id, {
+      trusted: true,
+      latest_completed_cursor: iCursor,
+      completed_at: liveRallyIde.completed_at || new Date().toISOString(),
+      endpoint_id: rallyIdeEp.endpoint_id,
+      endpoint_revision: rallyIdeEp.endpoint_revision,
+      conversation_id: boundIdeConvId,
+      workspace_identity: process.cwd(),
+      repository_identity: 'carllx/browser-ide-rally',
+      live_witnessed: true
+    });
 
     // 模拟 live surface refresh 只读消费
     const surfaceAfterIde = projectRegistrySurface(registry);
@@ -328,10 +263,6 @@ async function runAcceptance() {
     const rallyAfterHandled = surfaceAfterHandled.find(p => p.binding_id === rallyData.binding.binding_id);
     console.log(`   - 标记已处理后两端状态: Browser=${rallyAfterHandled.browser.result_state}, IDE=${rallyAfterHandled.ide_endpoints[0].result_state}`);
     console.log(`   - can_mark_handled 全部归为 false (Caught-up): ${!rallyAfterHandled.browser.can_mark_handled && !rallyAfterHandled.ide_endpoints[0].can_mark_handled}`);
-
-    // 关闭临时 HTTP 服务器
-    await serverHandle.close();
-    serverHandle = null;
 
     // 重启验证：模拟进程重启，从持久化文件重新加载
     const restartedRegistry = createProjectRegistry({ storagePath: sandboxStore });
@@ -363,7 +294,7 @@ async function runAcceptance() {
         'Binding ID': sanitizeText(rallyData.binding.binding_id),
         'Endpoint': sanitizeText(rallyIdeEp.endpoint_id),
         'Old State (Cursor)': 'NO_NEW_RESULT (agy_step_base_init)',
-        'Production Observation Source': 'Real Stop-Hook Bridge -> HTTP POST /api/hooks/antigravity',
+        'Production Observation Source': 'Official Stop Hook -> HTTP POST /api/hooks/antigravity',
         'New State (Cursor / Ind)': `NEW (${iCursor.slice(0, 24)}...) / IDE_LATEST [● on IDE]`,
         'Unaffected Project Proof': `PBR [${pbrData.binding.binding_id}] remains NO_NEW_RESULT (NONE)`,
         'Restart / Handled Proof': 'Mark handled -> NO_NEW_RESULT preserved across restart'
@@ -375,12 +306,6 @@ async function runAcceptance() {
     console.log('验收结论: ALL REAL PRODUCTION ACCEPTANCE GATES PASSED (100% Verified)');
     printDivider();
   } finally {
-    if (serverHandle) {
-      try { await serverHandle.close(); } catch {}
-    }
-    if (originalAllowlist !== null) {
-      try { fs.writeFileSync(allowlistPath, originalAllowlist); } catch {}
-    }
     try {
       fs.rmSync(tempDir, { recursive: true, force: true });
     } catch {}
