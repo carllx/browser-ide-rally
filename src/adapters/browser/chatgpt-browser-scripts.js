@@ -207,8 +207,60 @@ export function buildProbeScript(conversationId) {
         const stopBtn = document.querySelector('button[data-testid="stop-button"]');
         const isGenerating = !!stopBtn;
         
-        const assistantEls = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
-        const count = assistantEls.length;
+        let assistantTurns = [];
+
+        // 1. 现代 DOM 路径: 查找 data-markdown-text-style="assistant-message"
+        const modernRoots = Array.from(document.querySelectorAll('[data-markdown-text-style="assistant-message"]'));
+        if (modernRoots.length > 0) {
+          assistantTurns = modernRoots.map(root => {
+            const container = root.closest('[data-chatgpt-selection-message-id]') ||
+                              root.closest('[data-chatgpt-search-unit-key*=":assistant"]') ||
+                              root.closest('[data-content-search-unit-key*=":assistant"]');
+            let rawId = null;
+            if (container) {
+              rawId = container.getAttribute('data-chatgpt-selection-message-id');
+              if (!rawId && container.hasAttribute('data-chatgpt-search-message-ids')) {
+                const parts = container.getAttribute('data-chatgpt-search-message-ids').trim().split(' ');
+                rawId = parts[0] ? parts[0].trim() : null;
+              }
+            }
+            const text = (root.innerText || root.textContent || '').trim();
+            return { rawId, text };
+          });
+        } else {
+          // 备用现代探测：若 markdown-text-style 未挂载，检查 search-unit-key=":assistant"
+          const modernSearchContainers = Array.from(document.querySelectorAll('[data-chatgpt-search-unit-key*=":assistant"], [data-content-search-unit-key*=":assistant"]'));
+          if (modernSearchContainers.length > 0) {
+            assistantTurns = modernSearchContainers.map(container => {
+              let rawId = container.getAttribute('data-chatgpt-selection-message-id');
+              if (!rawId && container.hasAttribute('data-chatgpt-search-message-ids')) {
+                const parts = container.getAttribute('data-chatgpt-search-message-ids').trim().split(' ');
+                rawId = parts[0] ? parts[0].trim() : null;
+              }
+              if (!rawId) {
+                const childWithId = container.querySelector('[data-chatgpt-selection-message-id]');
+                if (childWithId) rawId = childWithId.getAttribute('data-chatgpt-selection-message-id');
+              }
+              const text = (container.innerText || container.textContent || '').trim();
+              return { rawId, text };
+            });
+          }
+        }
+
+        // 2. 遗留 DOM 路径 (Legacy Path Fallback)
+        if (assistantTurns.length === 0) {
+          const legacyEls = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+          if (legacyEls.length > 0) {
+            assistantTurns = legacyEls.map(el => {
+              const rawId = el.getAttribute('data-message-id');
+              const contentEl = el.querySelector('.markdown') || el;
+              const text = (contentEl.innerText || contentEl.textContent || '').trim();
+              return { rawId, text };
+            });
+          }
+        }
+
+        const count = assistantTurns.length;
         
         if (count === 0) {
           return JSON.stringify({
@@ -220,30 +272,23 @@ export function buildProbeScript(conversationId) {
           });
         }
         
-        const lastEl = assistantEls[count - 1];
-        const rawId = lastEl.getAttribute('data-message-id');
-        const hasAttr = lastEl.hasAttribute('data-message-id');
+        const lastTurn = assistantTurns[count - 1];
+        const rawId = lastTurn.rawId;
         
-        let isPlaceholder = !hasAttr || !rawId;
+        let isPlaceholder = !rawId;
         if (!isPlaceholder) {
-          const trimmed = rawId.trim();
+          const trimmed = String(rawId).trim();
           const lower = trimmed.toLowerCase();
           if (trimmed === '' || lower.startsWith('placeholder') || lower.startsWith('request-placeholder')) {
             isPlaceholder = true;
           }
         }
         
-        let lastMessageText = '';
-        if (!isPlaceholder) {
-          const contentEl = lastEl.querySelector('.markdown') || lastEl;
-          lastMessageText = (contentEl.innerText || contentEl.textContent || '').trim();
-        }
-        
         return JSON.stringify({
           isGenerating,
           assistantCount: count,
-          lastMessageId: isPlaceholder ? null : rawId.trim(),
-          lastMessageText: isPlaceholder ? '' : lastMessageText,
+          lastMessageId: isPlaceholder ? null : String(rawId).trim(),
+          lastMessageText: isPlaceholder ? '' : lastTurn.text,
           hasValidLastMessage: !isPlaceholder,
           isPlaceholder
         });
