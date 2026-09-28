@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * 真实 Rally + PBR 本地双项目验收与脱敏证据生成器 (Real Two-Project Acceptance Runner)
- * 严格遵循 Issue #34 契约与 Browser Lead 指令
+ * 真实 Rally + PBR 拓扑下的确定性状态转换与 Surface 刷新模拟运行器 (Deterministic Simulation Runner)
+ * 验证真实绑定拓扑下的状态机演进与只读刷新机制；严格区分确定性模拟与外部实时观察 (#34)。
  */
 
 import fs from 'node:fs';
@@ -34,7 +34,7 @@ function printDivider() {
 
 async function runAcceptance() {
   printDivider();
-  console.log('=== Issue #34: Phase 1 Live Surface Refresh and Two-Project Acceptance Gate ===');
+  console.log('=== Issue #34: Deterministic State Transition & Surface Refresh Simulation ===');
   console.log(`执行时间: ${new Date().toISOString()}`);
   printDivider();
 
@@ -123,7 +123,7 @@ async function runAcceptance() {
     console.log(`   - 默认扫描行无 routine NEW/NO_NEW_RESULT 文本: ${!initialHtml.includes('>NEW<')}`);
     console.log(`   - 初始红点指示器: Rally = ${initialSurface[0].latest_result_indicator}, PBR = ${initialSurface[1].latest_result_indicator}`);
 
-    // 事件 1: 真实 Browser completion
+    // 事件 1: 确定性注入 Browser completion
     const bTime = new Date().toISOString();
     rCore.recordEndpointObservation('browser', {
       trusted: true,
@@ -141,12 +141,12 @@ async function runAcceptance() {
 
     const rallyCard = doc.getElementById(`card-${rallyData.binding.binding_id}`);
     const browserDotPresent = Boolean(rallyCard.querySelector('.endpoint-tag-browser .latest-dot'));
-    console.log('\n3. 事件 1 [Browser Completion] 结果:');
+    console.log('\n3. 事件 1 [Injected Browser Completion] 结果:');
     console.log(`   - Rally Browser 标签出现红点: ${browserDotPresent}`);
     console.log(`   - Rally IDE 标签出现红点: ${Boolean(rallyCard.querySelector('.endpoint-tag-ide .latest-dot'))}`);
     console.log(`   - PBR 项目保持受隔离 (未受干扰): ${projectRegistrySurface(registry).find(p => p.binding_id === pbrData.binding.binding_id).latest_result_indicator === 'NONE'}`);
 
-    // 事件 2: 真实 Antigravity IDE completion
+    // 事件 2: 确定性注入 Antigravity IDE completion
     const iTime = new Date().toISOString();
     rCore.recordEndpointObservation(rallyIdeEp.endpoint_id, {
       trusted: true,
@@ -196,7 +196,7 @@ async function runAcceptance() {
         'Binding ID': sanitizeText(rallyData.binding.binding_id),
         'Endpoint': 'browser',
         'Old State (Cursor / Ind)': 'NO_NEW_RESULT (cur-b-base) / NONE',
-        'Observed Completion Source': 'Browser ChatGPT (live-witnessed)',
+        'Observed Completion Source': 'Deterministic Simulation Injection (Browser leg)',
         'New State (Cursor / Ind)': 'NEW (cur-b-turn-101) / BROWSER_LATEST [● on Browser]',
         'Unaffected Project Proof': `PBR [${pbrData.binding.binding_id}] remains NO_NEW_RESULT (NONE)`,
         'Restart / Handled Proof': 'Mark handled -> NO_NEW_RESULT preserved across restart'
@@ -205,7 +205,7 @@ async function runAcceptance() {
         'Binding ID': sanitizeText(rallyData.binding.binding_id),
         'Endpoint': sanitizeText(rallyIdeEp.endpoint_id),
         'Old State (Cursor / Ind)': 'NO_NEW_RESULT (cur-i-base) / BROWSER_LATEST',
-        'Observed Completion Source': 'Antigravity IDE Hook (live-witnessed)',
+        'Observed Completion Source': 'Deterministic Simulation Injection (Antigravity IDE leg)',
         'New State (Cursor / Ind)': 'NEW (cur-i-step-202) / IDE_LATEST [● on IDE]',
         'Unaffected Project Proof': `PBR [${pbrData.binding.binding_id}] remains NO_NEW_RESULT (NONE)`,
         'Restart / Handled Proof': 'Mark handled -> NO_NEW_RESULT preserved across restart'
@@ -223,7 +223,7 @@ async function runAcceptance() {
 
     console.table(evidenceTable);
     printDivider();
-    console.log('验收结论: ALL ACCEPTANCE GATES PASSED (100% Verified)');
+    console.log('验收结论: DETERMINISTIC SIMULATION PASS (Direct observation injection); Real live observation blocked at external browser trust boundary');
     printDivider();
   } finally {
     try {
