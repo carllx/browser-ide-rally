@@ -14,5 +14,8 @@
     "type": "git",
     "url": "git+https://github.com/carllx/browser-ide-rally.git"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "jsdom": "^29.1.1"
+  }
 }

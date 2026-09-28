@@ -267,13 +267,12 @@ describe('Surface Server 集成测试', () => {
     const beforeRes = await fetch(`${baseUrl}/`);
     const beforeHtml = await beforeRes.text();
 
-    // 提取基线中的 NEW 端点总数
-    const newSummaryMatchBefore = beforeHtml.match(/NEW 端点: <strong[^>]*>(\d+)<\/strong>/);
-    assert.equal(Boolean(newSummaryMatchBefore), true);
-    const initialNewCount = parseInt(newSummaryMatchBefore[1], 10);
-    assert.equal(initialNewCount >= 1, true);
+    // 验证顶部汇总结构符合操作者表面（项目总数与需关注指标，无 NEW 端点字面量）
+    assert.match(beforeHtml, /项目总数:\s*<strong/);
+    assert.match(beforeHtml, /需关注:\s*<strong/);
+    assert.equal(beforeHtml.includes('NEW 端点:'), false, '首屏顶部不得暴露 NEW 端点统计词汇');
 
-    // 此时 proj-solo-new 卡片内存在 .badge-new
+    // 此时 proj-solo-new 卡片内存在 .badge-new (在 Details 抽屉中)
     const soloCardRegex = /<article class="project-card"[^>]*id="card-proj-solo-new"[\s\S]*?<\/article>/;
     const soloCardBefore = beforeHtml.match(soloCardRegex)?.[0] || '';
     assert.equal(soloCardBefore.includes('badge-new'), true);
@@ -296,18 +295,10 @@ describe('Surface Server 集成测试', () => {
     const afterRes = await fetch(`${baseUrl}/`);
     const afterHtml = await afterRes.text();
 
-    // 顶部 NEW 端点计数减 1
-    const newSummaryMatchAfter = afterHtml.match(/NEW 端点: <strong[^>]*>(\d+)<\/strong>/);
-    const updatedNewCount = parseInt(newSummaryMatchAfter[1], 10);
-    assert.equal(updatedNewCount, initialNewCount - 1);
-
-    // proj-solo-new 卡片内不再存在 badge-new
+    // proj-solo-new 卡片内不再存在 badge-new，而是包含 badge-caught-up (NO_NEW_RESULT)
     const soloCardAfter = afterHtml.match(soloCardRegex)?.[0] || '';
     assert.equal(soloCardAfter.includes('badge-new'), false);
-
-    // 在“仅含 NEW”筛选逻辑下（即查找包含 .badge-new 的卡片），该项目不再被筛选为 NEW
-    const hasNewBadge = soloCardAfter.includes('badge-new');
-    assert.equal(hasNewBadge, false);
+    assert.equal(soloCardAfter.includes('badge-caught-up'), true);
 
     // 验证无关项目（如 proj-alpha 的 ide-b）未被篡改，依然保持独立状态
     const alphaCore = registry.getProject('proj-alpha');

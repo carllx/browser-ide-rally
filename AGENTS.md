@@ -25,3 +25,7 @@ Default 5-role vocabulary. See `docs/agents/triage-labels.md`.
 ### Domain docs
 
 Single-context. See `docs/agents/domain.md`.
+
+### UI design principles
+
+Operator surface principles and compact scan grammar. See `docs/agents/ui-design.md`.

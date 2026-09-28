@@ -328,7 +328,10 @@ export const SURFACE_CLIENT_JS = `
           return;
         }
 
-        const sourceCard = finalSource === 'browser' ? browserCard : projectCard.querySelector('.endpoint-card[data-endpoint-id="' + finalSource + '"]');
+        const sourceCard = finalSource === 'browser'
+          ? browserCard
+          : (projectCard.querySelector('.endpoint-card[data-endpoint-id="' + finalSource + '"]') ||
+             projectCard.querySelector('[data-endpoint-id="' + finalSource + '"]'));
         const expectedState = sourceCard ? sourceCard.getAttribute('data-result-state') : null;
         const expectedCursor = sourceCard ? (sourceCard.getAttribute('data-latest-cursor') || null) : null;
         const expectedRef = sourceCard ? (sourceCard.getAttribute('data-result-ref') || null) : null;
@@ -377,6 +380,18 @@ export const SURFACE_CLIENT_JS = `
 
     // 4. 纯客户端表现层控制：展开与折叠（绝不向后端发送请求）
     document.addEventListener('click', function(e) {
+      const toggleDetailsBtn = e.target.closest('button[data-action="toggle-project-details"]');
+      if (toggleDetailsBtn) {
+        const card = toggleDetailsBtn.closest('.project-card');
+        const targetId = toggleDetailsBtn.getAttribute('data-target');
+        const detailsEl = card ? card.querySelector('.project-details') : (targetId ? document.getElementById(targetId) : null);
+        if (detailsEl) {
+          detailsEl.open = !detailsEl.open;
+          toggleDetailsBtn.setAttribute('aria-expanded', detailsEl.open ? 'true' : 'false');
+        }
+        return;
+      }
+
       const toggleBtn = e.target.closest('button[data-action="toggle-expand"]');
       if (!toggleBtn) return;
       const card = toggleBtn.closest('.project-card');
@@ -395,12 +410,9 @@ export const SURFACE_CLIENT_JS = `
       cards.forEach(card => {
         if (filter === 'all') {
           card.style.display = '';
-        } else if (filter === 'new') {
-          const hasNew = card.querySelector('.badge-new') !== null;
-          card.style.display = hasNew ? '' : 'none';
-        } else if (filter === 'unknown') {
-          const hasUnknown = card.querySelector('.badge-unknown') !== null;
-          card.style.display = hasUnknown ? '' : 'none';
+        } else if (filter === 'attention') {
+          const hasAttention = card.querySelector('.scan-attention-tag, .indicator-uncertain') !== null;
+          card.style.display = hasAttention ? '' : 'none';
         }
       });
       try {
