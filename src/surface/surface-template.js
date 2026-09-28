@@ -22,6 +22,7 @@ import { ATTENTION_CLIENT_JS } from './attention-client.js';
 import { renderAttentionTrayHtml } from './attention-template.js';
 import { renderAddProjectButtonHtml, renderAddProjectModalHtml } from './onboarding-template.js';
 import { ONBOARDING_CLIENT_JS } from './onboarding-client.js';
+import { LIVE_REFRESH_CLIENT_JS } from './live-refresh-client.js';
 import { renderProjectScanRow, renderProjectDetails, escapeHtml } from './operator-template.js';
 
 function renderProjectCard(proj) {
@@ -71,9 +72,14 @@ export function renderStatusSurfaceHtml({ projects = [], attentionTray = null } 
       <h1>Rally Status Surface</h1>
       <div class="app-subtitle">多项目端点操作表面 (Phase 1 Compact Operator Surface)</div>
     </div>
-    <div class="status-summary-bar">
-      <span>项目总数: <strong>${projectCount}</strong></span>
-      <span>需关注: <strong style="color: ${attentionCount > 0 ? '#e3b341' : '#3fb950'};">${attentionCount}</strong></span>
+    <div class="header-right-group" style="display: flex; align-items: center; gap: 14px;">
+      <div class="status-summary-bar">
+        <span>项目总数: <strong>${projectCount}</strong></span>
+        <span>需关注: <strong style="color: ${attentionCount > 0 ? '#e3b341' : '#3fb950'};">${attentionCount}</strong></span>
+      </div>
+      <div id="surface-sync-indicator" class="sync-indicator sync-live" title="状态表面与服务端规范快照保持实时同步">
+        ● 实时已同步
+      </div>
     </div>
   </header>
 
@@ -125,6 +131,7 @@ export function renderStatusSurfaceHtml({ projects = [], attentionTray = null } 
   <script>${SURFACE_CLIENT_JS}</script>
   <script>${ATTENTION_CLIENT_JS}</script>
   <script>${ONBOARDING_CLIENT_JS}</script>
+  <script>${LIVE_REFRESH_CLIENT_JS}</script>
 </body>
 </html>
 `;

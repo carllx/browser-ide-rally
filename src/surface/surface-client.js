@@ -14,6 +14,18 @@ export const SURFACE_CLIENT_JS = `
       setTimeout(() => { toast.style.display = 'none'; }, 3500);
     }
 
+    async function refreshOrReload() {
+      if (typeof window.__triggerSurfaceRefresh === 'function') {
+        try {
+          await window.__triggerSurfaceRefresh();
+        } catch (_) {
+          window.location.reload();
+        }
+      } else {
+        window.location.reload();
+      }
+    }
+
     // 1. Mark handled 点击事件监听与 API 调用
     document.addEventListener('click', async function(e) {
       const btn = e.target.closest('button[data-action="mark-handled"]');
@@ -45,7 +57,7 @@ export const SURFACE_CLIENT_JS = `
         const result = await resp.json();
         if (resp.ok && result.success) {
           showToast('已成功标记处理: ' + bindingId + ' / ' + endpointId);
-          window.location.reload();
+          await refreshOrReload();
         } else {
           showToast('标记失败: ' + (result.reason || '未知错误'), true);
           btn.disabled = false;
@@ -83,7 +95,7 @@ export const SURFACE_CLIENT_JS = `
         const result = await resp.json();
         if (resp.ok && result.success) {
           showToast('已成功聚焦端点: ' + endpointId);
-          window.location.reload();
+          await refreshOrReload();
         } else {
           showToast('聚焦失败 [' + (result.stage || 'BLOCKED') + ']: ' + (result.reason || '版本失配或目标异常'), true);
           btn.disabled = false;
@@ -183,7 +195,7 @@ export const SURFACE_CLIENT_JS = `
           if (resp.ok && result.success) {
             showToast('端点重绑成功');
             closeModal();
-            window.location.reload();
+            await refreshOrReload();
           } else {
             showToast('重绑受阻 [' + (result.stage || 'BLOCKED') + ']: ' + (result.reason || '未知原因'), true);
             modalSubmit.disabled = false;
@@ -241,7 +253,7 @@ export const SURFACE_CLIENT_JS = `
           if (resp.ok && result.success) {
             showToast('动作已提交: ' + result.stage);
             closeModal();
-            window.location.reload();
+            await refreshOrReload();
           } else {
             showToast('发送失败 [' + (result.stage || 'BLOCKED') + ']: ' + (result.reason || '未知错误'), true);
             modalSubmit.disabled = false;
@@ -356,7 +368,7 @@ export const SURFACE_CLIENT_JS = `
           const result = await resp.json();
           if (resp.ok && result.success) {
             showToast('已成功触发 Continue: ' + (result.stage || 'ACCEPTED_OR_DELIVERED'));
-            window.location.reload();
+            await refreshOrReload();
           } else {
             showToast('Continue 受阻 [' + (result.stage || 'BLOCKED') + ']: ' + (result.reason || '未知原因'), true);
             btn.disabled = false;

@@ -234,4 +234,29 @@ export const OPERATOR_CSS = `
   .diagnostics-tray-body {
     padding: 12px 16px;
   }
+
+  /* 实时同步与陈旧状态指示器 (#34) */
+  .sync-indicator {
+    font-size: 0.82rem;
+    font-weight: 500;
+    padding: 3px 8px;
+    border-radius: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    transition: all 0.2s ease;
+  }
+  .sync-indicator.sync-live {
+    background: rgba(46, 160, 67, 0.15);
+    color: #3fb950;
+    border: 1px solid rgba(46, 160, 67, 0.3);
+  }
+  .sync-indicator.sync-stale {
+    background: rgba(218, 54, 51, 0.15);
+    color: #f85149;
+    border: 1px solid rgba(218, 54, 51, 0.3);
+  }
+  body[data-surface-stale="true"] .app-header {
+    border-bottom: 2px solid #da3633;
+  }
 `;
