@@ -1,10 +1,11 @@
-/**
- * 状态表面客户端交互脚本模块 (Surface Client Script)
- * 纯原生浏览器端交互逻辑，实现规范状态重载刷新与筛选状态持久化
- */
+import { classifyRebindError } from './rebind-error-classifier.js';
+
+export { classifyRebindError };
 
 export const SURFACE_CLIENT_JS = `
   (function() {
+    ${classifyRebindError.toString()}
+
     function showToast(msg, isError) {
       const toast = document.getElementById('toast-msg');
       if (!toast) return;
@@ -217,26 +218,37 @@ export const SURFACE_CLIENT_JS = `
             await refreshOrReload();
           } else {
             const reason = result.reason || '未知原因';
+            const classified = classifyRebindError(reason, result.stage || 'BLOCKED');
             const alertBox = document.getElementById('m-error-alert');
+
             if (alertBox) {
               alertBox.style.display = 'block';
               alertBox.style.background = '#ffebe9';
               alertBox.style.borderColor = '#ff8182';
               alertBox.style.color = '#cf222e';
 
-              if (reason.includes('unhandled NEW result')) {
-                alertBox.innerHTML = '<strong>⚠️ 安全守卫阻断 [未处理 NEW 结果]</strong><br>目标端点存在未标记处理的完成事实。若确认放弃并覆盖该结果，请勾选下方的【强制替换未处理 NEW 事实】后重试。';
-                const unhandledGroup = document.getElementById('m-group-unhandled');
-                if (unhandledGroup) unhandledGroup.style.outline = '2px solid #cf222e';
-              } else if (reason.includes('UNKNOWN result') || reason.includes('UNKNOWN state')) {
-                alertBox.innerHTML = '<strong>⚠️ 安全守卫阻断 [处于 UNKNOWN 状态]</strong><br>目标端点当前连续性未确立或处于未知状态。若确认强制替换，请勾选下方的【确认替换处于 UNKNOWN 的端点】后重试。';
-                const unknownGroup = document.getElementById('m-group-unknown');
-                if (unknownGroup) unknownGroup.style.outline = '2px solid #cf222e';
-              } else {
-                alertBox.innerHTML = '<strong>⚠️ 重绑受阻 [' + escapeText(result.stage || 'BLOCKED') + ']:</strong> ' + escapeText(reason);
+              const unhandledGroup = document.getElementById('m-group-unhandled');
+              if (unhandledGroup) {
+                unhandledGroup.style.outline = classified.highlightUnhandledCheckbox ? '2px solid #cf222e' : 'none';
               }
+              const unknownGroup = document.getElementById('m-group-unknown');
+              if (unknownGroup) {
+                unknownGroup.style.outline = classified.highlightUnknownCheckbox ? '2px solid #cf222e' : 'none';
+              }
+
+              let techDetailHtml = '';
+              if (classified.technicalDetail) {
+                techDetailHtml = '<div style="margin-top:6px;font-size:11px;opacity:0.85;word-break:break-all;">' +
+                  '<span>技术详情: </span><code>' + escapeText(classified.technicalDetail) + '</code></div>';
+              }
+
+              alertBox.innerHTML =
+                '<strong>⚠️ ' + escapeText(classified.title) + '</strong><br>' +
+                '<span>' + escapeText(classified.actionGuidance) + '</span>' +
+                techDetailHtml;
             }
-            showToast('重绑受阻 [' + (result.stage || 'BLOCKED') + ']: ' + reason, true);
+
+            showToast(classified.title, true);
             modalSubmit.disabled = false;
             modalSubmit.textContent = '确认执行';
             await refreshOrReload();

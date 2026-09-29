@@ -15,6 +15,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createProjectRegistry } from '../../src/registry/project-registry.js';
 import { startStatusSurfaceServer } from '../../src/surface/surface-server.js';
+import { classifyRebindError } from '../../src/surface/rebind-error-classifier.js';
 
 describe('IDE Rebind 自动派生身份集成测试 (#40)', () => {
   let registry;
@@ -233,6 +234,12 @@ describe('IDE Rebind 自动派生身份集成测试 (#40)', () => {
     assert.equal(result.stage, 'BLOCKED');
     assert.match(result.reason, /Antigravity conversation "conv-not-found-uuid-999" not found or inaccessible/);
 
+    // 重点验证 (Review Blocker 1)：invalid/inaccessible conversation 产出面向操作者的清晰中文指引
+    const classified = classifyRebindError(result.reason, result.stage);
+    assert.equal(classified.title, '未找到指定的 Antigravity 会话或会话无法访问');
+    assert.match(classified.actionGuidance, /确保本地 Antigravity 正在运行/);
+    assert.match(classified.actionGuidance, /检查会话 ID 是否输入正确/);
+
     // 验证零变更
     const revAfter = coreProj1.getSnapshot().binding.binding_revision;
     const ideAfter = coreProj1.getSnapshot().binding.ide_endpoints.find(e => e.endpoint_id === 'ide-primary');
@@ -261,6 +268,12 @@ describe('IDE Rebind 自动派生身份集成测试 (#40)', () => {
     assert.equal(result.success, false);
     assert.equal(result.stage, 'BLOCKED');
     assert.match(result.reason, /already bound to project "Rebind Test Project 2"/);
+
+    // 重点验证 (Review Blocker 2)：duplicate conversation 产出面向操作者的清晰中文指引
+    const classified = classifyRebindError(result.reason, result.stage);
+    assert.equal(classified.title, '该 Antigravity 会话已被其他项目占用');
+    assert.match(classified.actionGuidance, /防止跨项目会话串线/);
+    assert.match(classified.actionGuidance, /解除绑定/);
 
     // 验证零变更
     const revAfter = coreProj1.getSnapshot().binding.binding_revision;
