@@ -10,6 +10,10 @@
  * 6. UNCERTAIN 醒目可辨，绝无偏向打点。
  */
 
+import { checkStructuralTopologyMatches } from './live-refresh-topology.js';
+
+export { checkStructuralTopologyMatches };
+
 /**
  * 客户端诚实相对时间格式化
  * @param {string|null} isoTimestamp
@@ -395,9 +399,21 @@ function updateDetailsDom(details, proj) {
  * @param {Document} doc
  * @param {Array<object>} projects
  * @param {object} [attentionTray]
+ * @param {object} [options]
+ * @param {Function} [options.onStructuralMismatch]
+ * @returns {{ success: boolean, reloaded: boolean, reason?: string }}
  */
-export function applyProjectionToDom(doc, projects = [], attentionTray = null) {
-  if (!doc) return;
+export function applyProjectionToDom(doc, projects = [], attentionTray = null, { onStructuralMismatch = null } = {}) {
+  if (!doc) return { success: false, reloaded: false };
+
+  // 0. 结构拓扑前置校验：若当前 DOM 与规范投影拓扑不一致，拒绝增量假同步 (Blocker #37)
+  const isTopologyMatch = checkStructuralTopologyMatches(doc, projects);
+  if (!isTopologyMatch) {
+    if (typeof onStructuralMismatch === 'function') {
+      onStructuralMismatch();
+    }
+    return { success: false, reloaded: true, reason: 'topology_mismatch' };
+  }
 
   const totalProjects = projects.length;
   let attentionCount = 0;
@@ -444,6 +460,8 @@ export function applyProjectionToDom(doc, projects = [], attentionTray = null) {
       updateDetailsDom(details, proj);
     }
   }
+
+  return { success: true, reloaded: false };
 }
 
 /**
@@ -493,6 +511,7 @@ export const LIVE_REFRESH_CLIENT_JS = `
     ${escapeText.toString()}
     ${updateLatestDot.toString()}
     ${renderActionsTableClient.toString()}
+    ${checkStructuralTopologyMatches.toString()}
     ${updateScanRowDom.toString()}
     ${updateDetailsDom.toString()}
     ${applyProjectionToDom.toString()}
@@ -514,6 +533,15 @@ export const LIVE_REFRESH_CLIENT_JS = `
         }
         var data = await resp.json();
         if (data && Array.isArray(data.projects)) {
+          var isTopologyMatch = checkStructuralTopologyMatches(document, data.projects);
+          if (!isTopologyMatch) {
+            setSurfaceStaleStatus(document, { isStale: true, reason: '检测到项目或端点结构拓扑变更，正在自动重新加载...' });
+            if (typeof window !== 'undefined' && window.location && typeof window.location.reload === 'function') {
+              window.location.reload();
+            }
+            return;
+          }
+
           lastSuccessfulSyncTime = new Date().toISOString();
           applyProjectionToDom(document, data.projects, data.attention_tray);
           setSurfaceStaleStatus(document, { isStale: false, lastSyncTime: lastSuccessfulSyncTime });

@@ -10,7 +10,8 @@ import { renderStatusSurfaceHtml } from '../../src/surface/surface-template.js';
 import {
   applyProjectionToDom,
   setSurfaceStaleStatus,
-  formatHonestRelativeTimeClient
+  formatHonestRelativeTimeClient,
+  checkStructuralTopologyMatches
 } from '../../src/surface/live-refresh-client.js';
 
 describe('Live Surface Refresh 客户端单元测试', () => {
@@ -405,5 +406,107 @@ describe('Live Surface Refresh 客户端单元测试', () => {
     assert.match(actionRow.textContent, /BLOCKED/);
     assert.match(actionRow.textContent, /Cannot replace ide-primary endpoint with unhandled UNKNOWN result without explicit confirmation/);
   });
+
+  it('10. [Issue #37] 结构拓扑校验纯函数：准确识别项目增减、端点增减及单多 IDE 结构变化', () => {
+    // 基线匹配：sampleInitialProjects 包含 proj-alpha (browser, ide-primary)
+    assert.equal(checkStructuralTopologyMatches(document, sampleInitialProjects), true);
+
+    // 场景 A: 服务端新增了项目 proj-beta，DOM 中尚无该卡片 -> 拓扑失配
+    const projectsWithAddedProj = [
+      ...sampleInitialProjects,
+      {
+        binding_id: 'proj-beta',
+        binding_revision: 1,
+        display_name: 'Beta Project',
+        browser: { endpoint_id: 'browser' },
+        ide_endpoints: [{ endpoint_id: 'ide-beta' }]
+      }
+    ];
+    assert.equal(checkStructuralTopologyMatches(document, projectsWithAddedProj), false);
+
+    // 场景 B: 服务端移除了项目 proj-alpha -> 拓扑失配
+    assert.equal(checkStructuralTopologyMatches(document, []), false);
+
+    // 场景 C: 同一项目中新增了第二个 IDE 端点 (单 IDE -> 多 IDE 拓扑跃迁)
+    const projectsWithAddedEndpoint = [
+      {
+        ...sampleInitialProjects[0],
+        ide_endpoints: [
+          ...sampleInitialProjects[0].ide_endpoints,
+          { endpoint_id: 'ide-secondary', role: 'ide', result_state: 'NO_NEW_RESULT' }
+        ]
+      }
+    ];
+    assert.equal(checkStructuralTopologyMatches(document, projectsWithAddedEndpoint), false);
+
+    // 场景 D: 端点 ID 发生变化 (原有 ide-primary 被替换为全新端点 ide-other)
+    const projectsWithReplacedEndpointId = [
+      {
+        ...sampleInitialProjects[0],
+        ide_endpoints: [
+          { endpoint_id: 'ide-other', role: 'ide', result_state: 'NO_NEW_RESULT' }
+        ]
+      }
+    ];
+    assert.equal(checkStructuralTopologyMatches(document, projectsWithReplacedEndpointId), false);
+  });
+
+  it('11. [Issue #37] 结构拓扑不匹配时：applyProjectionToDom 拒绝增量假同步并触发受控重载回调', () => {
+    let reloadCallbackTriggered = false;
+    const projectsWithNewOnboard = [
+      ...sampleInitialProjects,
+      {
+        binding_id: 'proj-newly-onboarded',
+        binding_revision: 1,
+        display_name: 'New Onboarded Project',
+        browser: { endpoint_id: 'browser' },
+        ide_endpoints: [{ endpoint_id: 'ide-primary' }]
+      }
+    ];
+
+    const result = applyProjectionToDom(document, projectsWithNewOnboard, null, {
+      onStructuralMismatch: () => {
+        reloadCallbackTriggered = true;
+      }
+    });
+
+    // 必须报告失败与重载原因，且回调被触发
+    assert.equal(result.success, false);
+    assert.equal(result.reloaded, true);
+    assert.equal(result.reason, 'topology_mismatch');
+    assert.equal(reloadCallbackTriggered, true, '拓扑不匹配时必须触发受控重载回调');
+  });
+
+  it('12. [Issue #37] 拓扑结构一致时：applyProjectionToDom 平滑就地更新，不触发重载回调', () => {
+    let reloadCallbackTriggered = false;
+    const normalUpdateProjects = [
+      {
+        ...sampleInitialProjects[0],
+        binding_revision: 2,
+        latest_result_indicator: 'BROWSER_LATEST',
+        browser: {
+          ...sampleInitialProjects[0].browser,
+          result_state: 'NEW',
+          is_latest_result: true
+        }
+      }
+    ];
+
+    const result = applyProjectionToDom(document, normalUpdateProjects, null, {
+      onStructuralMismatch: () => {
+        reloadCallbackTriggered = true;
+      }
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.reloaded, false);
+    assert.equal(reloadCallbackTriggered, false, '拓扑一致时严禁触发重载回调');
+
+    // 验证更新已成功就地应用
+    const card = document.getElementById('card-proj-alpha');
+    const browserTag = card.querySelector('.endpoint-tag-browser');
+    assert.ok(browserTag.classList.contains('has-latest'));
+  });
 });
+
 

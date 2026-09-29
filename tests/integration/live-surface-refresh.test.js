@@ -320,5 +320,81 @@ describe('Live Surface Refresh 实时刷新集成测试', () => {
     assert.match(blockedRow.textContent, /BLOCKED/);
     assert.match(blockedRow.textContent, /Cannot replace ide-primary endpoint with unhandled UNKNOWN result/);
   });
+
+  it('7. [Issue #37] 结构拓扑变更（如动态 onboarding 新项目）时拒绝增量假同步，并触发受控全页重载', async () => {
+    // 1. 模拟已打开页面（当前注册表仅有 proj-live-test 单项目）
+    const initialHtml = await (await fetch(`${baseUrl}/`)).text();
+    const dom = new JSDOM(initialHtml, { runScripts: 'outside-only' });
+    const doc = dom.window.document;
+    assert.equal(doc.querySelectorAll('.project-card').length, 1);
+
+    // 2. 服务端动态 onboarding 注册新项目 proj-second
+    registry.registerProject({
+      binding: {
+        binding_id: 'proj-second',
+        display_name: 'Second Onboarded Project',
+        binding_revision: 1,
+        browser: { provider: 'chatgpt', conversation_id: 'conv-b-second' },
+        ide_endpoints: [{
+          endpoint_id: 'ide-second-1',
+          endpoint_revision: 1,
+          conversation_id: 'conv-i-second',
+          workspace_identity: '/ws/second',
+          repository_identity: 'github.com/org/second'
+        }],
+        capabilities: ['read', 'write'],
+        paused: false
+      }
+    });
+
+    // 3. 后台轮询获取到包含 2 个项目的最新规范投影
+    const apiRes = await fetch(`${baseUrl}/api/projects`);
+    const { projects } = await apiRes.json();
+    assert.equal(projects.length, 2);
+
+    // 4. 客户端消费投影：拓扑前置校验捕获到 DOM 缺少 proj-second
+    let reloadTriggered = false;
+    const result = applyProjectionToDom(doc, projects, null, {
+      onStructuralMismatch: () => {
+        reloadTriggered = true;
+      }
+    });
+
+    // 必须拒绝增量假同步，触发重载通知
+    assert.equal(result.success, false);
+    assert.equal(result.reloaded, true);
+    assert.equal(result.reason, 'topology_mismatch');
+    assert.equal(reloadTriggered, true, '动态拓扑变化时必须触发重载回调');
+
+    // 模拟客户端脚本中的 stale 状态设置（绝不显示实时已同步）
+    setSurfaceStaleStatus(doc, { isStale: true, reason: '检测到项目或端点结构拓扑变更，正在自动重新加载...' });
+    const indicator = doc.getElementById('surface-sync-indicator');
+    assert.ok(indicator.classList.contains('sync-stale'));
+    assert.match(indicator.textContent, /保持陈旧|同步断开/);
+    assert.equal(indicator.classList.contains('sync-live'), false, '结构失配时绝不得显示实时已同步');
+
+    // 5. 模拟重载完成：浏览器重新加载最新 HTML
+    const reloadedHtml = await (await fetch(`${baseUrl}/`)).text();
+    const reloadedDom = new JSDOM(reloadedHtml, { runScripts: 'outside-only' });
+    const reloadedDoc = reloadedDom.window.document;
+    assert.equal(reloadedDoc.querySelectorAll('.project-card').length, 2, '重载后 DOM 具备完整的 2 个项目卡片');
+
+    // 6. 重载后新轮询周期：拓扑再次匹配，平滑应用且显示实时已同步
+    let subsequentReloadTriggered = false;
+    const reloadedResult = applyProjectionToDom(reloadedDoc, projects, null, {
+      onStructuralMismatch: () => {
+        subsequentReloadTriggered = true;
+      }
+    });
+    assert.equal(reloadedResult.success, true);
+    assert.equal(reloadedResult.reloaded, false);
+    assert.equal(subsequentReloadTriggered, false);
+
+    setSurfaceStaleStatus(reloadedDoc, { isStale: false, lastSyncTime: new Date().toISOString() });
+    const reloadedIndicator = reloadedDoc.getElementById('surface-sync-indicator');
+    assert.ok(reloadedIndicator.classList.contains('sync-live'));
+    assert.match(reloadedIndicator.textContent, /实时已同步/);
+  });
 });
+
 
