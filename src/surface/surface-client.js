@@ -100,6 +100,7 @@ export const SURFACE_CLIENT_JS = `
           showToast('聚焦失败 [' + (result.stage || 'BLOCKED') + ']: ' + (result.reason || '版本失配或目标异常'), true);
           btn.disabled = false;
           btn.textContent = originalText;
+          await refreshOrReload();
         }
       } catch (err) {
         showToast('请求异常: ' + err.message, true);
@@ -200,6 +201,7 @@ export const SURFACE_CLIENT_JS = `
             showToast('重绑受阻 [' + (result.stage || 'BLOCKED') + ']: ' + (result.reason || '未知原因'), true);
             modalSubmit.disabled = false;
             modalSubmit.textContent = '确认执行';
+            await refreshOrReload();
           }
         } catch (err) {
           showToast('请求异常: ' + err.message, true);
@@ -258,6 +260,7 @@ export const SURFACE_CLIENT_JS = `
             showToast('发送失败 [' + (result.stage || 'BLOCKED') + ']: ' + (result.reason || '未知错误'), true);
             modalSubmit.disabled = false;
             modalSubmit.textContent = '确认执行';
+            await refreshOrReload();
           }
         } catch (err) {
           showToast('请求异常: ' + err.message, true);
@@ -373,6 +376,7 @@ export const SURFACE_CLIENT_JS = `
             showToast('Continue 受阻 [' + (result.stage || 'BLOCKED') + ']: ' + (result.reason || '未知原因'), true);
             btn.disabled = false;
             btn.textContent = originalText;
+            await refreshOrReload();
           }
         } catch (err) {
           showToast('请求异常: ' + err.message, true);

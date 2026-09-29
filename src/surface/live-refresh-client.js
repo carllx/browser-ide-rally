@@ -191,14 +191,85 @@ function updateScanRowDom(scanRow, proj) {
       attentionCell.innerHTML = '';
     }
   }
+
+  // 同步更新清除介入按钮上的 binding_revision
+  const clearBtn = scanRow.querySelector('.btn-clear-human');
+  if (clearBtn && proj.binding_revision !== undefined) {
+    clearBtn.setAttribute('data-binding-revision', String(proj.binding_revision));
+  }
 }
 
 /**
- * 更新 Details 诊断区 DOM 元素 (保留 open 状态)
+ * 客户端 Action 事实表格渲染函数 (与服务端模板结构严格一致)
+ * @param {Array<object>} actions
+ * @returns {string} HTML 字符串
+ */
+function renderActionsTableClient(actions) {
+  if (!actions || actions.length === 0) {
+    return '<div class="text-muted" style="font-size: 0.85rem; padding: 6px 0;">无活跃或历史动作事实</div>';
+  }
+
+  const rows = actions.map(act => {
+    const reasonText = act.reason || (typeof act.evidence === 'string' ? act.evidence : act.evidence?.reason || act.evidence?.error) || '';
+    const nonceText = act.nonce ? `<code>${escapeText(act.nonce.slice(0, 8))}...</code>` : '-';
+    return `
+      <tr class="action-row stage-row-${escapeText(act.stage)}">
+        <td><code>${escapeText(act.action_id)}</code></td>
+        <td><span>${escapeText(act.action_type)}</span></td>
+        <td><code>${escapeText(act.target_endpoint || '-')}</code></td>
+        <td><span class="badge badge-stage stage-${escapeText(act.stage)}">${escapeText(act.stage)}</span></td>
+        <td>${nonceText}</td>
+        <td class="action-reason-cell">${reasonText ? `<span class="action-reason">${escapeText(reasonText)}</span>` : '<span class="text-muted">-</span>'}</td>
+        <td class="text-muted">${escapeText(act.updated_at || act.created_at || '-')}</td>
+      </tr>
+    `;
+  }).join('');
+
+  return `
+    <div class="table-responsive">
+      <table class="actions-table">
+        <thead>
+          <tr>
+            <th>Action ID</th>
+            <th>类型</th>
+            <th>目标端点</th>
+            <th>生命周期 Stage</th>
+            <th>Nonce</th>
+            <th>附注 / 原因</th>
+            <th>更新时间</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+/**
+ * 更新 Details 诊断区 DOM 元素 (保留 open 状态与焦点)
  * @param {Element} details
  * @param {object} proj
  */
 function updateDetailsDom(details, proj) {
+  const bRev = proj.binding_revision;
+
+  // 1. 同步更新摘要头部的 binding_revision badge
+  if (bRev !== undefined) {
+    const revBadge = details.querySelector('.details-summary-header .badge-rev');
+    if (revBadge) {
+      revBadge.textContent = `rev ${bRev}`;
+    }
+
+    // 2. 同步更新 Details 内所有控制按钮的 data-binding-revision 属性
+    const revButtons = details.querySelectorAll('button[data-binding-revision]');
+    revButtons.forEach(btn => {
+      btn.setAttribute('data-binding-revision', String(bRev));
+    });
+  }
+
+  // 3. 同步更新所有端点卡片
   const allEndpoints = [proj.browser, ...(proj.ide_endpoints || [])].filter(Boolean);
 
   for (const ep of allEndpoints) {
@@ -214,6 +285,13 @@ function updateDetailsDom(details, proj) {
       epCard.setAttribute('data-result-ref', ep.latest_completed_result.result_ref);
     }
 
+    // A. 端点版本 badge (rev X)
+    const epRevBadge = epCard.querySelector('.ep-rev-badge');
+    if (epRevBadge) {
+      epRevBadge.textContent = `rev ${ep.endpoint_revision || 1}`;
+    }
+
+    // B. 状态 badge
     const badge = epCard.querySelector('.endpoint-header .badge');
     if (badge) {
       badge.className = 'badge';
@@ -229,6 +307,7 @@ function updateDetailsDom(details, proj) {
       }
     }
 
+    // C. 游标与处理状态展示
     const cursorVal = epCard.querySelector('.cursor-val');
     if (cursorVal) {
       cursorVal.textContent = ep.latest_completed_cursor !== null && ep.latest_completed_cursor !== undefined
@@ -236,6 +315,49 @@ function updateDetailsDom(details, proj) {
         : '(none)';
     }
 
+    const handledCursorVal = epCard.querySelector('.meta-handled-cursor');
+    if (handledCursorVal) {
+      handledCursorVal.textContent = ep.last_handled_cursor !== null && ep.last_handled_cursor !== undefined
+        ? String(ep.last_handled_cursor)
+        : '(无)';
+    }
+
+    // D. Rebind 按钮携带的最新身份属性同步
+    const rebindBtn = epCard.querySelector('button[data-action="rebind"]');
+    if (rebindBtn) {
+      if (bRev !== undefined) {
+        rebindBtn.setAttribute('data-binding-revision', String(bRev));
+      }
+      rebindBtn.setAttribute('data-conversation-id', ep.conversation_id || '');
+      rebindBtn.setAttribute('data-branch', ep.branch || '');
+      rebindBtn.setAttribute('data-workspace', ep.workspace_identity || '');
+      rebindBtn.setAttribute('data-repo', ep.repository_identity || '');
+    }
+
+    // E. 端点卡片身份展示文本同步 (.identity-line)
+    const identityLines = epCard.querySelectorAll('.identity-line');
+    identityLines.forEach(line => {
+      const labels = line.querySelectorAll('.meta-label');
+      labels.forEach(label => {
+        const labelText = label.textContent || '';
+        const codeSibling = label.nextElementSibling;
+        if (!codeSibling || codeSibling.tagName !== 'CODE') return;
+
+        if (labelText.includes('会话 ID')) {
+          codeSibling.textContent = ep.conversation_id || '(未绑定)';
+        } else if (labelText.includes('分支')) {
+          codeSibling.textContent = ep.branch || '(未指定分支)';
+        } else if (labelText.includes('工作区')) {
+          codeSibling.textContent = ep.workspace_identity || '-';
+        } else if (labelText.includes('代码仓库')) {
+          codeSibling.textContent = ep.repository_identity || '-';
+        } else if (labelText.includes('Provider')) {
+          codeSibling.textContent = ep.provider || 'chatgpt';
+        }
+      });
+    });
+
+    // F. Mark handled 按钮状态
     const handledBtn = epCard.querySelector('button[data-action="mark-handled"]');
     if (handledBtn) {
       const isNew = ep.result_state === 'NEW';
@@ -250,6 +372,20 @@ function updateDetailsDom(details, proj) {
         handledBtn.removeAttribute('data-expected-cursor');
         handledBtn.removeAttribute('data-expected-cursor-json');
       }
+    }
+  }
+
+  // 4. Action 历史事实表格与错误证据同步
+  const actionsPlane = details.querySelector('.actions-history-plane');
+  if (actionsPlane) {
+    const actions = Array.isArray(proj.actions) ? proj.actions : [];
+    const countStrong = actionsPlane.querySelector('.section-title strong');
+    if (countStrong) {
+      countStrong.textContent = `Action 动作事实记录 (${actions.length})`;
+    }
+    const containerDiv = actionsPlane.querySelector('div[style*="margin-top"]') || actionsPlane.querySelector('.table-responsive');
+    if (containerDiv) {
+      containerDiv.innerHTML = renderActionsTableClient(actions);
     }
   }
 }
@@ -356,6 +492,7 @@ export const LIVE_REFRESH_CLIENT_JS = `
     ${formatHonestRelativeTimeClient.toString()}
     ${escapeText.toString()}
     ${updateLatestDot.toString()}
+    ${renderActionsTableClient.toString()}
     ${updateScanRowDom.toString()}
     ${updateDetailsDom.toString()}
     ${applyProjectionToDom.toString()}

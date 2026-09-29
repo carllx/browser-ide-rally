@@ -205,4 +205,120 @@ describe('Live Surface Refresh 实时刷新集成测试', () => {
     const card = doc.getElementById('card-proj-live-test');
     assert.ok(card);
   });
+
+  it('5. [Issue #37] 规范版本推进至 N+1 后，已打开页面在下次 Rebind 中自动携带 N+1 且成功呈现新身份', async () => {
+    // 1. 获取已打开的页面 DOM
+    const initialHtml = await (await fetch(`${baseUrl}/`)).text();
+    const dom = new JSDOM(initialHtml, { runScripts: 'outside-only' });
+    const doc = dom.window.document;
+    const card = doc.getElementById('card-proj-live-test');
+    assert.ok(card);
+
+    // 初始版本为 rev 1
+    const rebindBtnBefore = card.querySelector('button[data-action="rebind"][data-endpoint-id="ide-primary"]');
+    assert.equal(rebindBtnBefore.getAttribute('data-binding-revision'), '1');
+
+    // 2. 服务端规范绑定因某种原因推进至 rev 2 (例如更新能力或通过其他控制器修改)
+    const snapshotBefore = core.getSnapshot();
+    core.updateBinding({
+      ...snapshotBefore.binding,
+      binding_revision: snapshotBefore.binding.binding_revision + 1,
+      display_name: 'Live Surface Test Project Renamed'
+    });
+    const snapshotAfterUpdate = core.getSnapshot();
+    assert.equal(snapshotAfterUpdate.binding.binding_revision, 2);
+
+    // 3. 客户端平滑拉取最新 /api/projects 并单向应用
+    const projectsRes = await fetch(`${baseUrl}/api/projects`);
+    const { projects } = await projectsRes.json();
+    applyProjectionToDom(doc, projects);
+
+    // 4. 断言：无需用户 reload，Rebind 按钮上的 data-binding-revision 已自动变为 2
+    const rebindBtnAfter = card.querySelector('button[data-action="rebind"][data-endpoint-id="ide-primary"]');
+    assert.equal(rebindBtnAfter.getAttribute('data-binding-revision'), '2');
+
+    // 5. 使用更新后的版本号提交 Rebind 请求（携带 N+1，即 2）
+    const targetRev = parseInt(rebindBtnAfter.getAttribute('data-binding-revision'), 10);
+    assert.equal(targetRev, 2);
+
+    const rebindRes = await fetch(`${baseUrl}/api/projects/proj-live-test/controls/rebind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        expected_binding_revision: targetRev,
+        target_endpoint: 'ide-primary',
+        new_identity: {
+          conversation_id: 'conv-rebound-live-999',
+          workspace_identity: '/ws/rebound-path',
+          repository_identity: 'github.com/org/rebound-repo'
+        },
+        allow_replace_unhandled: true,
+        allow_replace_unknown: true
+      })
+    });
+    const rebindData = await rebindRes.json();
+    assert.equal(rebindRes.status, 200);
+    assert.equal(rebindData.success, true);
+    assert.equal(rebindData.new_binding_revision, 3);
+
+    // 6. 客户端平滑消费更新后的投影
+    const refreshedProjects = (await (await fetch(`${baseUrl}/api/projects`)).json()).projects;
+    applyProjectionToDom(doc, refreshedProjects);
+
+    // 7. 断言：已打开页面无需 reload，卡片正文中已可见新的会话 ID、工作区和仓库
+    const ideCard = card.querySelector('.endpoint-card[data-endpoint-id="ide-primary"]');
+    assert.ok(ideCard);
+    assert.match(ideCard.textContent, /conv-rebound-live-999/);
+    assert.match(ideCard.textContent, /\/ws\/rebound-path/);
+    assert.match(ideCard.textContent, /github\.com\/org\/rebound-repo/);
+
+    // 并且 Rebind 按钮属性也同步推进至新版本 rev 3
+    assert.equal(rebindBtnAfter.getAttribute('data-binding-revision'), '3');
+    assert.equal(rebindBtnAfter.getAttribute('data-conversation-id'), 'conv-rebound-live-999');
+  });
+
+  it('6. [Issue #37] 阻断的 Rebind 事实 (BLOCKED) 实时呈现于已打开页面的诊断历史表格，Toast 消失后仍清晰可见', async () => {
+    const initialHtml = await (await fetch(`${baseUrl}/`)).text();
+    const dom = new JSDOM(initialHtml, { runScripts: 'outside-only' });
+    const doc = dom.window.document;
+    const card = doc.getElementById('card-proj-live-test');
+
+    const currentBindingRev = core.getSnapshot().binding.binding_revision;
+
+    // 故意提交一个未显式确认替换 UNKNOWN 的 Rebind 请求 -> 触发服务端安全阻断 (BLOCKED 409)
+    const blockedRes = await fetch(`${baseUrl}/api/projects/proj-live-test/controls/rebind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        expected_binding_revision: currentBindingRev,
+        target_endpoint: 'ide-primary',
+        new_identity: {
+          conversation_id: 'conv-blocked-attempt',
+          workspace_identity: '/ws/blocked',
+          repository_identity: 'github.com/org/blocked'
+        },
+        allow_replace_unhandled: false,
+        allow_replace_unknown: false
+      })
+    });
+    assert.equal(blockedRes.status, 409);
+    const blockedData = await blockedRes.json();
+    assert.equal(blockedData.success, false);
+    assert.equal(blockedData.stage, 'BLOCKED');
+    assert.match(blockedData.reason, /Cannot replace ide-primary endpoint with unhandled UNKNOWN result/);
+
+    // 客户端平滑拉取最新 /api/projects
+    const { projects } = await (await fetch(`${baseUrl}/api/projects`)).json();
+    applyProjectionToDom(doc, projects);
+
+    // 断言：诊断区 Actions 表格中清晰渲染出该条 BLOCKED 记录及其具体原因
+    const actionsPlane = card.querySelector('.actions-history-plane');
+    assert.ok(actionsPlane);
+    const blockedRow = actionsPlane.querySelector('.action-row.stage-row-BLOCKED');
+    assert.ok(blockedRow, '应存在 stage-row-BLOCKED 表格行');
+    assert.match(blockedRow.textContent, /rebind/);
+    assert.match(blockedRow.textContent, /BLOCKED/);
+    assert.match(blockedRow.textContent, /Cannot replace ide-primary endpoint with unhandled UNKNOWN result/);
+  });
 });
+

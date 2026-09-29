@@ -285,4 +285,125 @@ describe('Live Surface Refresh 客户端单元测试', () => {
     assert.match(formatHonestRelativeTimeClient(tenMinAgo.toISOString()), /10\s*分钟前/);
     assert.equal(formatHonestRelativeTimeClient(null), '暂无观察时间');
   });
+
+  it('7. [Issue #37] 控制元数据一致性：当 binding_revision 推进至 N+1 时，所有控制按钮及摘要版本同步更新', () => {
+    const card = document.getElementById('card-proj-alpha');
+    const details = card.querySelector('.project-details');
+    assert.ok(details);
+
+    // 初始状态为 rev 1
+    const initialBadge = details.querySelector('.details-summary-header .badge-rev');
+    assert.equal(initialBadge.textContent.trim(), 'rev 1');
+    const initialRebindBtn = details.querySelector('button[data-action="rebind"][data-endpoint-id="ide-primary"]');
+    assert.equal(initialRebindBtn.getAttribute('data-binding-revision'), '1');
+
+    // 模拟服务端推进规范版本至 rev 2
+    const rev2Projects = [
+      {
+        ...sampleInitialProjects[0],
+        binding_revision: 2
+      }
+    ];
+
+    applyProjectionToDom(document, rev2Projects);
+
+    // 验证摘要版本更新为 rev 2
+    assert.equal(initialBadge.textContent.trim(), 'rev 2');
+
+    // 验证所有控制按钮的 data-binding-revision 均同步更新为 2
+    const controlButtons = details.querySelectorAll('button[data-binding-revision]');
+    assert.ok(controlButtons.length > 0, 'Details 区应包含带有 data-binding-revision 的按钮');
+    controlButtons.forEach(btn => {
+      assert.equal(btn.getAttribute('data-binding-revision'), '2', `按钮 ${btn.getAttribute('data-action')} 的版本未更新为 2`);
+    });
+  });
+
+  it('8. [Issue #37] 端点身份一致性：重绑或身份变更后，端点卡片展示文本与 Rebind 按钮属性同步反映新值', () => {
+    const card = document.getElementById('card-proj-alpha');
+    const details = card.querySelector('.project-details');
+    const ideCard = details.querySelector('.endpoint-card[data-endpoint-id="ide-primary"]');
+    assert.ok(ideCard);
+
+    // 模拟服务端返回重绑后的新端点身份
+    const reboundProjects = [
+      {
+        ...sampleInitialProjects[0],
+        binding_revision: 2,
+        ide_endpoints: [
+          {
+            endpoint_id: 'ide-primary',
+            endpoint_revision: 2,
+            role: 'ide',
+            conversation_id: 'new-conv-uuid-1234',
+            workspace_identity: '/new/workspace/path',
+            repository_identity: 'github.com/new-org/new-repo',
+            result_state: 'NEW',
+            latest_completed_cursor: 'cur-ide-new-1',
+            is_latest_result: true,
+            continuity: { trusted: true }
+          }
+        ]
+      }
+    ];
+
+    applyProjectionToDom(document, reboundProjects);
+
+    // 1. 验证端点版本 badge
+    const epRevBadge = ideCard.querySelector('.ep-rev-badge');
+    assert.equal(epRevBadge.textContent.trim(), 'rev 2');
+
+    // 2. 验证 Rebind 按钮携带的新身份属性
+    const rebindBtn = ideCard.querySelector('button[data-action="rebind"]');
+    assert.equal(rebindBtn.getAttribute('data-binding-revision'), '2');
+    assert.equal(rebindBtn.getAttribute('data-conversation-id'), 'new-conv-uuid-1234');
+    assert.equal(rebindBtn.getAttribute('data-workspace'), '/new/workspace/path');
+    assert.equal(rebindBtn.getAttribute('data-repo'), 'github.com/new-org/new-repo');
+
+    // 3. 验证端点卡片正文中展示的身份文本
+    assert.match(ideCard.textContent, /new-conv-uuid-1234/, '端点卡片正文应包含新会话 ID');
+    assert.match(ideCard.textContent, /\/new\/workspace\/path/, '端点卡片正文应包含新工作区');
+    assert.match(ideCard.textContent, /github\.com\/new-org\/new-repo/, '端点卡片正文应包含新代码仓库');
+  });
+
+  it('9. [Issue #37] 诊断错误可见性：BLOCKED/FAILED Action 证据实时渲染至诊断历史表格，Toast 消失后仍清晰可见', () => {
+    const card = document.getElementById('card-proj-alpha');
+    const details = card.querySelector('.project-details');
+    const actionsPlane = details.querySelector('.actions-history-plane');
+    assert.ok(actionsPlane);
+
+    // 初始状态：无 Action
+    assert.match(actionsPlane.textContent, /无活跃或历史动作事实/);
+
+    // 模拟服务端产生了一条 BLOCKED 动作事实（例如 Rebind 未确认替换）
+    const blockedAction = {
+      action_id: 'act-rebind-blocked-001',
+      action_type: 'rebind',
+      target_endpoint: 'ide-primary',
+      stage: 'BLOCKED',
+      reason: 'Cannot replace ide-primary endpoint with unhandled UNKNOWN result without explicit confirmation',
+      created_at: new Date().toISOString()
+    };
+
+    const projectsWithBlockedAction = [
+      {
+        ...sampleInitialProjects[0],
+        actions: [blockedAction]
+      }
+    ];
+
+    applyProjectionToDom(document, projectsWithBlockedAction);
+
+    // 验证表格标题更新了计数
+    const title = actionsPlane.querySelector('.section-title strong');
+    assert.match(title.textContent, /\(1\)/);
+
+    // 验证表格行正确渲染出 BLOCKED stage 与具体阻断原因
+    const actionRow = actionsPlane.querySelector('.action-row.stage-row-BLOCKED');
+    assert.ok(actionRow, '应存在 stage-row-BLOCKED 表格行');
+    assert.match(actionRow.textContent, /act-rebind-blocked-001/);
+    assert.match(actionRow.textContent, /rebind/);
+    assert.match(actionRow.textContent, /BLOCKED/);
+    assert.match(actionRow.textContent, /Cannot replace ide-primary endpoint with unhandled UNKNOWN result without explicit confirmation/);
+  });
 });
+
