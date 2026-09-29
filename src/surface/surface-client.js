@@ -142,22 +142,43 @@ export const SURFACE_CLIENT_JS = `
       const curBranch = btn.getAttribute('data-branch');
       const curWs = btn.getAttribute('data-workspace');
       const curRepo = btn.getAttribute('data-repo');
+      const epCard = btn.closest('.endpoint-card');
+      const curState = epCard ? epCard.getAttribute('data-result-state') : null;
+
+      function escapeText(str) {
+        return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      }
 
       modalTitle.textContent = '安全重绑端点 [' + endpointId + '] (rev ' + bindingRev + ')';
       let extraFields = '';
       if (role === 'browser') {
-        extraFields = '<div class="form-group"><label>分支 (Branch，留空清除):</label><input type="text" id="m-branch" class="form-control" value="' + (curBranch || '') + '" /></div>';
+        extraFields = '<div class="form-group"><label>分支 (Branch，留空清除):</label><input type="text" id="m-branch" class="form-control" value="' + escapeText(curBranch || '') + '" /></div>';
       } else {
-        extraFields = '<div class="form-group"><label>工作区路径 (Workspace):</label><input type="text" id="m-ws" class="form-control" value="' + (curWs || '') + '" /></div>' +
-                      '<div class="form-group"><label>代码仓库 (Repository):</label><input type="text" id="m-repo" class="form-control" value="' + (curRepo || '') + '" /></div>';
+        extraFields = '<div class="form-group" style="background:var(--bg-subtle, #f6f8fa);border:1px solid var(--border-default, #d0d7de);border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:12px;color:var(--text-muted, #57606a);">' +
+                      '<div><strong>工作区与代码仓库：</strong>将由 Rally 通过 Antigravity 元数据自动验证并派生。</div>' +
+                      (curWs ? '<div style="margin-top:4px"><span style="color:var(--text-secondary, #24292f)">当前工作区:</span> <code style="word-break:break-all;">' + escapeText(curWs) + '</code></div>' : '') +
+                      (curRepo ? '<div style="margin-top:2px"><span style="color:var(--text-secondary, #24292f)">当前代码仓库:</span> <code style="word-break:break-all;">' + escapeText(curRepo) + '</code></div>' : '') +
+                      '</div>';
+      }
+
+      let initialAlert = '';
+      if (curState === 'NEW') {
+        initialAlert = '<div id="m-error-alert" style="background:#fff8c5;border:1px solid #d4a72c;color:#7d4e00;border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:12px;">' +
+                       '<strong>提示：</strong>目标端点当前存在未处理的 NEW 事实。若要替换该端点，需勾选下方的【强制替换未处理 NEW 事实】。</div>';
+      } else if (curState === 'UNKNOWN') {
+        initialAlert = '<div id="m-error-alert" style="background:#fff8c5;border:1px solid #d4a72c;color:#7d4e00;border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:12px;">' +
+                       '<strong>提示：</strong>目标端点当前处于 UNKNOWN 状态。若要替换该端点，需勾选下方的【确认替换处于 UNKNOWN 的端点】。</div>';
+      } else {
+        initialAlert = '<div id="m-error-alert" style="display:none;background:#ffebe9;border:1px solid #ff8182;color:#cf222e;border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:12px;"></div>';
       }
 
       modalBody.innerHTML = 
+        initialAlert +
         '<div class="form-group"><label>目标端点:</label><input type="text" class="form-control" value="' + endpointId + '" disabled /></div>' +
-        '<div class="form-group"><label>新会话 ID (Conversation ID):</label><input type="text" id="m-conv-id" class="form-control" value="' + (curConv || '') + '" placeholder="必填会话 ID" /></div>' +
+        '<div class="form-group"><label>新会话 ID (Conversation ID):</label><input type="text" id="m-conv-id" class="form-control" value="' + escapeText(curConv || '') + '" placeholder="必填会话 ID" /></div>' +
         extraFields +
-        '<div class="form-group"><label><input type="checkbox" id="m-allow-unhandled" /> 强制替换未处理 NEW 事实</label></div>' +
-        '<div class="form-group"><label><input type="checkbox" id="m-allow-unknown" /> 确认替换处于 UNKNOWN 的端点</label></div>';
+        '<div class="form-group" id="m-group-unhandled"><label><input type="checkbox" id="m-allow-unhandled" /> 强制替换未处理 NEW 事实</label></div>' +
+        '<div class="form-group" id="m-group-unknown"><label><input type="checkbox" id="m-allow-unknown" /> 确认替换处于 UNKNOWN 的端点</label></div>';
 
       currentModalAction = async function() {
         const convId = (document.getElementById('m-conv-id')?.value || '').trim();
@@ -169,9 +190,6 @@ export const SURFACE_CLIENT_JS = `
         if (role === 'browser') {
           const branchInput = document.getElementById('m-branch');
           newIdentity.branch = branchInput && branchInput.value.trim() ? branchInput.value.trim() : null;
-        } else {
-          newIdentity.workspace_identity = document.getElementById('m-ws')?.value.trim() || '';
-          newIdentity.repository_identity = document.getElementById('m-repo')?.value.trim() || '';
         }
 
         const allowUnhandled = !!document.getElementById('m-allow-unhandled')?.checked;
@@ -198,7 +216,27 @@ export const SURFACE_CLIENT_JS = `
             closeModal();
             await refreshOrReload();
           } else {
-            showToast('重绑受阻 [' + (result.stage || 'BLOCKED') + ']: ' + (result.reason || '未知原因'), true);
+            const reason = result.reason || '未知原因';
+            const alertBox = document.getElementById('m-error-alert');
+            if (alertBox) {
+              alertBox.style.display = 'block';
+              alertBox.style.background = '#ffebe9';
+              alertBox.style.borderColor = '#ff8182';
+              alertBox.style.color = '#cf222e';
+
+              if (reason.includes('unhandled NEW result')) {
+                alertBox.innerHTML = '<strong>⚠️ 安全守卫阻断 [未处理 NEW 结果]</strong><br>目标端点存在未标记处理的完成事实。若确认放弃并覆盖该结果，请勾选下方的【强制替换未处理 NEW 事实】后重试。';
+                const unhandledGroup = document.getElementById('m-group-unhandled');
+                if (unhandledGroup) unhandledGroup.style.outline = '2px solid #cf222e';
+              } else if (reason.includes('UNKNOWN result') || reason.includes('UNKNOWN state')) {
+                alertBox.innerHTML = '<strong>⚠️ 安全守卫阻断 [处于 UNKNOWN 状态]</strong><br>目标端点当前连续性未确立或处于未知状态。若确认强制替换，请勾选下方的【确认替换处于 UNKNOWN 的端点】后重试。';
+                const unknownGroup = document.getElementById('m-group-unknown');
+                if (unknownGroup) unknownGroup.style.outline = '2px solid #cf222e';
+              } else {
+                alertBox.innerHTML = '<strong>⚠️ 重绑受阻 [' + escapeText(result.stage || 'BLOCKED') + ']:</strong> ' + escapeText(reason);
+              }
+            }
+            showToast('重绑受阻 [' + (result.stage || 'BLOCKED') + ']: ' + reason, true);
             modalSubmit.disabled = false;
             modalSubmit.textContent = '确认执行';
             await refreshOrReload();

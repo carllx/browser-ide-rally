@@ -112,10 +112,64 @@ describe('Safe Controls Surface 集成测试', () => {
       }]
     ]);
 
+    const mockAgentApiExecutor = (bin, args) => {
+      if (args[0] === 'get-conversation-metadata') {
+        const convId = args[1];
+        if (convId === 'conv-ide-a-rebound' || convId === 'conv-ide-a-rebind-unconf') {
+          return JSON.stringify({
+            response: {
+              conversationMetadata: {
+                metadata: {
+                  workspaces: [
+                    {
+                      workspaceFolderAbsoluteUri: 'file:///ws/repo-new',
+                      repository: { computedName: 'github.com/org/repo-new' }
+                    }
+                  ]
+                }
+              }
+            }
+          });
+        }
+        if (convId === 'conv-ide-b-rebound' || convId === 'conv-ide-b-rebind-unconf') {
+          return JSON.stringify({
+            response: {
+              conversationMetadata: {
+                metadata: {
+                  workspaces: [
+                    {
+                      workspaceFolderAbsoluteUri: 'file:///ws/repo-b',
+                      repository: { computedName: 'github.com/org/repo-b' }
+                    }
+                  ]
+                }
+              }
+            }
+          });
+        }
+        return JSON.stringify({
+          response: {
+            conversationMetadata: {
+              metadata: {
+                workspaces: [
+                  {
+                    workspaceFolderAbsoluteUri: 'file:///ws/repo',
+                    repository: { computedName: 'github.com/org/repo' }
+                  }
+                ]
+              }
+            }
+          }
+        });
+      }
+      throw new Error(`Unsupported command: ${args.join(' ')}`);
+    };
+
     serverHandle = await startStatusSurfaceServer({
       registry,
       browserAdapter: mockBrowserAdapter,
       ideAdapters: mockIdeAdapters,
+      agentApiExecutor: mockAgentApiExecutor,
       port: 0,
       host: '127.0.0.1'
     });

@@ -28,16 +28,13 @@ import {
   normalizeIdentityUri
 } from '../adapters/production-runtime-controls.js';
 
-/**
- * 清理并规范化 Antigravity 会话 ID（安全规范化：过滤不可见 unicode 控制符如零宽字符、BOM，以及首尾空白与引号）
- * 严格保留 fail-closed exact-ID 语义，不放宽为任意文本中抽取 UUID
- * @param {string} input
- * @returns {string}
- */
-export function sanitizeIdeConversationId(input) {
-  if (!input || typeof input !== 'string') return '';
-  return input.replace(/[\u200B-\u200D\uFEFF]/g, '').trim().replace(/^["']|["']$/g, '').trim();
-}
+import {
+  sanitizeIdeConversationId,
+  assertIdeConversationUnique,
+  deriveAntigravityConversationIdentity
+} from '../adapters/ide/antigravity-identity-resolver.js';
+
+export { sanitizeIdeConversationId };
 
 /**
  * 解析完整 ChatGPT 会话 URL
@@ -140,50 +137,15 @@ export function verifyOnboardingIdentities({
     throw new Error('Antigravity conversation ID is required.');
   }
 
-  // 排查 registry 内 ide conversation 冲突
-  for (const proj of registry.listProjects()) {
-    for (const ep of proj.binding?.ide_endpoints || []) {
-      if (ep.conversation_id === cleanIdeConvId) {
-        const projLabel = proj.binding?.display_name || proj.binding?.binding_id;
-        throw new Error(`Antigravity conversation "${cleanIdeConvId}" is already bound to project "${projLabel}".`);
-      }
-    }
-  }
+  // 排查 registry 内 ide conversation 冲突 (全局排他)
+  assertIdeConversationUnique(registry, cleanIdeConvId);
 
-  const executor = agentApiExecutor || defaultAgentApiExecutor;
-  const bin = agentApiBin || DEFAULT_AGENTAPI_BIN;
-
-  let rawMeta;
-  try {
-    rawMeta = executor(bin, ['get-conversation-metadata', cleanIdeConvId]);
-  } catch (err) {
-    const errorDetails = err.stderr ? err.stderr.toString().trim() : (err.stdout ? err.stdout.toString().trim() : (err.message || ''));
-    const error = new Error(`Antigravity conversation "${cleanIdeConvId}" not found or inaccessible. Please check the conversation ID and ensure Antigravity is running.`);
-    error.details = errorDetails;
-    throw error;
-  }
-
-  let meta;
-  try {
-    meta = JSON.parse(rawMeta);
-  } catch (e) {
-    throw new Error(`Failed to parse Antigravity metadata for conversation "${cleanIdeConvId}": ${e.message}`);
-  }
-
-  const workspaces = meta?.response?.conversationMetadata?.metadata?.workspaces;
-  if (!Array.isArray(workspaces) || workspaces.length === 0) {
-    throw new Error(`Antigravity conversation "${cleanIdeConvId}" has no configured workspaces.`);
-  }
-
-  const ws = workspaces[0];
-  const workspaceIdentity = normalizeIdentityUri(ws.workspaceFolderAbsoluteUri || '');
-  const repositoryIdentity = ws.repository?.computedName ||
-    parseCanonicalRepositoryIdentity(ws.repository?.gitOriginUrl) ||
-    '';
-
-  if (!workspaceIdentity || !repositoryIdentity) {
-    throw new Error(`Antigravity conversation "${cleanIdeConvId}" workspace or repository identity could not be derived.`);
-  }
+  // 权威元数据派生
+  const derivedIde = deriveAntigravityConversationIdentity({
+    conversationId: cleanIdeConvId,
+    agentApiBin,
+    agentApiExecutor
+  });
 
   return {
     display_name: cleanDisplayName,
@@ -196,9 +158,9 @@ export function verifyOnboardingIdentities({
     },
     ide: {
       endpoint_id: 'ide-primary',
-      conversation_id: cleanIdeConvId,
-      workspace_identity: workspaceIdentity,
-      repository_identity: repositoryIdentity
+      conversation_id: derivedIde.conversation_id,
+      workspace_identity: derivedIde.workspace_identity,
+      repository_identity: derivedIde.repository_identity
     }
   };
 }

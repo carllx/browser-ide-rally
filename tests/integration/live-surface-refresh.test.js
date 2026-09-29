@@ -60,8 +60,29 @@ describe('Live Surface Refresh 实时刷新集成测试', () => {
     core.markEndpointHandled('browser', { expected_cursor: 'cur-b-0' });
     core.markEndpointHandled('ide-primary', { expected_cursor: 'cur-i-0' });
 
+    const mockAgentApiExecutor = (bin, args) => {
+      if (args[0] === 'get-conversation-metadata') {
+        return JSON.stringify({
+          response: {
+            conversationMetadata: {
+              metadata: {
+                workspaces: [
+                  {
+                    workspaceFolderAbsoluteUri: 'file:///ws/rebound-path',
+                    repository: { computedName: 'github.com/org/rebound-repo' }
+                  }
+                ]
+              }
+            }
+          }
+        });
+      }
+      throw new Error(`Unsupported command: ${args.join(' ')}`);
+    };
+
     serverHandle = await startStatusSurfaceServer({
       registry,
+      agentApiExecutor: mockAgentApiExecutor,
       port: 0,
       host: '127.0.0.1'
     });

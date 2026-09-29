@@ -15,6 +15,7 @@ import { renderStatusSurfaceHtml } from './surface-template.js';
 import { deriveAttentionTray } from './attention-tray.js';
 import { executeSafeRebind, executeSafeOpenFocus, executeSafeSend, executeSafeContinue } from '../controller/safe-controls.js';
 import { verifyOnboardingIdentities, createOnboardingProject } from './onboarding-controller.js';
+import { verifyAndResolveIdeRebindIdentity } from '../adapters/ide/antigravity-identity-resolver.js';
 import { handleAntigravityHookRequest } from './hook-controller.js';
 import { sendJson, sendHtml, parseBody } from './http-helpers.js';
 
@@ -203,14 +204,35 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
 
       try {
         const rawIdentity = body.new_identity || body.identity || {};
-        const normalizedIdentity = {
-          ...rawIdentity,
-          workspace_identity: rawIdentity.workspace_identity || rawIdentity.workspace,
-          repository_identity: rawIdentity.repository_identity || rawIdentity.repository
-        };
+        const isIde = body.target_endpoint !== 'browser';
+        let normalizedIdentity;
+
+        if (isIde) {
+          const inputConvId = rawIdentity.conversation_id || body.conversation_id;
+          const resolved = verifyAndResolveIdeRebindIdentity({
+            registry,
+            bindingId,
+            targetEndpoint: body.target_endpoint,
+            conversationId: inputConvId,
+            agentApiBin: undefined,
+            agentApiExecutor
+          });
+          normalizedIdentity = {
+            ...rawIdentity,
+            conversation_id: resolved.conversation_id,
+            workspace_identity: resolved.workspace_identity,
+            repository_identity: resolved.repository_identity
+          };
+        } else {
+          normalizedIdentity = {
+            ...rawIdentity,
+            workspace_identity: rawIdentity.workspace_identity || rawIdentity.workspace,
+            repository_identity: rawIdentity.repository_identity || rawIdentity.repository
+          };
+        }
+
         const projectBefore = registry.getProject(bindingId);
         const oldIde = projectBefore?.binding?.ide_endpoints?.find(e => e.endpoint_id === body.target_endpoint);
-        const isIde = body.target_endpoint !== 'browser';
         const mgr = observationCoordinator?.workspaceHookManager;
         let newlySubscribed = false;
 
