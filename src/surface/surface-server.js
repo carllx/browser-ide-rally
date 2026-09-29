@@ -28,7 +28,14 @@ import { sendJson, sendHtml, parseBody } from './http-helpers.js';
  * @param {Function} [params.agentApiExecutor]
  * @param {object} [params.observationCoordinator]
  */
-export function createStatusSurfaceRequestHandler({ registry, browserAdapter = null, ideAdapters = null, agentApiExecutor = null, observationCoordinator = null }) {
+export function createStatusSurfaceRequestHandler({
+  registry,
+  browserAdapter = null,
+  ideAdapters = null,
+  agentApiBin = null,
+  agentApiExecutor = null,
+  observationCoordinator = null
+}) {
   if (!registry || typeof registry.listProjects !== 'function') {
     throw new Error('Valid ProjectRegistry instance is required for Status Surface Server');
   }
@@ -187,7 +194,9 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
   return sendJson(res, finalStage === 'BLOCKED' ? 409 : 400, {
     success: false,
     stage: finalStage,
-    reason: msg
+    reason: msg,
+    ...(err?.category ? { category: err.category } : {}),
+    ...(err?.details ? { details: err.details } : {})
   });
 }
 
@@ -214,8 +223,8 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
             bindingId,
             targetEndpoint: body.target_endpoint,
             conversationId: inputConvId,
-            agentApiBin: undefined,
-            agentApiExecutor
+            agentApiBin: agentApiBin || undefined,
+            agentApiExecutor: agentApiExecutor || undefined
           });
           normalizedIdentity = {
             ...rawIdentity,
@@ -478,8 +487,24 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
  * @param {string} [params.host='127.0.0.1']
  * @returns {Promise<{ server: http.Server, port: number, url: string, close: () => Promise<void> }>}
  */
-export function startStatusSurfaceServer({ registry, browserAdapter = null, ideAdapters = null, agentApiExecutor = null, observationCoordinator = null, port = 0, host = '127.0.0.1' }) {
-  const handler = createStatusSurfaceRequestHandler({ registry, browserAdapter, ideAdapters, agentApiExecutor, observationCoordinator });
+export function startStatusSurfaceServer({
+  registry,
+  browserAdapter = null,
+  ideAdapters = null,
+  agentApiBin = null,
+  agentApiExecutor = null,
+  observationCoordinator = null,
+  port = 0,
+  host = '127.0.0.1'
+}) {
+  const handler = createStatusSurfaceRequestHandler({
+    registry,
+    browserAdapter,
+    ideAdapters,
+    agentApiBin,
+    agentApiExecutor,
+    observationCoordinator
+  });
   const server = http.createServer(handler);
 
   return new Promise((resolve, reject) => {

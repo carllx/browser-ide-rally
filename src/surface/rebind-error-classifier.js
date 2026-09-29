@@ -60,8 +60,44 @@ export function classifyRebindError(rawReason = '', stage = 'BLOCKED') {
     };
   }
 
+  // 3b. 可执行文件丢失
+  if (reason.includes('executable not found at') || reason.includes('EXECUTABLE_NOT_FOUND')) {
+    return {
+      category: 'EXECUTABLE_NOT_FOUND',
+      title: '未找到 Antigravity CLI 执行程序 (agentapi)',
+      actionGuidance: '系统在配置路径下未检测到 agentapi 可执行程序。请检查 Antigravity 是否完整安装，或通过环境变量 AGENTAPI_BIN 指定正确的文件路径。',
+      highlightUnhandledCheckbox: false,
+      highlightUnknownCheckbox: false,
+      technicalDetail: reason
+    };
+  }
+
+  // 3c. 执行权限受阻
+  if (!reason.includes('WORKSPACE_HOOK_FAILED') && (reason.includes('permission denied') || reason.includes('PERMISSION_DENIED'))) {
+    return {
+      category: 'PERMISSION_DENIED',
+      title: 'Antigravity CLI 执行程序权限不足',
+      actionGuidance: 'agentapi 可执行程序缺少运行权限。请使用 chmod +x 赋予其可执行权限后重试。',
+      highlightUnhandledCheckbox: false,
+      highlightUnknownCheckbox: false,
+      technicalDetail: reason
+    };
+  }
+
+  // 3d. Provider CLI 命令异常（环境变量缺失、IPC 受阻等非会话不存在原因）
+  if (reason.includes('provider lookup failed') || reason.includes('PROVIDER_COMMAND_FAILED') || reason.includes('ANTIGRAVITY_LS_ADDRESS is not set')) {
+    return {
+      category: 'PROVIDER_COMMAND_FAILED',
+      title: 'Antigravity 宿主服务响应异常或未连接',
+      actionGuidance: '与本地 Antigravity 宿主进程通信失败。请确认 Antigravity 应用程序正在运行，且当前环境具备访问权限。已有绑定未受影响。',
+      highlightUnhandledCheckbox: false,
+      highlightUnknownCheckbox: false,
+      technicalDetail: reason
+    };
+  }
+
   // 4. 会话不存在或无法访问
-  if (reason.includes('not found or inaccessible')) {
+  if (reason.includes('not found or inaccessible') || reason.includes('CONVERSATION_NOT_FOUND')) {
     return {
       category: 'CONVERSATION_INACCESSIBLE',
       title: '未找到指定的 Antigravity 会话或会话无法访问',

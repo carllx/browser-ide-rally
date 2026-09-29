@@ -12,10 +12,72 @@
  * 4. 共享装配缝隙：生产 runner (scripts/start-surface.mjs) 与测试共享相同的装配入口。
  */
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createChatGPTBrowserAdapter } from './browser/chatgpt-browser-adapter.js';
 
-export const DEFAULT_AGENTAPI_BIN = '/Users/yamlam/.gemini/antigravity/bin/agentapi';
+/**
+ * 规范解析 Antigravity agentapi 路径
+ * 优先级: 显式参数 > 环境变量 (AGENTAPI_BIN / ANTIGRAVITY_AGENTAPI_EXE / ANTIGRAVITY_BIN) > 用户家目录路径
+ * @param {string} [configuredPath]
+ * @returns {string}
+ */
+export function resolveDefaultAgentApiBin(configuredPath = null) {
+  if (configuredPath && typeof configuredPath === 'string' && configuredPath.trim()) {
+    return configuredPath.trim();
+  }
+  if (process.env.AGENTAPI_BIN && process.env.AGENTAPI_BIN.trim()) {
+    return process.env.AGENTAPI_BIN.trim();
+  }
+  if (process.env.ANTIGRAVITY_BIN && process.env.ANTIGRAVITY_BIN.trim()) {
+    return process.env.ANTIGRAVITY_BIN.trim();
+  }
+  return path.join(os.homedir(), '.gemini', 'antigravity', 'bin', 'agentapi');
+}
+
+export const DEFAULT_AGENTAPI_BIN = resolveDefaultAgentApiBin();
+
+/**
+ * 当进程缺少 ANTIGRAVITY_LS_ADDRESS 时，安全轻量探查当前运行中的 Antigravity 宿主 IPC 环境
+ * 仅作只读发现，不修改当前主进程环境变量
+ * @returns {object|null}
+ */
+export function discoverAntigravityHostEnv() {
+  if (process.env.ANTIGRAVITY_LS_ADDRESS) {
+    return null;
+  }
+  try {
+    const psOut = execFileSync('ps', ['-ax', '-o', 'pid,command'], { encoding: 'utf8' });
+    let targetPid = null;
+    let csrfToken = null;
+    for (const line of psOut.split('\n')) {
+      if (line.includes('language_server') && line.includes('--csrf_token')) {
+        const parts = line.trim().split(/\s+/);
+        targetPid = parts[0];
+        const tokenMatch = line.match(/--csrf_token\s+([a-zA-Z0-9\-]+)/);
+        if (tokenMatch) csrfToken = tokenMatch[1];
+        break;
+      }
+    }
+    if (!targetPid) return null;
+    const lsofOut = execFileSync('lsof', ['-Pan', '-p', targetPid, '-iTCP', '-sTCP:LISTEN'], { encoding: 'utf8' });
+    const ports = [];
+    for (const m of lsofOut.matchAll(/127\.0\.0\.1:(\d+)/g)) {
+      ports.push(m[1]);
+    }
+    if (ports.length === 0) return null;
+    // 取列表最后一个端口（主语言服务监听端口）
+    const port = ports[ports.length - 1];
+    return {
+      ANTIGRAVITY_LS_ADDRESS: `localhost:${port}`,
+      ...(csrfToken ? { ANTIGRAVITY_CSRF_TOKEN: csrfToken } : {})
+    };
+  } catch {
+    return null;
+  }
+}
 
 /**
  * 规范化 URI/路径用于严格精确匹配
@@ -33,10 +95,12 @@ export function defaultSystemScriptExecutor(script) {
 }
 
 /**
- * 默认 Provider AgentAPI CLI 执行器
+ * 默认 Provider AgentAPI CLI 执行器（自动按需补充运行环境）
  */
 export function defaultAgentApiExecutor(binPath, args) {
-  return execFileSync(binPath, args, { encoding: 'utf8' }).trim();
+  const discovered = discoverAntigravityHostEnv();
+  const env = discovered ? { ...process.env, ...discovered } : process.env;
+  return execFileSync(binPath, args, { encoding: 'utf8', env }).trim();
 }
 
 /**
@@ -201,7 +265,7 @@ ${text}`;
 export function createProductionControlRuntime({
   registry,
   browserOptions = {},
-  agentApiBin = DEFAULT_AGENTAPI_BIN,
+  agentApiBin = null,
   agentApiExecutor = defaultAgentApiExecutor,
   scriptExecutor = defaultSystemScriptExecutor
 }) {
@@ -209,6 +273,8 @@ export function createProductionControlRuntime({
     throw new Error('Valid ProjectRegistry is required for production control runtime');
   }
 
+  const effectiveAgentApiBin = resolveDefaultAgentApiBin(agentApiBin);
+  const effectiveAgentApiExecutor = agentApiExecutor || defaultAgentApiExecutor;
   const browserAdapter = createChatGPTBrowserAdapter(browserOptions);
 
   // 动态 IDE 适配器解析器，支持任意已注册的 exact endpoint_id
@@ -221,8 +287,8 @@ export function createProductionControlRuntime({
             target.set(endpointId, new ProductionIdeControlAdapter({
               endpointId,
               registry,
-              agentApiBin,
-              agentApiExecutor,
+              agentApiBin: effectiveAgentApiBin,
+              agentApiExecutor: effectiveAgentApiExecutor,
               scriptExecutor
             }));
           }
@@ -234,8 +300,8 @@ export function createProductionControlRuntime({
           target.set(prop, new ProductionIdeControlAdapter({
             endpointId: prop,
             registry,
-            agentApiBin,
-            agentApiExecutor,
+            agentApiBin: effectiveAgentApiBin,
+            agentApiExecutor: effectiveAgentApiExecutor,
             scriptExecutor
           }));
         }
@@ -247,6 +313,8 @@ export function createProductionControlRuntime({
 
   return {
     browserAdapter,
-    ideAdapters
+    ideAdapters,
+    agentApiBin: effectiveAgentApiBin,
+    agentApiExecutor: effectiveAgentApiExecutor
   };
 }

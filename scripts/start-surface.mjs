@@ -220,7 +220,7 @@ async function main() {
     console.log(`[Rally] Started production surface with default storage at ${storagePath} (${registry.listProjects().length} projects)`);
   }
 
-  const { browserAdapter, ideAdapters } = buildProductionSurfaceRuntime({ registry });
+  const { browserAdapter, ideAdapters, agentApiBin, agentApiExecutor } = buildProductionSurfaceRuntime({ registry });
 
   // 仅在生产模式（非 --demo）下启动真实端点观察运行时，防止冲刷演示数据或向外部发起轮询
   let observationCoordinator = null;
@@ -236,6 +236,8 @@ async function main() {
     registry,
     browserAdapter,
     ideAdapters,
+    agentApiBin,
+    agentApiExecutor,
     observationCoordinator,
     port: options.port,
     host: '127.0.0.1'

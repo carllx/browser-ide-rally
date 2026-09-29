@@ -12,6 +12,7 @@
 import { parseCanonicalRepositoryIdentity } from './antigravity-adapter.js';
 import {
   DEFAULT_AGENTAPI_BIN,
+  resolveDefaultAgentApiBin,
   defaultAgentApiExecutor,
   normalizeIdentityUri
 } from '../production-runtime-controls.js';
@@ -48,7 +49,9 @@ export function assertIdeConversationUnique(registry, cleanIdeConvId, { excludeB
       }
       if (ep.conversation_id === cleanIdeConvId) {
         const projLabel = proj.binding?.display_name || proj.binding?.binding_id;
-        throw new Error(`Antigravity conversation "${cleanIdeConvId}" is already bound to project "${projLabel}".`);
+        const err = new Error(`Antigravity conversation "${cleanIdeConvId}" is already bound to project "${projLabel}".`);
+        err.category = 'CONVERSATION_ALREADY_BOUND';
+        throw err;
       }
     }
   }
@@ -64,24 +67,62 @@ export function assertIdeConversationUnique(registry, cleanIdeConvId, { excludeB
  */
 export function deriveAntigravityConversationIdentity({
   conversationId,
-  agentApiBin = DEFAULT_AGENTAPI_BIN,
+  agentApiBin = null,
   agentApiExecutor = defaultAgentApiExecutor
 }) {
   const cleanIdeConvId = sanitizeIdeConversationId(conversationId);
   if (!cleanIdeConvId) {
-    throw new Error('Antigravity conversation ID is required.');
+    const err = new Error('Antigravity conversation ID is required.');
+    err.category = 'INVALID_CONVERSATION_ID';
+    throw err;
   }
 
   const executor = agentApiExecutor || defaultAgentApiExecutor;
-  const bin = agentApiBin || DEFAULT_AGENTAPI_BIN;
+  const bin = resolveDefaultAgentApiBin(agentApiBin);
 
   let rawMeta;
   try {
     rawMeta = executor(bin, ['get-conversation-metadata', cleanIdeConvId]);
   } catch (err) {
-    const errorDetails = err.stderr ? err.stderr.toString().trim() : (err.stdout ? err.stdout.toString().trim() : (err.message || ''));
-    const error = new Error(`Antigravity conversation "${cleanIdeConvId}" not found or inaccessible. Please check the conversation ID and ensure Antigravity is running.`);
-    error.details = errorDetails;
+    const code = err.code;
+    const rawStderr = err.stderr ? err.stderr.toString().trim() : '';
+    const rawStdout = err.stdout ? err.stdout.toString().trim() : '';
+    const details = rawStderr || rawStdout || err.message || '';
+
+    // 1. 可执行文件缺失 (ENOENT)
+    if (code === 'ENOENT') {
+      const error = new Error(`Antigravity agentapi executable not found at "${bin}". Please check your installation or AGENTAPI_BIN environment variable.`);
+      error.category = 'EXECUTABLE_NOT_FOUND';
+      error.details = details;
+      throw error;
+    }
+
+    // 2. 执行权限受阻 (EACCES)
+    if (code === 'EACCES') {
+      const error = new Error(`Antigravity agentapi executable at "${bin}" permission denied.`);
+      error.category = 'PERMISSION_DENIED';
+      error.details = details;
+      throw error;
+    }
+
+    // 3. 仅当 provider 明确返回会话不存在证据时，才归类为 genuine not-found
+    const lower = details.toLowerCase();
+    const isExplicitNotFound = lower.includes('trajectory not found') ||
+                               lower.includes('not found: ' + cleanIdeConvId.toLowerCase()) ||
+                               lower.includes('conversation not found') ||
+                               (lower.includes('conversation') && lower.includes('not found')) ||
+                               lower.includes('unknown desc = trajectory not found');
+    if (isExplicitNotFound) {
+      const error = new Error(`Antigravity conversation "${cleanIdeConvId}" not found or inaccessible.`);
+      error.category = 'CONVERSATION_NOT_FOUND';
+      error.details = details;
+      throw error;
+    }
+
+    // 4. 其他 provider 命令行执行非零失败（例如缺少环境变量、IPC 通信失败等），严格保留真实错误细节
+    const error = new Error(`Antigravity provider lookup failed: ${details || err.message}`);
+    error.category = 'PROVIDER_COMMAND_FAILED';
+    error.details = details;
     throw error;
   }
 
@@ -89,12 +130,17 @@ export function deriveAntigravityConversationIdentity({
   try {
     meta = JSON.parse(rawMeta);
   } catch (e) {
-    throw new Error(`Failed to parse Antigravity metadata for conversation "${cleanIdeConvId}": ${e.message}`);
+    const error = new Error(`Failed to parse Antigravity metadata for conversation "${cleanIdeConvId}": ${e.message}`);
+    error.category = 'MALFORMED_OUTPUT';
+    error.details = rawMeta;
+    throw error;
   }
 
   const workspaces = meta?.response?.conversationMetadata?.metadata?.workspaces;
   if (!Array.isArray(workspaces) || workspaces.length === 0) {
-    throw new Error(`Antigravity conversation "${cleanIdeConvId}" has no configured workspaces.`);
+    const error = new Error(`Antigravity conversation "${cleanIdeConvId}" has no configured workspaces.`);
+    error.category = 'NO_WORKSPACES';
+    throw error;
   }
 
   const ws = workspaces[0];
@@ -104,7 +150,9 @@ export function deriveAntigravityConversationIdentity({
     '';
 
   if (!workspaceIdentity || !repositoryIdentity) {
-    throw new Error(`Antigravity conversation "${cleanIdeConvId}" workspace or repository identity could not be derived.`);
+    const error = new Error(`Antigravity conversation "${cleanIdeConvId}" workspace or repository identity could not be derived.`);
+    error.category = 'IDENTITY_DERIVATION_FAILED';
+    throw error;
   }
 
   return {
@@ -131,12 +179,14 @@ export function verifyAndResolveIdeRebindIdentity({
   bindingId,
   targetEndpoint,
   conversationId,
-  agentApiBin = DEFAULT_AGENTAPI_BIN,
+  agentApiBin = null,
   agentApiExecutor = defaultAgentApiExecutor
 }) {
   const cleanConvId = sanitizeIdeConversationId(conversationId);
   if (!cleanConvId) {
-    throw new Error('Antigravity conversation ID is required.');
+    const err = new Error('Antigravity conversation ID is required.');
+    err.category = 'INVALID_CONVERSATION_ID';
+    throw err;
   }
 
   // 1. 跨项目唯一性排查 (若已绑定到其他项目则明确拒绝，零变更)

@@ -89,7 +89,27 @@ describe('Rebind 错误确定性分类器单元测试 (#40)', () => {
     assert.match(res.actionGuidance, /自动刷新页面以同步最新版本/);
   });
 
-  it('10. 通用未知错误：提供安全兜底与技术详情展示', () => {
+  it('10. 可执行文件缺失、权限不足与 Provider 响应异常分类', () => {
+    // 可执行文件缺失
+    const resEnoent = classifyRebindError('Antigravity agentapi executable not found at "/opt/agentapi"');
+    assert.equal(resEnoent.category, 'EXECUTABLE_NOT_FOUND');
+    assert.match(resEnoent.title, /未找到 Antigravity CLI 执行程序/);
+    assert.match(resEnoent.actionGuidance, /AGENTAPI_BIN/);
+
+    // 权限受阻
+    const resPerm = classifyRebindError('Antigravity agentapi executable at "/opt/agentapi" permission denied.');
+    assert.equal(resPerm.category, 'PERMISSION_DENIED');
+    assert.match(resPerm.title, /执行程序权限不足/);
+    assert.match(resPerm.actionGuidance, /chmod \+x/);
+
+    // Provider 命令行异常（例如缺少 ANTIGRAVITY_LS_ADDRESS）
+    const resProvider = classifyRebindError('Antigravity provider lookup failed: {"error": "ANTIGRAVITY_LS_ADDRESS is not set"}');
+    assert.equal(resProvider.category, 'PROVIDER_COMMAND_FAILED');
+    assert.match(resProvider.title, /Antigravity 宿主服务响应异常或未连接/);
+    assert.match(resProvider.actionGuidance, /Antigravity 应用程序正在运行/);
+  });
+
+  it('11. 通用未知错误：提供安全兜底与技术详情展示', () => {
     const raw = 'Some totally unexpected upstream network glitch';
     const res = classifyRebindError(raw);
     assert.equal(res.category, 'GENERIC_BLOCKED');
