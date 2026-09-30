@@ -1,11 +1,12 @@
 /**
  * Endpoint Lifecycle — 端点生命周期变更与安全守卫模块
  * 
- * 领域不变式与守卫策略：
+ * 领域不变式与守卫策略 (#41):
  * 1. Lifecycle authority 唯一集中由 Core / Registry 编排；
- * 2. 移除与重绑处于 NEW 或 UNKNOWN 状态的端点时，必须显式确认；
- * 3. 确认标志绝不推进 last_handled_cursor，绝不伪装为 Mark handled；
- * 4. 禁止移除至 0 个 IDE 端点；
+ * 2. 端点轮换 (Rebind) 采用非破坏性代际归档，普通 Rebind 无需确认丢弃标志，
+ *    自动将原代际完整事实归档至 retired_generations，并以 Fail-Closed 启动新代际；
+ * 3. 严格禁止同目标伪造代际：若轮换目标与当前活跃端点身份完全一致，作为零变更 No-Op 处理；
+ * 4. 移除操作 (Remove) 依然维持严格保护守卫，禁止移除至 0 个 IDE 端点；
  * 5. 重绑仅重置被重绑端点事实为 UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION，未变端点毫发无损。
  */
 
@@ -116,7 +117,6 @@ export function executeRebindEndpoint({
 
   const currentFact = resolvedEndpoint.fact;
   const now = new Date().toISOString();
-  const nextBinding = bumpRevision(binding);
 
   if (resolvedEndpoint.role === 'browser') {
     if (!identity.conversation_id || typeof identity.conversation_id !== 'string' || !identity.conversation_id.trim()) {
@@ -124,7 +124,7 @@ export function executeRebindEndpoint({
     }
 
     const cleanConversationId = identity.conversation_id.trim();
-    const isSameConversation = cleanConversationId === binding.browser?.conversation_id;
+    const isSameConversation = cleanConversationId === binding.browser?.conversation_id?.trim();
     const rawBranch = identity.branch !== undefined ? identity.branch : identity.branch_name;
 
     let nextBranch = null;
@@ -141,6 +141,16 @@ export function executeRebindEndpoint({
       nextBranch = null;
     }
 
+    // 严格同目标检测：会话 ID 与分支均未变更时，作为零变更 No-Op
+    if (isSameConversation && (nextBranch ?? null) === (binding.browser?.branch ?? null)) {
+      return {
+        isSameTarget: true,
+        targetRole: 'browser',
+        targetId: 'browser'
+      };
+    }
+
+    const nextBinding = bumpRevision(binding);
     const oldRevision = currentFact.endpoint_revision || 1;
     const nextEpRev = oldRevision + 1;
 
@@ -202,11 +212,26 @@ export function executeRebindEndpoint({
     if (!identity.conversation_id || !identity.workspace_identity || !identity.repository_identity) {
       throw new Error('New ide identity requires conversation_id, workspace_identity, and repository_identity');
     }
-    const targetEpIndex = nextBinding.ide_endpoints.findIndex(e => e.endpoint_id === resolvedEndpoint.id);
+    const targetEpIndex = (binding.ide_endpoints || []).findIndex(e => e.endpoint_id === resolvedEndpoint.id);
     if (targetEpIndex === -1) {
       throw new Error(`Target IDE endpoint "${resolvedEndpoint.id}" not found in binding`);
     }
-    const oldEp = nextBinding.ide_endpoints[targetEpIndex];
+    const oldEp = binding.ide_endpoints[targetEpIndex];
+
+    // 严格同目标检测：IDE 会话 ID、工作区与仓库均未变更时，作为零变更 No-Op
+    const isSameIdeConv = identity.conversation_id.trim() === oldEp.conversation_id?.trim();
+    const isSameIdeWs = (identity.workspace_identity?.trim() || null) === (oldEp.workspace_identity?.trim() || null);
+    const isSameIdeRepo = (identity.repository_identity?.trim() || null) === (oldEp.repository_identity?.trim() || null);
+
+    if (isSameIdeConv && isSameIdeWs && isSameIdeRepo) {
+      return {
+        isSameTarget: true,
+        targetRole: 'ide',
+        targetId: resolvedEndpoint.id
+      };
+    }
+
+    const nextBinding = bumpRevision(binding);
     const oldEpRev = oldEp.endpoint_revision || 1;
     const nextEpRev = oldEpRev + 1;
 

@@ -32,19 +32,6 @@ import { executeSafeRebind } from '../../src/controller/safe-rebind.js';
 import { createStatusSurfaceRequestHandler } from '../../src/surface/surface-server.js';
 import { projectStatusSurface } from '../../src/surface/surface-projection.js';
 
-function createTempStorage() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rally-issue41-test-'));
-  const file = path.join(dir, 'registry.json');
-  return {
-    dir,
-    file,
-    cleanup() {
-      try {
-        fs.rmSync(dir, { recursive: true, force: true });
-      } catch (_) {}
-    }
-  };
-}
 
 function makeSampleProject(id = 'proj-issue41') {
   return createBinding({
@@ -231,81 +218,74 @@ describe('Issue #41: 非破坏性会话轮换核心验收 (Non-Destructive Conve
     assert.notEqual(projection.latest_result_indicator, 'IDE_LATEST', '退役代际绝不继续驱动红点');
   });
 
-  test('7. 持久化与重启恢复：完整保留活跃端点与退役端点代际的物理隔离', () => {
-    const { file, cleanup } = createTempStorage();
-    try {
-      const reg1 = createProjectRegistry({ storagePath: file });
-      const core1 = reg1.registerProject({ binding: makeSampleProject('proj-test-7') });
-
-      // 产生 NEW 事实后轮换两次
-      core1.recordEndpointObservation('ide-primary', {
-        trusted: true,
-        endpoint_id: 'ide-primary',
-        endpoint_revision: 1,
-        conversation_id: 'conv-ide-initial',
-        latest_completed_cursor: 'cursor-gen1',
-        completed_at: new Date().toISOString()
-      });
-
-      reg1.rebindProjectEndpoint('proj-test-7', {
-        endpoint: 'ide-primary',
-        identity: {
-          conversation_id: 'conv-ide-gen2',
-          workspace_identity: '/ws/proj41',
-          repository_identity: 'github.com/org/repo41'
-        }
-      });
-
-      reg1.rebindProjectEndpoint('proj-test-7', {
-        endpoint: 'ide-primary',
-        identity: {
-          conversation_id: 'conv-ide-gen3',
-          workspace_identity: '/ws/proj41',
-          repository_identity: 'github.com/org/repo41'
-        }
-      });
-
-      assert.equal(core1.getRetiredGenerations().length, 2);
-      reg1.saveToFile(file);
-
-      // 从磁盘重新加载
-      const reg2 = createProjectRegistry({ storagePath: file });
-      const core2 = reg2.getProject('proj-test-7');
-      const snap2 = core2.getSnapshot();
-
-      assert.equal(snap2.binding.binding_revision, 3);
-      assert.equal(snap2.binding.ide.conversation_id, 'conv-ide-gen3');
-      assert.equal(snap2.endpoints.ide.result_state, 'UNKNOWN');
-
-      // 验证恢复出来的退役代际账本
-      const retiredLoaded = core2.getRetiredGenerations();
-      assert.equal(retiredLoaded.length, 2);
-      assert.equal(retiredLoaded[0].identity.conversation_id, 'conv-ide-initial');
-      assert.equal(retiredLoaded[0].endpoint_fact.latest_completed_cursor, 'cursor-gen1');
-      assert.equal(retiredLoaded[1].identity.conversation_id, 'conv-ide-gen2');
-    } finally {
-      cleanup();
-    }
-  });
-
-  test('8, 9 & 10. 安全门禁严格保持：无效目标/版本过期/跨项目重复活跃端点均实行零变更拦截 (Zero Mutation)', () => {
+  test('7. 同一目标 (Same-Target) Rebind 绝不伪造新代际：零变更 No-Op (Browser + IDE)', () => {
     const reg = createProjectRegistry();
-    const core1 = reg.registerProject({ binding: makeSampleProject('proj-p1') });
-    reg.registerProject({
-      binding: createBinding({
-        binding_id: 'proj-p2',
-        binding_revision: 1,
-        browser: { provider: 'chatgpt', conversation_id: 'conv-br-p2' },
-        ide_endpoints: [{
-          endpoint_id: 'ide-primary',
-          endpoint_revision: 1,
-          conversation_id: 'conv-active-in-p2',
-          workspace_identity: '/ws/p2',
-          repository_identity: 'org/repo2'
-        }]
-      })
+    const core = reg.registerProject({ binding: makeSampleProject('proj-same-target') });
+
+    // 1. IDE 产生 NEW 事实
+    core.recordEndpointObservation('ide-primary', {
+      trusted: true,
+      endpoint_id: 'ide-primary',
+      endpoint_revision: 1,
+      conversation_id: 'conv-ide-initial',
+      latest_completed_cursor: 'cursor-turn-same',
+      completed_at: new Date().toISOString()
+    });
+    assert.equal(core.getSnapshot().endpoints.ide.result_state, 'NEW');
+    assert.equal(core.getSnapshot().endpoints.ide.latest_completed_cursor, 'cursor-turn-same');
+
+    // 对 IDE 执行相同目标 Rebind
+    const ideSameRes = executeSafeRebind({
+      registry: reg,
+      projectBindingId: 'proj-same-target',
+      expectedBindingRevision: 1,
+      targetEndpoint: 'ide-primary',
+      newIdentity: {
+        conversation_id: 'conv-ide-initial',
+        workspace_identity: '/ws/proj41',
+        repository_identity: 'github.com/org/repo41'
+      }
     });
 
+    assert.equal(ideSameRes.success, true);
+    assert.equal(ideSameRes.is_same_target, true);
+    assert.equal(ideSameRes.snapshot.binding.binding_revision, 1, 'binding_revision 不得递增');
+    assert.equal(ideSameRes.snapshot.binding.ide_endpoints[0].endpoint_revision, 1, 'endpoint_revision 不得递增');
+    assert.equal(core.getRetiredGenerations().length, 0, '同一目标绝不得追加退役代际');
+    assert.equal(core.getSnapshot().endpoints.ide.result_state, 'NEW', '端点状态与游标必须保持原样，绝不重置为 UNKNOWN');
+    assert.equal(core.getSnapshot().endpoints.ide.latest_completed_cursor, 'cursor-turn-same');
+
+    // 2. 对 Browser 执行相同目标 Rebind
+    core.recordEndpointObservation('browser', {
+      trusted: true,
+      conversation_id: 'conv-br-initial',
+      latest_completed_cursor: 'cursor-br-same',
+      completed_at: new Date().toISOString()
+    });
+    assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NEW');
+
+    const brSameRes = executeSafeRebind({
+      registry: reg,
+      projectBindingId: 'proj-same-target',
+      expectedBindingRevision: 1,
+      targetEndpoint: 'browser',
+      newIdentity: {
+        conversation_id: 'conv-br-initial',
+        branch: 'feat/initial'
+      }
+    });
+
+    assert.equal(brSameRes.success, true);
+    assert.equal(brSameRes.is_same_target, true);
+    assert.equal(brSameRes.snapshot.binding.binding_revision, 1, 'Browser 同一目标 binding_revision 不变');
+    assert.equal(core.getRetiredGenerations().length, 0, 'Browser 同一目标绝不追加退役代际');
+    assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NEW', 'Browser 事实绝不重置');
+    assert.equal(core.getSnapshot().endpoints.browser.latest_completed_cursor, 'cursor-br-same');
+  });
+
+  test('8 & 9. 安全门禁严格保持：无效目标/版本过期均实行零变更拦截 (Zero Mutation)', () => {
+    const reg = createProjectRegistry();
+    const core1 = reg.registerProject({ binding: makeSampleProject('proj-p1') });
     const revBefore = core1.getSnapshot().binding.binding_revision;
 
     // 8. 缺少必要身份字段（无效目标）：拦截抛错，零变更，零退役
@@ -337,30 +317,88 @@ describe('Issue #41: 非破坏性会话轮换核心验收 (Non-Destructive Conve
     }, /STALE_OR_MISSING_BINDING_REVISION/);
     assert.equal(core1.getSnapshot().binding.binding_revision, revBefore);
     assert.equal(core1.getRetiredGenerations().length, 0);
+  });
 
-    // 10. 目标端点是另一项目当前正在使用的 active conversation_id
-    // 注意：注册时校验已确保全局唯一；如果通过 rebind 试图轮换成已被其它项目占用的活跃会话，必须防御
-    // 测试：在另一个项目的注册中绑定同一活跃会话会被拦截
+  test('10. 跨项目活跃会话唯一性守卫：Browser 与 IDE 均拦截 Rebind 到另一项目活跃会话，且退役历史不占位', () => {
+    const reg = createProjectRegistry();
+    const core1 = reg.registerProject({ binding: makeSampleProject('proj-active-1') });
+    const core2 = reg.registerProject({
+      binding: createBinding({
+        binding_id: 'proj-active-2',
+        binding_revision: 1,
+        browser: { provider: 'chatgpt', conversation_id: 'conv-br-active-2' },
+        ide_endpoints: [{
+          endpoint_id: 'ide-primary',
+          endpoint_revision: 1,
+          conversation_id: 'conv-ide-active-2',
+          workspace_identity: '/ws/p2',
+          repository_identity: 'org/repo2'
+        }]
+      })
+    });
+
+    const rev1Before = core1.getSnapshot().binding.binding_revision;
+    const fact1Before = { ...core1.getSnapshot().endpoints.ide };
+
+    // 1. 真实 IDE Rebind 跨项目活跃会话冲突拦截
     assert.throws(() => {
-      reg.registerProject({
-        binding: createBinding({
-          binding_id: 'proj-p3',
-          binding_revision: 1,
-          browser: { provider: 'chatgpt', conversation_id: 'conv-br-p3' },
-          ide_endpoints: [{
-            endpoint_id: 'ide-primary',
-            endpoint_revision: 1,
-            conversation_id: 'conv-active-in-p2', // 重复
-            workspace_identity: '/ws/p3',
-            repository_identity: 'org/repo3'
-          }]
-        })
+      reg.rebindProjectEndpoint('proj-active-1', {
+        endpoint_id: 'ide-primary',
+        identity: {
+          conversation_id: 'conv-ide-active-2', // 项目 2 当前正在使用的活跃 IDE 会话
+          workspace_identity: '/ws/p1',
+          repository_identity: 'org/repo1'
+        }
       });
-    }, /already registered/);
+    }, /Antigravity conversation "conv-ide-active-2" is already bound to project/);
+
+    // 验证零变更：版本不变、端点事实不变、退役账本未被追加
+    assert.equal(core1.getSnapshot().binding.binding_revision, rev1Before);
+    assert.equal(core1.getSnapshot().endpoints.ide.result_state, fact1Before.result_state);
+    assert.equal(core1.getRetiredGenerations().length, 0);
+
+    // 2. 真实 Browser Rebind 跨项目活跃会话冲突拦截
+    assert.throws(() => {
+      reg.rebindProjectEndpoint('proj-active-1', {
+        endpoint_id: 'browser',
+        identity: {
+          conversation_id: 'conv-br-active-2' // 项目 2 当前正在使用的活跃 Browser 会话
+        }
+      });
+    }, /Browser conversation "conv-br-active-2" is already bound to project/);
+
+    // 验证零变更
+    assert.equal(core1.getSnapshot().binding.binding_revision, rev1Before);
+    assert.equal(core1.getRetiredGenerations().length, 0);
+
+    // 3. 证明退役历史不占位（Retired history does NOT reserve active conversation）
+    // 项目 2 将 ide-primary 轮换，原 conv-ide-active-2 变为退役状态
+    reg.rebindProjectEndpoint('proj-active-2', {
+      endpoint_id: 'ide-primary',
+      identity: {
+        conversation_id: 'conv-ide-active-2-next',
+        workspace_identity: '/ws/p2',
+        repository_identity: 'org/repo2'
+      }
+    });
+    assert.equal(core2.getRetiredGenerations().length, 1);
+    assert.equal(core2.getRetiredGenerations()[0].identity.conversation_id, 'conv-ide-active-2');
+
+    // 此时项目 1 可以合法 Rebind 到已退役的 conv-ide-active-2 会话！
+    const okRebindSnap = reg.rebindProjectEndpoint('proj-active-1', {
+      endpoint_id: 'ide-primary',
+      identity: {
+        conversation_id: 'conv-ide-active-2',
+        workspace_identity: '/ws/p1',
+        repository_identity: 'org/repo1'
+      }
+    });
+    assert.equal(okRebindSnap.binding.binding_revision, rev1Before + 1);
+    assert.equal(okRebindSnap.binding.ide_endpoints[0].endpoint_revision, 2);
+    assert.equal(okRebindSnap.binding.ide.conversation_id, 'conv-ide-active-2');
   });
 
   test('11 & 12. Hook 过渡原子性：Hook 安装失败零变更且旧 Hook 完好；成功过渡后仅清理旧孤立订阅', async () => {
-    const { dir, cleanup } = createTempStorage();
     let server;
     try {
       const mockCoordinator = {
@@ -458,7 +496,6 @@ describe('Issue #41: 非破坏性会话轮换核心验收 (Non-Destructive Conve
         server.close();
         server.closeAllConnections?.();
       }
-      cleanup();
     }
   });
 

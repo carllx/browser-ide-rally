@@ -1,12 +1,14 @@
 /**
  * 安全端点重绑定控制原语 (Safe Rebind Primitive)
  * 
- * 核心设计准则 (#14, #18, #21):
- * 1. 严格版本核验：必须携带 expected_binding_revision；
+ * 核心设计准则 (#14, #18, #21, #41):
+ * 1. 严格版本核验：必须携带 expected_binding_revision，防止并发竞态覆盖；
  * 2. 泛化阻断：严禁泛化 "bound_ide"，必须指定 exact target_endpoint；
- * 3. 未处理守卫：目标端点若有 unhandled NEW 或 UNKNOWN 结果，默认拒绝替换，
- *    仅在显式 allow_discard_unhandled: true 时允许覆盖；
- * 4. 事实生命周期：REQUESTED -> SUBMITTED_LOCALLY -> TARGET_COMPLETED。
+ * 3. 非破坏性会话轮换 (#41)：普通 Rebind 不再阻断于 NEW/UNKNOWN 状态，
+ *    自动将原代际事实归档至 retired_generations 并以 Fail-Closed 启动新代际；
+ *    历史 discard/confirmation 选项仅保留用于内部兼容，语义上不再作为安全授权；
+ * 4. 同目标零变更守卫：若新身份与当前活跃端点完全一致，作为零变更 No-Op 执行；
+ * 5. 事实生命周期：REQUESTED -> SUBMITTED_LOCALLY -> TARGET_COMPLETED / BLOCKED。
  */
 
 import {
@@ -30,6 +32,7 @@ export function executeSafeRebind(params) {
     options = {}
   } = params;
 
+  // 遗留兼容字段（仅向后兼容传参，普通 Rebind 语义上不再用于拦截）
   const allowReplaceNew = Boolean(
     options.allow_discard_unhandled ||
     options.allow_replace_unhandled ||
@@ -132,15 +135,21 @@ export function executeSafeRebind(params) {
       ...options
     });
 
+    const isSameTarget = updatedSnapshot.binding.binding_revision === expected_binding_revision;
+    const evidence = isSameTarget
+      ? `Endpoint "${target_endpoint}" already bound to exact target identity (same-target no-op)`
+      : `Endpoint "${target_endpoint}" successfully rebound to revision ${updatedSnapshot.binding.binding_revision}`;
+
     core.advanceActionStage(action.action_id, {
       next_stage: 'TARGET_COMPLETED',
-      evidence: `Endpoint "${target_endpoint}" successfully rebound to revision ${updatedSnapshot.binding.binding_revision}`
+      evidence
     });
 
     return {
       success: true,
       action,
-      snapshot: updatedSnapshot
+      snapshot: updatedSnapshot,
+      is_same_target: isSameTarget
     };
   } catch (err) {
     core.advanceActionStage(action.action_id, {

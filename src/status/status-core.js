@@ -280,6 +280,11 @@ export class ProjectStatusCore {
       options: rebindParams
     });
 
+    // 严格同目标检测：零变更返回当前快照（不产生新代际、不归档、不重置端点状态）
+    if (res.isSameTarget) {
+      return this.getSnapshot();
+    }
+
     this._binding = res.nextBinding;
     if (res.retiredGeneration) {
       this._retiredGenerations.recordRetirement(res.retiredGeneration);

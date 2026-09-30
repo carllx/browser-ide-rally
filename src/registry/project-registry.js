@@ -14,8 +14,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { validateBinding } from '../controller/binding.js';
 import { createProjectStatusCore } from '../status/status-core.js';
+import { normalizeRetiredGeneration } from '../status/retired-generations.js';
 
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 export const DETERMINISTIC_MIGRATED_IDE_ID = 'ide-default';
 
 export function createProjectRegistry({ storagePath = null } = {}) {
@@ -113,8 +114,53 @@ export class ProjectRegistry {
     return Array.from(this._projects.values()).map(core => core.getSnapshot());
   }
 
+  /**
+   * 跨项目活跃端点会话唯一性校验（严格区分 role/provider，排除当前项目本身；退役历史不占位）
+   * @param {object} params
+   * @param {string} params.projectBindingId
+   * @param {'browser'|'ide'} params.role
+   * @param {string} params.conversationId
+   */
+  assertActiveConversationUnique({ projectBindingId, role, conversationId }) {
+    if (!conversationId || typeof conversationId !== 'string') return;
+    const cleanConvId = conversationId.trim();
+    if (!cleanConvId) return;
+
+    for (const [existingId, existingCore] of this._projects.entries()) {
+      if (existingId === projectBindingId) continue;
+      const existingBinding = existingCore.getBinding();
+      const otherName = existingBinding.display_name || existingId;
+
+      if (role === 'browser') {
+        const existingBrowserConv = existingBinding.browser?.conversation_id?.trim();
+        if (existingBrowserConv && existingBrowserConv === cleanConvId) {
+          throw new Error(`Browser conversation "${cleanConvId}" is already bound to project "${otherName}".`);
+        }
+      } else if (role === 'ide') {
+        for (const ep of existingBinding.ide_endpoints || []) {
+          const existingIdeConv = ep.conversation_id?.trim();
+          if (existingIdeConv && existingIdeConv === cleanConvId) {
+            throw new Error(`Antigravity conversation "${cleanConvId}" is already bound to project "${otherName}".`);
+          }
+        }
+      }
+    }
+  }
+
   rebindProjectEndpoint(bindingId, rebindOptions) {
     const core = this.getProject(bindingId);
+    const targetEndpoint = rebindOptions.endpoint_id || rebindOptions.target_endpoint;
+    const role = targetEndpoint === 'browser' ? 'browser' : 'ide';
+    const conversationId = rebindOptions.identity?.conversation_id;
+
+    if (conversationId) {
+      this.assertActiveConversationUnique({
+        projectBindingId: bindingId,
+        role,
+        conversationId
+      });
+    }
+
     const snapshot = core.rebindEndpoint(rebindOptions);
     if (this._storagePath) {
       this.saveToFile(this._storagePath);
@@ -255,10 +301,12 @@ export class ProjectRegistry {
       throw new Error(`Corrupt durable registry storage: ${err.message}`);
     }
 
-    if (!parsed || (parsed.schema_version !== 1 && parsed.schema_version !== CURRENT_SCHEMA_VERSION)) {
-      throw new Error(
-        `Unsupported registry storage schema_version: expected ${CURRENT_SCHEMA_VERSION} or 1, got ${parsed?.schema_version}`
+    if (!parsed || (parsed.schema_version !== 1 && parsed.schema_version !== 2 && parsed.schema_version !== CURRENT_SCHEMA_VERSION)) {
+      const err = new Error(
+        `UNSUPPORTED_SCHEMA_VERSION: Unsupported registry storage schema_version: expected ${CURRENT_SCHEMA_VERSION}, 2, or 1, got ${parsed?.schema_version}`
       );
+      err.code = 'UNSUPPORTED_SCHEMA_VERSION';
+      throw err;
     }
 
     const isV1Migration = parsed.schema_version === 1;
@@ -291,15 +339,19 @@ export class ProjectRegistry {
         throw new Error(`Corrupt endpoints ledger for binding_id "${bindingId}"`);
       }
 
-      if (projData.retired_generations !== undefined && projData.retired_generations !== null && !Array.isArray(projData.retired_generations)) {
-        throw new Error(`Corrupt retired_generations ledger for binding_id "${bindingId}"`);
+      // 严格校验退役代际账本（Fail-Closed，不容许任何畸形或损坏条目）
+      let retiredGenerationsToLoad = [];
+      if (projData.retired_generations !== undefined && projData.retired_generations !== null) {
+        if (!Array.isArray(projData.retired_generations)) {
+          throw new Error(`Corrupt retired_generations ledger for binding_id "${bindingId}"`);
+        }
+        for (const item of projData.retired_generations) {
+          retiredGenerationsToLoad.push(normalizeRetiredGeneration(item));
+        }
       }
 
       let bindingToLoad = projData.binding;
       let endpointsToLoad = projData.endpoints || {};
-      const retiredGenerationsToLoad = Array.isArray(projData.retired_generations)
-        ? projData.retired_generations
-        : [];
 
       // 若为 v1 数据，执行确定性单槽位迁移
       if (isV1Migration) {

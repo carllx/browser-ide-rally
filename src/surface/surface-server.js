@@ -290,7 +290,8 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
           success: true,
           action_id: result.action?.action_id,
           stage: result.action?.stage || 'TARGET_COMPLETED',
-          new_binding_revision: result.snapshot?.binding?.binding_revision
+          new_binding_revision: result.snapshot?.binding?.binding_revision,
+          is_same_target: Boolean(result.is_same_target)
         });
       } catch (err) {
         return handleControlError(res, err);

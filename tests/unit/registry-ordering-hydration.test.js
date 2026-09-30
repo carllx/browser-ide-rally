@@ -64,7 +64,7 @@ test('[Registry Ordering Hydration] 1. 真实落盘与恢复完整保留 orderin
 
     // 重新从磁盘加载
     const reg2 = createProjectRegistry({ storagePath: file });
-    assert.equal(CURRENT_SCHEMA_VERSION, 2, 'Must remain schema-v2 without bumping');
+    assert.equal(CURRENT_SCHEMA_VERSION, 3, 'Must be schema-v3');
 
     const p1Recovered = reg2.getProject('proj-hydration-1');
     assert.ok(p1Recovered, 'Project must be recovered');
@@ -107,7 +107,8 @@ test('[Registry Ordering Hydration] 2. 兼容旧版本 schema-v2 数据（缺失
 
     // 模拟旧版 schema-v2 数据：读取落盘文件并剥离 ordering_evidence 字段
     const rawData = JSON.parse(fs.readFileSync(file, 'utf8'));
-    assert.equal(rawData.schema_version, 2);
+    assert.equal(rawData.schema_version, 3);
+    rawData.schema_version = 2;
     for (const projKey of Object.keys(rawData.projects)) {
       delete rawData.projects[projKey].ordering_evidence;
     }
@@ -115,7 +116,7 @@ test('[Registry Ordering Hydration] 2. 兼容旧版本 schema-v2 数据（缺失
 
     // 重新从磁盘加载剥离了 ordering_evidence 的旧版数据
     const reg2 = createProjectRegistry({ storagePath: file });
-    assert.equal(CURRENT_SCHEMA_VERSION, 2);
+    assert.equal(CURRENT_SCHEMA_VERSION, 3);
 
     const proj = reg2.getProject('proj-legacy');
     assert.ok(proj);

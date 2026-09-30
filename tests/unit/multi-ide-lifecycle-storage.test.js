@@ -103,7 +103,7 @@ test('[Multi-IDE Storage] 1. 重启独立恢复两个 IDE 的 handled 游标，�
   }
 });
 
-test('[Multi-IDE Storage] 2. v1 durable single-IDE storage 确定性迁移至 schema v2', () => {
+test('[Multi-IDE Storage] 2. v1 durable single-IDE storage 确定性迁移至 schema v3', () => {
   const { file, cleanup } = createTempStoragePath();
   try {
     const v1Data = {
@@ -505,16 +505,14 @@ test('[Multi-IDE Lifecycle] 9. A only -> add B -> remove B -> Adapter A 旧 bind
     assert.equal(snap.endpoints.ide_endpoints['ide-a'].result_state, 'NEW');
     assert.equal(snap.endpoints.ide_endpoints['ide-a'].latest_completed_cursor, factA.latest_completed_cursor);
 
-    // 6b. 重绑 ide-a 导致其 endpoint_revision 递增为 2，此时端点 A 处于 clean UNKNOWN 状态
+    // 6b. 重绑 ide-a 到新会话导致其 endpoint_revision 递增为 2，此时端点 A 处于 clean UNKNOWN 状态
     core.rebindEndpoint({
       endpoint_id: 'ide-a',
       identity: {
-        conversation_id: 'conv-ide-a',
+        conversation_id: 'conv-ide-a-rotated',
         workspace_identity: '/Users/yamlam/Documents/GitHub/browser-ide-rally',
         repository_identity: 'carllx/browser-ide-rally'
-      },
-      confirm_replace_unhandled_new: true,
-      confirm_replace_unknown: true
+      }
     });
     snap = core.getSnapshot();
     const boundEpAfterRebind = snap.binding.ide_endpoints.find(e => e.endpoint_id === 'ide-a');
