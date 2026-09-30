@@ -162,24 +162,13 @@ export const SURFACE_CLIENT_JS = `
                       '</div>';
       }
 
-      let initialAlert = '';
-      if (curState === 'NEW') {
-        initialAlert = '<div id="m-error-alert" style="background:#fff8c5;border:1px solid #d4a72c;color:#7d4e00;border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:12px;">' +
-                       '<strong>提示：</strong>目标端点当前存在未处理的 NEW 事实。若要替换该端点，需勾选下方的【强制替换未处理 NEW 事实】。</div>';
-      } else if (curState === 'UNKNOWN') {
-        initialAlert = '<div id="m-error-alert" style="background:#fff8c5;border:1px solid #d4a72c;color:#7d4e00;border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:12px;">' +
-                       '<strong>提示：</strong>目标端点当前处于 UNKNOWN 状态。若要替换该端点，需勾选下方的【确认替换处于 UNKNOWN 的端点】。</div>';
-      } else {
-        initialAlert = '<div id="m-error-alert" style="display:none;background:#ffebe9;border:1px solid #ff8182;color:#cf222e;border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:12px;"></div>';
-      }
+      const initialAlert = '<div id="m-error-alert" style="display:none;background:#ffebe9;border:1px solid #ff8182;color:#cf222e;border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:12px;"></div>';
 
       modalBody.innerHTML = 
         initialAlert +
         '<div class="form-group"><label>目标端点:</label><input type="text" class="form-control" value="' + endpointId + '" disabled /></div>' +
         '<div class="form-group"><label>新会话 ID (Conversation ID):</label><input type="text" id="m-conv-id" class="form-control" value="' + escapeText(curConv || '') + '" placeholder="必填会话 ID" /></div>' +
-        extraFields +
-        '<div class="form-group" id="m-group-unhandled"><label><input type="checkbox" id="m-allow-unhandled" /> 强制替换未处理 NEW 事实</label></div>' +
-        '<div class="form-group" id="m-group-unknown"><label><input type="checkbox" id="m-allow-unknown" /> 确认替换处于 UNKNOWN 的端点</label></div>';
+        extraFields;
 
       currentModalAction = async function() {
         const convId = (document.getElementById('m-conv-id')?.value || '').trim();
@@ -193,9 +182,6 @@ export const SURFACE_CLIENT_JS = `
           newIdentity.branch = branchInput && branchInput.value.trim() ? branchInput.value.trim() : null;
         }
 
-        const allowUnhandled = !!document.getElementById('m-allow-unhandled')?.checked;
-        const allowUnknown = !!document.getElementById('m-allow-unknown')?.checked;
-
         modalSubmit.disabled = true;
         modalSubmit.textContent = '提交中...';
 
@@ -206,9 +192,7 @@ export const SURFACE_CLIENT_JS = `
             body: JSON.stringify({
               expected_binding_revision: bindingRev,
               target_endpoint: endpointId,
-              new_identity: newIdentity,
-              allow_replace_unhandled: allowUnhandled,
-              allow_replace_unknown: allowUnknown
+              new_identity: newIdentity
             })
           });
           const result = await resp.json();
@@ -226,15 +210,6 @@ export const SURFACE_CLIENT_JS = `
               alertBox.style.background = '#ffebe9';
               alertBox.style.borderColor = '#ff8182';
               alertBox.style.color = '#cf222e';
-
-              const unhandledGroup = document.getElementById('m-group-unhandled');
-              if (unhandledGroup) {
-                unhandledGroup.style.outline = classified.highlightUnhandledCheckbox ? '2px solid #cf222e' : 'none';
-              }
-              const unknownGroup = document.getElementById('m-group-unknown');
-              if (unknownGroup) {
-                unknownGroup.style.outline = classified.highlightUnknownCheckbox ? '2px solid #cf222e' : 'none';
-              }
 
               let techDetailHtml = '';
               if (classified.technicalDetail) {

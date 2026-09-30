@@ -24,26 +24,26 @@
 export function classifyRebindError(rawReason = '', stage = 'BLOCKED') {
   const reason = String(rawReason || '').trim();
 
-  // 1. 未处理 NEW 事实守卫阻断
+  // 1. 未处理 NEW 事实守卫阻断（历史/非标准场景）
   if (reason.includes('unhandled NEW result') || reason.includes('unhandled NEW')) {
     return {
       category: 'UNHANDLED_NEW',
       title: '目标端点存在未标记处理的 NEW 结果',
-      actionGuidance: '安全守卫已默认阻断替换。若确认放弃并覆盖此未处理结果，请勾选下方的【强制替换未处理 NEW 事实】后重试。',
-      highlightUnhandledCheckbox: true,
+      actionGuidance: '当前系统已实行非破坏性代际归档。若遇到阻断，请刷新后重试。',
+      highlightUnhandledCheckbox: false,
       highlightUnknownCheckbox: false,
       technicalDetail: reason
     };
   }
 
-  // 2. 处于 UNKNOWN 状态守卫阻断
+  // 2. 处于 UNKNOWN 状态守卫阻断（历史/非标准场景）
   if (reason.includes('UNKNOWN result') || reason.includes('UNKNOWN state') || (reason.includes('UNKNOWN') && reason.includes('confirmation'))) {
     return {
       category: 'UNHANDLED_UNKNOWN',
       title: '目标端点当前处于 UNKNOWN 状态',
-      actionGuidance: '安全守卫已默认阻断替换。若确认要替换处于未知状态的端点，请勾选下方的【确认替换处于 UNKNOWN 的端点】后重试。',
+      actionGuidance: '当前系统已实行非破坏性代际归档。若遇到阻断，请刷新后重试。',
       highlightUnhandledCheckbox: false,
-      highlightUnknownCheckbox: true,
+      highlightUnknownCheckbox: false,
       technicalDetail: reason
     };
   }

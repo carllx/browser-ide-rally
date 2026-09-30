@@ -306,27 +306,25 @@ describe('Live Surface Refresh 实时刷新集成测试', () => {
 
     const currentBindingRev = core.getSnapshot().binding.binding_revision;
 
-    // 故意提交一个未显式确认替换 UNKNOWN 的 Rebind 请求 -> 触发服务端安全阻断 (BLOCKED 409)
+    // 故意提交一个版本失配的 Rebind 请求 -> 触发服务端安全阻断 (BLOCKED 409)
     const blockedRes = await fetch(`${baseUrl}/api/projects/proj-live-test/controls/rebind`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        expected_binding_revision: currentBindingRev,
+        expected_binding_revision: 999,
         target_endpoint: 'ide-primary',
         new_identity: {
           conversation_id: 'conv-blocked-attempt',
           workspace_identity: '/ws/blocked',
           repository_identity: 'github.com/org/blocked'
-        },
-        allow_replace_unhandled: false,
-        allow_replace_unknown: false
+        }
       })
     });
     assert.equal(blockedRes.status, 409);
     const blockedData = await blockedRes.json();
     assert.equal(blockedData.success, false);
     assert.equal(blockedData.stage, 'BLOCKED');
-    assert.match(blockedData.reason, /Cannot replace ide-primary endpoint with unhandled UNKNOWN result/);
+    assert.match(blockedData.reason, /STALE_OR_MISSING_BINDING_REVISION/);
 
     // 客户端平滑拉取最新 /api/projects
     const { projects } = await (await fetch(`${baseUrl}/api/projects`)).json();
@@ -339,7 +337,7 @@ describe('Live Surface Refresh 实时刷新集成测试', () => {
     assert.ok(blockedRow, '应存在 stage-row-BLOCKED 表格行');
     assert.match(blockedRow.textContent, /rebind/);
     assert.match(blockedRow.textContent, /BLOCKED/);
-    assert.match(blockedRow.textContent, /Cannot replace ide-primary endpoint with unhandled UNKNOWN result/);
+    assert.match(blockedRow.textContent, /stale_or_missing_binding_revision/i);
   });
 
   it('7. [Issue #37] 结构拓扑变更（如动态 onboarding 新项目）时拒绝增量假同步，并触发受控全页重载', async () => {

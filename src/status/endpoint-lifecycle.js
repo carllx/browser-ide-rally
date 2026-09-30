@@ -114,33 +114,7 @@ export function executeRebindEndpoint({
     throw new Error('New endpoint identity must be a valid object');
   }
 
-  const {
-    allow_discard_unhandled = false,
-    confirm_replace_unhandled_new = false,
-    confirm_replace_unknown = false,
-    allow_replace_unknown = false,
-    confirm_replace = false
-  } = options;
-
   const currentFact = resolvedEndpoint.fact;
-  const currentDerivedState = deriveEndpointResult(currentFact);
-
-  if (currentDerivedState === 'NEW') {
-    const confirmed = allow_discard_unhandled || confirm_replace_unhandled_new || confirm_replace;
-    if (!confirmed) {
-      throw new Error(
-        `Cannot replace ${resolvedEndpoint.id} endpoint with unhandled NEW result without explicit confirmation (allow_discard_unhandled: true).`
-      );
-    }
-  } else if (currentDerivedState === 'UNKNOWN') {
-    const confirmed = allow_discard_unhandled || confirm_replace_unknown || allow_replace_unknown || confirm_replace;
-    if (!confirmed) {
-      throw new Error(
-        `Cannot replace ${resolvedEndpoint.id} endpoint in UNKNOWN state without explicit confirmation (allow_discard_unhandled: true or confirm_replace_unknown: true).`
-      );
-    }
-  }
-
   const now = new Date().toISOString();
   const nextBinding = bumpRevision(binding);
 
@@ -167,6 +141,30 @@ export function executeRebindEndpoint({
       nextBranch = null;
     }
 
+    const oldRevision = currentFact.endpoint_revision || 1;
+    const nextEpRev = oldRevision + 1;
+
+    const retiredGeneration = {
+      role: 'browser',
+      endpoint_id: 'browser',
+      endpoint_revision: oldRevision,
+      retired_at: now,
+      reason: 'conversation_rotation',
+      identity: {
+        provider: binding.browser?.provider || null,
+        conversation_id: binding.browser?.conversation_id || null,
+        branch: binding.browser?.branch || null
+      },
+      endpoint_fact: {
+        ...currentFact,
+        endpoint_revision: oldRevision,
+        latest_completed_result: currentFact.latest_completed_result
+          ? { ...currentFact.latest_completed_result }
+          : null,
+        continuity: { ...currentFact.continuity }
+      }
+    };
+
     nextBinding.browser = {
       provider: identity.provider || binding.browser?.provider || 'chatgpt',
       conversation_id: cleanConversationId,
@@ -181,7 +179,7 @@ export function executeRebindEndpoint({
     const newBrowserFact = {
       endpoint: 'browser',
       role: 'browser',
-      endpoint_revision: 1,
+      endpoint_revision: nextEpRev,
       latest_completed_cursor: null,
       last_handled_cursor: null,
       completed_at: null,
@@ -192,7 +190,14 @@ export function executeRebindEndpoint({
       },
       updated_at: now
     };
-    return { nextBinding, newBrowserFact, targetRole: 'browser', now };
+    return {
+      nextBinding,
+      newBrowserFact,
+      targetRole: 'browser',
+      targetId: 'browser',
+      retiredGeneration,
+      now
+    };
   } else {
     if (!identity.conversation_id || !identity.workspace_identity || !identity.repository_identity) {
       throw new Error('New ide identity requires conversation_id, workspace_identity, and repository_identity');
@@ -202,7 +207,29 @@ export function executeRebindEndpoint({
       throw new Error(`Target IDE endpoint "${resolvedEndpoint.id}" not found in binding`);
     }
     const oldEp = nextBinding.ide_endpoints[targetEpIndex];
-    const nextEpRev = (oldEp.endpoint_revision || 1) + 1;
+    const oldEpRev = oldEp.endpoint_revision || 1;
+    const nextEpRev = oldEpRev + 1;
+
+    const retiredGeneration = {
+      role: 'ide',
+      endpoint_id: resolvedEndpoint.id,
+      endpoint_revision: oldEpRev,
+      retired_at: now,
+      reason: 'conversation_rotation',
+      identity: {
+        conversation_id: oldEp.conversation_id || null,
+        workspace_identity: oldEp.workspace_identity || null,
+        repository_identity: oldEp.repository_identity || null
+      },
+      endpoint_fact: {
+        ...currentFact,
+        endpoint_revision: oldEpRev,
+        latest_completed_result: currentFact.latest_completed_result
+          ? { ...currentFact.latest_completed_result }
+          : null,
+        continuity: { ...currentFact.continuity }
+      }
+    };
 
     nextBinding.ide_endpoints[targetEpIndex] = {
       endpoint_id: resolvedEndpoint.id,
@@ -232,6 +259,13 @@ export function executeRebindEndpoint({
       updated_at: now
     };
 
-    return { nextBinding, targetId: resolvedEndpoint.id, newIdeFact, targetRole: 'ide', now };
+    return {
+      nextBinding,
+      targetId: resolvedEndpoint.id,
+      newIdeFact,
+      targetRole: 'ide',
+      retiredGeneration,
+      now
+    };
   }
 }

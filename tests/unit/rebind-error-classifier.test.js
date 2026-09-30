@@ -8,25 +8,25 @@ import assert from 'node:assert/strict';
 import { classifyRebindError } from '../../src/surface/rebind-error-classifier.js';
 
 describe('Rebind 错误确定性分类器单元测试 (#40)', () => {
-  it('1. 未处理 NEW 事实：映射为清晰中文标题、显式指引并高亮 unhandled 复选框', () => {
+  it('1. 未处理 NEW 事实：映射为清晰中文标题与非破坏性代际归档指引', () => {
     const raw = 'Cannot replace ide-primary endpoint with unhandled NEW result without explicit confirmation';
     const res = classifyRebindError(raw);
     assert.equal(res.category, 'UNHANDLED_NEW');
     assert.equal(res.title, '目标端点存在未标记处理的 NEW 结果');
-    assert.match(res.actionGuidance, /强制替换未处理 NEW 事实/);
-    assert.equal(res.highlightUnhandledCheckbox, true);
+    assert.match(res.actionGuidance, /非破坏性代际归档/);
+    assert.equal(res.highlightUnhandledCheckbox, false);
     assert.equal(res.highlightUnknownCheckbox, false);
     assert.equal(res.technicalDetail, raw);
   });
 
-  it('2. UNKNOWN 状态：映射为清晰中文标题、显式指引并高亮 unknown 复选框', () => {
+  it('2. UNKNOWN 状态：映射为清晰中文标题与非破坏性代际归档指引', () => {
     const raw = 'Cannot replace ide-primary endpoint in UNKNOWN state without explicit confirmation';
     const res = classifyRebindError(raw);
     assert.equal(res.category, 'UNHANDLED_UNKNOWN');
     assert.equal(res.title, '目标端点当前处于 UNKNOWN 状态');
-    assert.match(res.actionGuidance, /确认替换处于 UNKNOWN 的端点/);
+    assert.match(res.actionGuidance, /非破坏性代际归档/);
     assert.equal(res.highlightUnhandledCheckbox, false);
-    assert.equal(res.highlightUnknownCheckbox, true);
+    assert.equal(res.highlightUnknownCheckbox, false);
   });
 
   it('3. 会话缺失：映射为清晰中文指引', () => {

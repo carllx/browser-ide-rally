@@ -280,7 +280,7 @@ describe('IDE Rebind 自动派生身份集成测试 (#40)', () => {
     assert.equal(revAfter, revBefore);
   });
 
-  it('4. outgoing 端点处于未处理 NEW 状态时：默认 BLOCKED，显式确认后方可替换', async () => {
+  it('4. outgoing 端点处于未处理 NEW 状态时：普通轮换无需确认标志直接成功并归档旧事实 (#41)', async () => {
     // 制造未处理的 NEW 结果
     coreProj1.recordEndpointObservation('ide-primary', {
       trusted: true,
@@ -296,33 +296,14 @@ describe('IDE Rebind 自动派生身份集成测试 (#40)', () => {
 
     const revBefore = coreProj1.getSnapshot().binding.binding_revision;
 
-    // 1. 未显式确认替换未处理 NEW：默认必须拒绝并阻断 (409 BLOCKED)
-    const blockedResp = await fetch(`${baseUrl}/api/projects/proj-rebind-1/controls/rebind`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        expected_binding_revision: revBefore,
-        target_endpoint: 'ide-primary',
-        new_identity: { conversation_id: 'conv-ide-other-repo' },
-        allow_replace_unhandled: false
-      })
-    });
-
-    const blockedResult = await blockedResp.json();
-    assert.equal(blockedResp.status, 409);
-    assert.equal(blockedResult.stage, 'BLOCKED');
-    assert.match(blockedResult.reason, /unhandled NEW result/);
-    assert.equal(coreProj1.getSnapshot().binding.binding_revision, revBefore, '阻断时版本不得增加');
-
-    // 2. 携带 allow_replace_unhandled: true 显式确认：重绑成功
+    // 普通轮换：无需任何 allow_replace_unhandled 标志，直接成功
     const successResp = await fetch(`${baseUrl}/api/projects/proj-rebind-1/controls/rebind`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         expected_binding_revision: revBefore,
         target_endpoint: 'ide-primary',
-        new_identity: { conversation_id: 'conv-ide-other-repo' },
-        allow_replace_unhandled: true
+        new_identity: { conversation_id: 'conv-ide-other-repo' }
       })
     });
 
@@ -333,6 +314,14 @@ describe('IDE Rebind 自动派生身份集成测试 (#40)', () => {
 
     const ideEp = coreProj1.getSnapshot().binding.ide_endpoints.find(e => e.endpoint_id === 'ide-primary');
     assert.equal(ideEp.conversation_id, 'conv-ide-other-repo');
+
+    // 验证退役账本中完整存留旧事实且游标未被篡改
+    const retired = coreProj1.getRetiredGenerations();
+    assert.ok(retired.length > 0);
+    const retiredPrimary = retired.find(r => r.endpoint_id === 'ide-primary' && r.identity.conversation_id === 'conv-ide-valid-new');
+    assert.ok(retiredPrimary);
+    assert.equal(retiredPrimary.endpoint_fact.latest_completed_cursor, 'cur-i-new-unhandled');
+    assert.equal(retiredPrimary.endpoint_fact.last_handled_cursor, null);
     assert.equal(ideEp.workspace_identity, '/workspaces/different-repo');
   });
 

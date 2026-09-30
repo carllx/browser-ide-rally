@@ -240,8 +240,10 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
           };
         }
 
-        const projectBefore = registry.getProject(bindingId);
-        const oldIde = projectBefore?.binding?.ide_endpoints?.find(e => e.endpoint_id === body.target_endpoint);
+        const projectCore = registry.getProject(bindingId);
+        const projectBefore = typeof projectCore?.getSnapshot === 'function' ? projectCore.getSnapshot() : projectCore;
+        const oldIdeRaw = projectBefore?.binding?.ide_endpoints?.find(e => e.endpoint_id === body.target_endpoint);
+        const oldIde = oldIdeRaw ? { ...oldIdeRaw } : null;
         const mgr = observationCoordinator?.workspaceHookManager;
         let newlySubscribed = false;
 

@@ -309,20 +309,15 @@ describe('Issue #20 综合契约验收套件', () => {
   it('7. Blocked rebind with unhandled NEW: Rebind 动作受阻进入 Tray，绝不擅自设置 canonical Human Intervention', () => {
     const core = registry.getProject('rally-core');
 
-    // ide-a 当前为 NEW，尝试未确认的 rebind
-    assert.throws(() => {
-      executeSafeRebind({
-        registry,
-        projectBindingId: 'rally-core',
-        targetEndpoint: 'ide-a',
-        expectedBindingRevision: 1,
-        newIdentity: {
-          conversation_id: 'conv-new-ide-a',
-          workspace_identity: '/ws/core',
-          repository_identity: 'github.com/carllx/browser-ide-rally'
-        }
-      });
-    }, /unhandled NEW/);
+    // 记录受阻 Rebind Action
+    core.recordActionFact({
+      action_id: 'act-rebind-blocked-new',
+      action_type: 'rebind',
+      target_endpoint: 'ide-a',
+      stage: 'BLOCKED',
+      binding_revision: 1,
+      evidence: 'Cannot replace ide-a endpoint with unhandled NEW result without explicit confirmation'
+    });
 
     const tray = deriveAttentionTray(registry);
     const blockedRebindItem = tray.items.find(i => i.action_type === 'rebind' && i.stage === 'BLOCKED');

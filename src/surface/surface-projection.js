@@ -156,6 +156,7 @@ export function projectStatusSurface(snapshot) {
     ordering_evidence: orderingEvidence ? { ...orderingEvidence } : null,
     human_intervention: humanInterventionPlane,
     actions: actionFactsPlane,
+    retired_generations: Array.isArray(snapshot.retired_generations) ? [...snapshot.retired_generations] : [],
     disambiguation: {
       has_shared_ide_workspace: hasSharedIdeWorkspace,
       has_shared_ide_repository: hasSharedIdeRepo

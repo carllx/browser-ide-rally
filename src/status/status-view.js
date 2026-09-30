@@ -30,6 +30,7 @@ export function formatStatusSnapshot({
   humanIntervention,
   actions = [],
   orderingEvidence = null,
+  retiredGenerations = [],
   updatedAt
 }) {
   const browserFact = endpoints?.browser || null;
@@ -98,6 +99,7 @@ export function formatStatusSnapshot({
       ide: primaryIdeSnapshot,
       ide_endpoints: ideEndpointsMap
     },
+    retired_generations: Array.isArray(retiredGenerations) ? [...retiredGenerations] : [],
     ordering_evidence: orderingEvidence ? {
       ...orderingEvidence,
       checkpoint_cursors: {

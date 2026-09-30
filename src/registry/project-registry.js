@@ -33,7 +33,12 @@ export class ProjectRegistry {
     this._projects = new Map();
   }
 
-  registerProject({ binding, initial_endpoints = null, initial_ordering_evidence = null }) {
+  registerProject({
+    binding,
+    initial_endpoints = null,
+    initial_ordering_evidence = null,
+    initial_retired_generations = null
+  }) {
     const validation = validateBinding(binding);
     if (!validation.valid) {
       throw new Error(`Cannot register invalid binding: ${validation.errors.join('; ')}`);
@@ -73,6 +78,7 @@ export class ProjectRegistry {
       binding,
       initial_endpoints,
       initial_ordering_evidence,
+      initial_retired_generations,
       onMutation: () => {
         if (this._storagePath) {
           this.saveToFile(this._storagePath);
@@ -285,8 +291,15 @@ export class ProjectRegistry {
         throw new Error(`Corrupt endpoints ledger for binding_id "${bindingId}"`);
       }
 
+      if (projData.retired_generations !== undefined && projData.retired_generations !== null && !Array.isArray(projData.retired_generations)) {
+        throw new Error(`Corrupt retired_generations ledger for binding_id "${bindingId}"`);
+      }
+
       let bindingToLoad = projData.binding;
       let endpointsToLoad = projData.endpoints || {};
+      const retiredGenerationsToLoad = Array.isArray(projData.retired_generations)
+        ? projData.retired_generations
+        : [];
 
       // 若为 v1 数据，执行确定性单槽位迁移
       if (isV1Migration) {
@@ -323,7 +336,8 @@ export class ProjectRegistry {
       const core = createProjectStatusCore({
         binding: bindingToLoad,
         initial_endpoints: endpointsToLoad,
-        initial_ordering_evidence: projData.ordering_evidence || null
+        initial_ordering_evidence: projData.ordering_evidence || null,
+        initial_retired_generations: retiredGenerationsToLoad
       });
 
       if (projData.human_intervention) {

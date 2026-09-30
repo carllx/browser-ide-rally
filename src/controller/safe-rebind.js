@@ -97,7 +97,7 @@ export function executeSafeRebind(params) {
     payload: { identity: cleanIdentity }
   });
 
-  // 检查目标端点是否处于 unhandled NEW 或 UNKNOWN 状态
+  // 目标端点存在性校验（若端点未配置则拦截）
   const snapshot = core.getSnapshot();
   let targetEndpointFact = null;
   if (target_endpoint === 'browser') {
@@ -106,29 +106,12 @@ export function executeSafeRebind(params) {
     targetEndpointFact = snapshot.endpoints.ide_endpoints[target_endpoint];
   }
 
-  if (targetEndpointFact) {
-    const isNew = targetEndpointFact.result_state === 'NEW';
-    const isUnknown = targetEndpointFact.result_state === 'UNKNOWN';
-
-    if (isNew && !allowReplaceNew) {
-      core.advanceActionStage(action.action_id, {
-        next_stage: 'BLOCKED',
-        evidence: `Cannot replace ${target_endpoint} endpoint with unhandled NEW result without explicit confirmation`
-      });
-      throw new Error(
-        `Cannot replace ${target_endpoint} endpoint with unhandled NEW result without explicit confirmation`
-      );
-    }
-
-    if (isUnknown && !allowReplaceUnknown) {
-      core.advanceActionStage(action.action_id, {
-        next_stage: 'BLOCKED',
-        evidence: `Cannot replace ${target_endpoint} endpoint with unhandled UNKNOWN result without explicit confirmation`
-      });
-      throw new Error(
-        `Cannot replace ${target_endpoint} endpoint with unhandled UNKNOWN result without explicit confirmation`
-      );
-    }
+  if (!targetEndpointFact) {
+    core.advanceActionStage(action.action_id, {
+      next_stage: 'BLOCKED',
+      evidence: `Target endpoint "${target_endpoint}" does not exist in project binding`
+    });
+    throw new Error(`Target endpoint "${target_endpoint}" does not exist in project binding`);
   }
 
   try {

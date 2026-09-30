@@ -282,7 +282,7 @@ test('[Safe Controls] 4. IDE 目标会话/工作区/仓库失配时严格拦截�
   }, /IDENTITY_MISMATCH: Repository identity mismatch/);
 });
 
-test('[Safe Controls] 5. Safe Rebind 严格继承 #14/#21 NEW / UNKNOWN 确认守卫', () => {
+test('[Safe Controls] 5. Safe Rebind 普通轮换无需确认标志并归档退役事实 (#41)', () => {
   const { registry, bindingId } = setupMultiProject();
   const core = registry.getProject(bindingId);
 
@@ -295,22 +295,7 @@ test('[Safe Controls] 5. Safe Rebind 严格继承 #14/#21 NEW / UNKNOWN 确认�
   });
   assert.equal(core.getSnapshot().endpoints.ide_endpoints['ide-a'].result_state, 'NEW');
 
-  // 无确认重绑 ide-a -> 必须被拒绝且 Action 标记为 BLOCKED
-  assert.throws(() => {
-    executeSafeRebind({
-      registry,
-      bindingId,
-      expected_binding_revision: 1,
-      target_endpoint: 'ide-a',
-      identity: {
-        conversation_id: 'conv-ide-a-new',
-        workspace_identity: '/ws/shared',
-        repository_identity: 'org/shared-repo'
-      }
-    });
-  }, /Cannot replace ide-a endpoint with unhandled NEW result without explicit confirmation/);
-
-  // 提供显式确认 -> 重绑成功并演进至 rev 2
+  // 普通重绑 ide-a -> 无需确认标志直接成功，演进至 rev 2
   const rebindRes = executeSafeRebind({
     registry,
     bindingId,
@@ -320,14 +305,18 @@ test('[Safe Controls] 5. Safe Rebind 严格继承 #14/#21 NEW / UNKNOWN 确认�
       conversation_id: 'conv-ide-a-new',
       workspace_identity: '/ws/shared',
       repository_identity: 'org/shared-repo'
-    },
-    options: {
-      allow_discard_unhandled: true
     }
   });
   assert.equal(rebindRes.success, true);
   assert.equal(rebindRes.snapshot.binding.binding_revision, 2);
   assert.equal(rebindRes.action.stage, 'TARGET_COMPLETED');
+
+  // 验证退役代际存在且游标完好
+  const retired = core.getRetiredGenerations();
+  assert.equal(retired.length, 1);
+  assert.equal(retired[0].endpoint_id, 'ide-a');
+  assert.equal(retired[0].endpoint_fact.latest_completed_cursor, 'turn-new-1');
+  assert.equal(retired[0].endpoint_fact.last_handled_cursor, null);
 
   // 针对泛化 'bound_ide' 重绑必须 Fail-Closed 拦截并记录 BLOCKED
   assert.throws(() => {

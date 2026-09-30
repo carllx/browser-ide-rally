@@ -31,6 +31,7 @@ import {
   executeRebindEndpoint
 } from './endpoint-lifecycle.js';
 import { formatStatusSnapshot, formatCompactStatus } from './status-view.js';
+import { createRetiredGenerationsLedger } from './retired-generations.js';
 import {
   createInitialOrderingEvidence,
   hydrateOrderingEvidence,
@@ -45,13 +46,26 @@ export function createProjectStatusCore({
   binding,
   initial_endpoints = null,
   initial_ordering_evidence = null,
+  initial_retired_generations = null,
   onMutation = null
 }) {
-  return new ProjectStatusCore({ binding, initial_endpoints, initial_ordering_evidence, onMutation });
+  return new ProjectStatusCore({
+    binding,
+    initial_endpoints,
+    initial_ordering_evidence,
+    initial_retired_generations,
+    onMutation
+  });
 }
 
 export class ProjectStatusCore {
-  constructor({ binding, initial_endpoints = null, initial_ordering_evidence = null, onMutation = null }) {
+  constructor({
+    binding,
+    initial_endpoints = null,
+    initial_ordering_evidence = null,
+    initial_retired_generations = null,
+    onMutation = null
+  }) {
     const validation = validateBinding(binding);
     if (!validation.valid) {
       throw new Error(`Invalid Binding for Status Core: ${validation.errors.join('; ')}`);
@@ -96,6 +110,7 @@ export class ProjectStatusCore {
     };
 
     this._actions = [];
+    this._retiredGenerations = createRetiredGenerationsLedger(initial_retired_generations);
     this._orderingEvidence = hydrateOrderingEvidence(initial_ordering_evidence, {
       fallbackUpdatedAt: this._updatedAt,
       initialEndpointsCursors: this._getAllCurrentCursors()
@@ -104,13 +119,8 @@ export class ProjectStatusCore {
 
   _getAllCurrentCursors() {
     const ideCursors = {};
-    for (const [id, fact] of this._ideEndpoints.entries()) {
-      ideCursors[id] = fact.latest_completed_cursor ?? null;
-    }
-    return {
-      browser: this._browserEndpoint.latest_completed_cursor ?? null,
-      ide: ideCursors
-    };
+    for (const [id, fact] of this._ideEndpoints.entries()) ideCursors[id] = fact.latest_completed_cursor ?? null;
+    return { browser: this._browserEndpoint.latest_completed_cursor ?? null, ide: ideCursors };
   }
 
   _resolveEndpoint(endpointIdentifier) {
@@ -184,6 +194,7 @@ export class ProjectStatusCore {
           ? { ...Array.from(this._ideEndpoints.values())[0], continuity: { ...Array.from(this._ideEndpoints.values())[0].continuity } }
           : null
       },
+      retired_generations: this._retiredGenerations.exportData(),
       ordering_evidence: this.getOrderingEvidence(),
       human_intervention: { ...this._humanIntervention },
       actions: this._actions.map(a => ({ ...a })),
@@ -270,6 +281,9 @@ export class ProjectStatusCore {
     });
 
     this._binding = res.nextBinding;
+    if (res.retiredGeneration) {
+      this._retiredGenerations.recordRetirement(res.retiredGeneration);
+    }
     if (res.targetRole === 'browser') {
       this._browserEndpoint = res.newBrowserFact;
     } else {
@@ -329,37 +343,13 @@ export class ProjectStatusCore {
       const cursorChanged = observation.latest_completed_cursor !== undefined &&
         observation.latest_completed_cursor !== current.latest_completed_cursor;
 
-      if (observation.latest_completed_cursor !== undefined) {
-        latestCursor = observation.latest_completed_cursor;
-      }
-      if (observation.completed_at !== undefined) {
-        completedAt = observation.completed_at;
-      }
+      if (observation.latest_completed_cursor !== undefined) latestCursor = observation.latest_completed_cursor;
+      if (observation.completed_at !== undefined) completedAt = observation.completed_at;
 
-      if (cursorChanged) {
-        // 游标发生变化：只有新 artifact 存在且规范有效、cursor 精确匹配新 cursor 时才安装，否则清除为 null
-        latestResult = validateAndNormalizeResultMaterial(
-          observation.latest_completed_result,
-          latestCursor,
-          completedAt || now
-        );
-      } else {
-        // 游标未发生变化
-        if (observation.latest_completed_result !== undefined) {
-          latestResult = validateAndNormalizeResultMaterial(
-            observation.latest_completed_result,
-            latestCursor,
-            completedAt || now
-          );
-        } else {
-          // 未提供 result material：若已有 artifact 仍合规且与当前 cursor 匹配则保留，否则置为 null
-          latestResult = validateAndNormalizeResultMaterial(
-            latestResult,
-            latestCursor,
-            completedAt || now
-          );
-        }
-      }
+      const rawResult = cursorChanged
+        ? observation.latest_completed_result
+        : (observation.latest_completed_result !== undefined ? observation.latest_completed_result : latestResult);
+      latestResult = validateAndNormalizeResultMaterial(rawResult, latestCursor, completedAt || now);
     } else {
       // 未受信：若已有 artifact 与当前 cursor 不匹配或不合规，则置为 null
       latestResult = validateAndNormalizeResultMaterial(
@@ -563,11 +553,16 @@ export class ProjectStatusCore {
         browser: this._browserEndpoint,
         ide_endpoints: this._ideEndpoints
       },
+      retiredGenerations: this._retiredGenerations.exportData(),
       orderingEvidence: this._orderingEvidence,
       humanIntervention: this._humanIntervention,
       actions: this._actions,
       updatedAt: this._updatedAt
     });
+  }
+
+  getRetiredGenerations() {
+    return this._retiredGenerations.list();
   }
 
   toCompactView() {

@@ -239,7 +239,7 @@ describe('Safe Controls Surface 集成测试', () => {
     assert.equal(mockBrowserAdapter.focusCalls.length, prevCalls); // 无副作用
   });
 
-  it('4. POST /controls/rebind 未处理 NEW 事实默认拒绝为 409 BLOCKED', async () => {
+  it('4. POST /controls/rebind 未处理 NEW 事实普通轮换无需确认标志直接成功 (#41)', async () => {
     // browser 端点目前有未处理 NEW (cursor-browser-1)
     const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/rebind`, {
       method: 'POST',
@@ -250,30 +250,7 @@ describe('Safe Controls Surface 集成测试', () => {
         new_identity: {
           conversation_id: 'conv-browser-2',
           branch: 'feat/beta'
-        },
-        allow_replace_unhandled: false
-      })
-    });
-
-    assert.equal(res.status, 409);
-    const data = await res.json();
-    assert.equal(data.success, false);
-    assert.equal(data.stage, 'BLOCKED');
-    assert.match(data.reason, /unhandled NEW/);
-  });
-
-  it('5. POST /controls/rebind 显式 allow_replace_unhandled 成功递增 revision 并作用于 Action 记录', async () => {
-    const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/rebind`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        expected_binding_revision: 1,
-        target_endpoint: 'browser',
-        new_identity: {
-          conversation_id: 'conv-browser-2',
-          branch: 'feat/beta'
-        },
-        allow_replace_unhandled: true
+        }
       })
     });
 
@@ -289,6 +266,27 @@ describe('Safe Controls Surface 集成测试', () => {
     assert.equal(pData.projects[0].binding_revision, 2);
     assert.equal(pData.projects[0].browser.conversation_id, 'conv-browser-2');
     assert.equal(pData.projects[0].browser.branch, 'feat/beta');
+  });
+
+  it('5. POST /controls/rebind 版本失配时严格拦截为 409 BLOCKED', async () => {
+    const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/rebind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        expected_binding_revision: 999,
+        target_endpoint: 'browser',
+        new_identity: {
+          conversation_id: 'conv-browser-stale',
+          branch: 'feat/stale'
+        }
+      })
+    });
+
+    assert.equal(res.status, 409);
+    const data = await res.json();
+    assert.equal(data.success, false);
+    assert.equal(data.stage, 'BLOCKED');
+    assert.match(data.reason, /STALE_OR_MISSING_BINDING_REVISION/);
   });
 
   it('6. POST /controls/send 成功格式化受控 Envelope 并在目标适配器上派发 (与客户端 JSON 结构一致)', async () => {
@@ -391,30 +389,7 @@ describe('Safe Controls Surface 集成测试', () => {
     assert.match(html, /IDE 端点 \[ide-b\]/);
   });
 
-  it('10. IDE Rebind: 目标端点处于 NEW 时无确认拦截为 409 BLOCKED', async () => {
-    const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/rebind`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        expected_binding_revision: 2,
-        target_endpoint: 'ide-a',
-        new_identity: {
-          conversation_id: 'conv-ide-a-rebind-unconf',
-          workspace_identity: '/ws/repo',
-          repository_identity: 'github.com/org/repo'
-        },
-        allow_replace_unhandled: false
-      })
-    });
-
-    assert.equal(res.status, 409);
-    const data = await res.json();
-    assert.equal(data.success, false);
-    assert.equal(data.stage, 'BLOCKED');
-    assert.match(data.reason, /unhandled NEW/);
-  });
-
-  it('11. IDE Rebind: 目标端点处于 NEW 时显式 NEW 确认 (allow_replace_unhandled) 成功更新规范字段', async () => {
+  it('10. IDE Rebind: 目标端点处于 NEW 时无需确认标志直接成功轮换 (#41)', async () => {
     const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/rebind`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -425,8 +400,7 @@ describe('Safe Controls Surface 集成测试', () => {
           conversation_id: 'conv-ide-a-rebound',
           workspace_identity: '/ws/repo-new',
           repository_identity: 'github.com/org/repo-new'
-        },
-        allow_replace_unhandled: true
+        }
       })
     });
 
@@ -447,32 +421,8 @@ describe('Safe Controls Surface 集成测试', () => {
     assert.equal(epA.endpoint_revision, 2);
   });
 
-  it('12. IDE Rebind: 目标端点处于 UNKNOWN 时无确认拦截为 409 BLOCKED', async () => {
+  it('11. IDE Rebind: 目标端点处于 UNKNOWN 时无需确认标志直接成功轮换 (#41)', async () => {
     // ide-b 目前处于初始 UNKNOWN 状态
-    const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/rebind`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        expected_binding_revision: 3,
-        target_endpoint: 'ide-b',
-        new_identity: {
-          conversation_id: 'conv-ide-b-rebind-unconf',
-          workspace_identity: '/ws/repo',
-          repository_identity: 'github.com/org/repo'
-        },
-        allow_replace_unknown: false,
-        allow_replace_unhandled: false
-      })
-    });
-
-    assert.equal(res.status, 409);
-    const data = await res.json();
-    assert.equal(data.success, false);
-    assert.equal(data.stage, 'BLOCKED');
-    assert.match(data.reason, /UNKNOWN/);
-  });
-
-  it('13. IDE Rebind: 目标端点处于 UNKNOWN 时仅勾选 allow_replace_unknown 独立授权成功', async () => {
     const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/rebind`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -483,9 +433,7 @@ describe('Safe Controls Surface 集成测试', () => {
           conversation_id: 'conv-ide-b-rebound',
           workspace_identity: '/ws/repo-b',
           repository_identity: 'github.com/org/repo-b'
-        },
-        allow_replace_unknown: true,
-        allow_replace_unhandled: false
+        }
       })
     });
 

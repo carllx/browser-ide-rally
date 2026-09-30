@@ -310,16 +310,21 @@ test('[Multi-IDE] 8. NEW / UNKNOWN 端点移除与重绑守卫（显式确认且
     core.removeIdeEndpoint('ide-a');
   }, /Cannot remove IDE endpoint "ide-a" with unhandled NEW result without explicit confirmation/);
 
-  assert.throws(() => {
-    core.rebindEndpoint({
-      endpoint_id: 'ide-a',
-      identity: {
-        conversation_id: 'conv-ide-a-new',
-        workspace_identity: '/w',
-        repository_identity: 'c/r'
-      }
-    });
-  }, /Cannot replace ide-a endpoint with unhandled NEW result without explicit confirmation/);
+  // 普通重绑处于 NEW 的 IDE-A：无需确认标志即可成功非破坏性轮换 (#41)
+  const snapAfterRebind = core.rebindEndpoint({
+    endpoint_id: 'ide-a',
+    identity: {
+      conversation_id: 'conv-ide-a-new',
+      workspace_identity: '/w',
+      repository_identity: 'c/r'
+    }
+  });
+  const retired = core.getRetiredGenerations();
+  assert.equal(retired.length, 1);
+  assert.equal(retired[0].endpoint_id, 'ide-a');
+  assert.equal(retired[0].endpoint_fact.latest_completed_cursor, 'turn-ia-unhandled');
+  assert.equal(retired[0].endpoint_fact.last_handled_cursor, null);
+  assert.equal(snapAfterRebind.endpoints.ide_endpoints['ide-a'].result_state, 'UNKNOWN');
 
   // 2. IDE-B 为初始 UNKNOWN
   assert.throws(() => {
@@ -330,16 +335,16 @@ test('[Multi-IDE] 8. NEW / UNKNOWN 端点移除与重绑守卫（显式确认且
   core.removeIdeEndpoint('ide-b', { confirm_replace_unknown: true });
   assert.equal(core.getSnapshot().endpoints.ide_endpoints['ide-b'], undefined);
 
-  // 显式确认重绑处于 NEW 的 IDE-A，绝不把 turn-ia-unhandled 标记为 handled
+  // 再次重绑处于 UNKNOWN 的 IDE-A，无需确认标志即可成功轮换
   core.rebindEndpoint({
     endpoint_id: 'ide-a',
     identity: {
       conversation_id: 'conv-ide-a-rebound',
       workspace_identity: '/w',
       repository_identity: 'c/r'
-    },
-    allow_discard_unhandled: true
+    }
   });
+  assert.equal(core.getRetiredGenerations().length, 2);
   const snapA = core.getSnapshot().endpoints.ide_endpoints['ide-a'];
   assert.equal(snapA.result_state, 'UNKNOWN');
   assert.equal(snapA.last_handled_cursor, null); // 绝不伪装 handled！

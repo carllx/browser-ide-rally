@@ -201,7 +201,7 @@ test('[Registry] 4. 安全端点 Rebind：保持项目身份、递增版本、�
   assert.equal(updatedSnap.endpoints.ide.latest_completed_cursor, 'ide-turn-1');
 });
 
-test('[Registry] 5. 未处理 NEW 替换守卫 (Unhandled NEW Replacement Guard)：默认拒绝替换', () => {
+test('[Registry] 5. 未处理 NEW 轮换存证 (Unhandled NEW Non-Destructive Rotation)', () => {
   const registry = createProjectRegistry();
   const core = registry.registerProject({ binding: makeSampleBinding('proj-guard') });
 
@@ -213,30 +213,23 @@ test('[Registry] 5. 未处理 NEW 替换守卫 (Unhandled NEW Replacement Guard)
   });
   assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NEW');
 
-  // 默认尝试替换 Browser 端点：必须被拦截抛错，防止静默丢失 New Result！
-  assert.throws(() => {
-    registry.rebindProjectEndpoint('proj-guard', {
-      endpoint: 'browser',
-      identity: { conversation_id: 'new-conv-branch' }
-    });
-  }, /Cannot replace browser endpoint with unhandled NEW result without explicit confirmation/);
-
-  // 端点依然完好保持在未被替换的状态
-  assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NEW');
-  assert.equal(core.getSnapshot().binding.binding_revision, 1);
-
-  // 当显式提供 allow_discard_unhandled: true 时允许替换，但绝不伪造 mark handled
-  const snapshotAfterDiscard = registry.rebindProjectEndpoint('proj-guard', {
+  // 普通轮换：无需任何 discard 确认标志，直接成功且自动将 outgoing generation 归档至退役账本 (#41)
+  const snapshotAfterRotation = registry.rebindProjectEndpoint('proj-guard', {
     endpoint: 'browser',
-    identity: { conversation_id: 'new-conv-branch' },
-    allow_discard_unhandled: true
+    identity: { conversation_id: 'new-conv-branch' }
   });
 
-  assert.equal(snapshotAfterDiscard.binding.binding_revision, 2);
-  assert.equal(snapshotAfterDiscard.endpoints.browser.result_state, 'UNKNOWN');
-  assert.equal(snapshotAfterDiscard.endpoints.browser.unknown_reason, 'UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION');
-  // 绝不伪造为 unhandled-turn-777 的 handled 游标
-  assert.equal(snapshotAfterDiscard.endpoints.browser.last_handled_cursor, null);
+  assert.equal(snapshotAfterRotation.binding.binding_revision, 2);
+  assert.equal(snapshotAfterRotation.endpoints.browser.result_state, 'UNKNOWN');
+  assert.equal(snapshotAfterRotation.endpoints.browser.unknown_reason, 'UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION');
+  assert.equal(snapshotAfterRotation.endpoints.browser.last_handled_cursor, null);
+
+  // 验证旧事实在退役记录中完整保留且游标未被篡改
+  const retired = core.getRetiredGenerations();
+  assert.equal(retired.length, 1);
+  assert.equal(retired[0].endpoint_id, 'browser');
+  assert.equal(retired[0].endpoint_fact.latest_completed_cursor, 'unhandled-turn-777');
+  assert.equal(retired[0].endpoint_fact.last_handled_cursor, null);
 });
 
 test('[Registry] 6. 过时版本观察在 Rebind 后失效隔离', () => {
@@ -442,34 +435,29 @@ test('[Registry 回归] 12. 多项目加载失败时保持原子性 (All-or-Noth
   }
 });
 
-test('[Registry 回归] 13. UNKNOWN 端点默认阻止 rebind，显式确认方可替换且绝不 mark handled', () => {
+test('[Registry 回归] 13. UNKNOWN 端点普通轮换成功，证据完整归档且绝不 mark handled', () => {
   const registry = createProjectRegistry();
   const core = registry.registerProject({ binding: makeSampleBinding('proj-unknown-guard') });
 
   // 初始端点处于 UNKNOWN 状态
   assert.equal(core.getSnapshot().endpoints.browser.result_state, 'UNKNOWN');
 
-  // 1. 默认尝试替换 UNKNOWN 端点：必须抛错阻止，防止静默丢失不确定证据
-  assert.throws(() => {
-    registry.rebindProjectEndpoint('proj-unknown-guard', {
-      endpoint: 'browser',
-      identity: { conversation_id: 'conv-new-unknown' }
-    });
-  }, /Cannot replace browser endpoint in UNKNOWN state without explicit confirmation/);
-
-  // 2. 显式确认后允许替换
-  const snapAfterConfirm = registry.rebindProjectEndpoint('proj-unknown-guard', {
+  // 普通轮换：无需任何确认即可成功轮换 (#41)
+  const snapAfterRotate = registry.rebindProjectEndpoint('proj-unknown-guard', {
     endpoint: 'browser',
-    identity: { conversation_id: 'conv-new-unknown' },
-    confirm_replace_unknown: true
+    identity: { conversation_id: 'conv-new-unknown' }
   });
 
-  // 3. 验证关键不变性：新端点进入规范 UNKNOWN 状态，绝不伪造 mark handled
-  assert.equal(snapAfterConfirm.endpoints.browser.result_state, 'UNKNOWN');
-  assert.equal(snapAfterConfirm.endpoints.browser.unknown_reason, 'UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION');
-  assert.equal(snapAfterConfirm.endpoints.browser.last_handled_cursor, null);
-  assert.equal(snapAfterConfirm.endpoints.browser.latest_completed_cursor, null);
-  assert.equal(snapAfterConfirm.binding.binding_revision, 2);
+  // 验证关键不变性：新端点进入规范 UNKNOWN 状态，绝不伪造 mark handled
+  assert.equal(snapAfterRotate.endpoints.browser.result_state, 'UNKNOWN');
+  assert.equal(snapAfterRotate.endpoints.browser.unknown_reason, 'UNKNOWN_UNTIL_NEXT_OBSERVED_COMPLETION');
+  assert.equal(snapAfterRotate.endpoints.browser.last_handled_cursor, null);
+  assert.equal(snapAfterRotate.endpoints.browser.latest_completed_cursor, null);
+  assert.equal(snapAfterRotate.binding.binding_revision, 2);
+
+  const retired = core.getRetiredGenerations();
+  assert.equal(retired.length, 1);
+  assert.equal(retired[0].endpoint_id, 'browser');
 });
 
 test('[Registry 回归] 14. 字符串 "true"、对象等 truthy 值绝不能建立 trusted restore', () => {
