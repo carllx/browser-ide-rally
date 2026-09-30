@@ -1,13 +1,14 @@
 /**
  * 多项目持久化注册表 (Durable Multi-Project Registry)
  *
- * 核心设计原则 (#14, #21):
+ * 核心设计原则 (#14, #21, #41):
  * 1. 多项目隔离：支持管理多个互不干扰的 Project Binding 及其 Status Core；
- * 2. 原子化与版本化持久化：使用 schema_version: 2，通过临时文件加原子重命名确保写入安全；
- * 3. v1 确定性迁移：对于已有 schema_version: 1 数据，执行严格确定性的单槽位迁移 (ide-default)，
- *    保持 handled/latest/continuity 事实完整还原；不支持或损坏的 schema 一律 fail-closed；
+ * 2. 原子化与版本化持久化：使用 schema_version: 3，包含 retired_generations 退役代际账本，通过临时文件加原子重命名确保写入安全；
+ * 3. 确定性无损迁移：支持从 schema_version: 1 及旧版/candidate-era schema_version: 2 平滑迁移，
+ *    保持 handled/latest/continuity 及历史退役代际完整还原；不支持或损坏的 schema 一律 fail-closed；
  * 4. 专有受信 Hydration 缝隙：底层规范事实安全还原，绝不混淆 live observation；
- * 5. 安全端点生命周期编排：由 Registry 代理 Core 的安全 rebindEndpoint、addIdeEndpoint、removeIdeEndpoint。
+ * 5. 安全端点生命周期编排：由 Registry 代理 Core 的安全 rebindEndpoint、addIdeEndpoint、removeIdeEndpoint；
+ * 6. 活跃会话唯一性守卫：精确排除目标 slot 本身，严禁跨端点与跨项目活跃会话抢占。
  */
 
 import fs from 'node:fs';
@@ -115,32 +116,48 @@ export class ProjectRegistry {
   }
 
   /**
-   * 跨项目活跃端点会话唯一性校验（严格区分 role/provider，排除当前项目本身；退役历史不占位）
+   * 活跃端点会话唯一性校验（仅排除精确的目标槽位 targetSlot；严格区分 role 与 Browser provider；退役历史不占位）
    * @param {object} params
    * @param {string} params.projectBindingId
+   * @param {string|null} [params.targetSlot] - 正在重绑的目标端点 ID（如 'browser', 'ide-A' 等）
    * @param {'browser'|'ide'} params.role
    * @param {string} params.conversationId
+   * @param {string|null} [params.provider]
    */
-  assertActiveConversationUnique({ projectBindingId, role, conversationId }) {
+  assertActiveConversationUnique({ projectBindingId, targetSlot = null, role, conversationId, provider = null }) {
     if (!conversationId || typeof conversationId !== 'string') return;
     const cleanConvId = conversationId.trim();
     if (!cleanConvId) return;
 
+    const targetProvider = (typeof provider === 'string' && provider.trim()) ? provider.trim() : 'chatgpt';
+
     for (const [existingId, existingCore] of this._projects.entries()) {
-      if (existingId === projectBindingId) continue;
+      const isCurrentProject = existingId === projectBindingId;
       const existingBinding = existingCore.getBinding();
-      const otherName = existingBinding.display_name || existingId;
+      const projectName = existingBinding.display_name || existingId;
 
       if (role === 'browser') {
+        if (isCurrentProject && (targetSlot === 'browser' || !targetSlot)) {
+          continue;
+        }
         const existingBrowserConv = existingBinding.browser?.conversation_id?.trim();
-        if (existingBrowserConv && existingBrowserConv === cleanConvId) {
-          throw new Error(`Browser conversation "${cleanConvId}" is already bound to project "${otherName}".`);
+        const existingBrowserProvider = existingBinding.browser?.provider?.trim() || 'chatgpt';
+        if (existingBrowserConv && existingBrowserConv === cleanConvId && existingBrowserProvider === targetProvider) {
+          const location = isCurrentProject ? 'the same project' : `project "${projectName}"`;
+          throw new Error(`Browser conversation "${cleanConvId}" is already bound to ${location} (provider: ${targetProvider}).`);
         }
       } else if (role === 'ide') {
         for (const ep of existingBinding.ide_endpoints || []) {
+          if (isCurrentProject && targetSlot && ep.endpoint_id === targetSlot) {
+            continue;
+          }
           const existingIdeConv = ep.conversation_id?.trim();
           if (existingIdeConv && existingIdeConv === cleanConvId) {
-            throw new Error(`Antigravity conversation "${cleanConvId}" is already bound to project "${otherName}".`);
+            if (isCurrentProject) {
+              throw new Error(`Antigravity conversation "${cleanConvId}" is already bound to endpoint "${ep.endpoint_id}" in the same project.`);
+            } else {
+              throw new Error(`Antigravity conversation "${cleanConvId}" is already bound to project "${projectName}".`);
+            }
           }
         }
       }
@@ -152,12 +169,15 @@ export class ProjectRegistry {
     const targetEndpoint = rebindOptions.endpoint_id || rebindOptions.target_endpoint;
     const role = targetEndpoint === 'browser' ? 'browser' : 'ide';
     const conversationId = rebindOptions.identity?.conversation_id;
+    const provider = rebindOptions.identity?.provider || (role === 'browser' ? core.getBinding().browser?.provider : null);
 
     if (conversationId) {
       this.assertActiveConversationUnique({
         projectBindingId: bindingId,
+        targetSlot: targetEndpoint,
         role,
-        conversationId
+        conversationId,
+        provider
       });
     }
 

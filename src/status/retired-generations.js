@@ -8,6 +8,8 @@
  * 4. 持久化确定性：随 ProjectRegistry 导出与还原，确保重启后历史证据不丢失。
  */
 
+import { deriveEndpointResult } from './endpoint-ledger.js';
+
 /**
  * 校验并规范化单条退役代际事实（严格 Fail-Closed，拒绝默认容错捏造）
  * @param {object} entry
@@ -53,7 +55,7 @@ export function normalizeRetiredGeneration(entry) {
   }
   const reason = entry.reason.trim();
 
-  // 5. Identity 校验：必须包含非空 conversation_id
+  // 5. Identity 校验
   if (!entry.identity || typeof entry.identity !== 'object' || Array.isArray(entry.identity)) {
     throw new Error('Corrupt retired generation: identity must be a valid object');
   }
@@ -61,13 +63,54 @@ export function normalizeRetiredGeneration(entry) {
     throw new Error('Corrupt retired generation: identity.conversation_id must be a non-empty string');
   }
   const cleanConvId = entry.identity.conversation_id.trim();
-  const identity = {
-    conversation_id: cleanConvId,
-    workspace_identity: typeof entry.identity.workspace_identity === 'string' ? entry.identity.workspace_identity.trim() : null,
-    repository_identity: typeof entry.identity.repository_identity === 'string' ? entry.identity.repository_identity.trim() : null,
-    branch: typeof entry.identity.branch === 'string' ? entry.identity.branch.trim() : null,
-    provider: typeof entry.identity.provider === 'string' ? entry.identity.provider.trim() : null
-  };
+
+  let identity;
+  if (role === 'ide') {
+    if (typeof entry.identity.workspace_identity !== 'string' || !entry.identity.workspace_identity.trim()) {
+      throw new Error('Corrupt retired generation: ide identity requires valid non-empty workspace_identity');
+    }
+    if (typeof entry.identity.repository_identity !== 'string' || !entry.identity.repository_identity.trim()) {
+      throw new Error('Corrupt retired generation: ide identity requires valid non-empty repository_identity');
+    }
+    if (entry.identity.branch !== null && entry.identity.branch !== undefined) {
+      throw new Error('Corrupt retired generation: ide identity cannot contain branch');
+    }
+    if (entry.identity.provider !== null && entry.identity.provider !== undefined) {
+      throw new Error('Corrupt retired generation: ide identity cannot contain provider');
+    }
+    identity = {
+      conversation_id: cleanConvId,
+      workspace_identity: entry.identity.workspace_identity.trim(),
+      repository_identity: entry.identity.repository_identity.trim(),
+      branch: null,
+      provider: null
+    };
+  } else {
+    // browser
+    if (typeof entry.identity.provider !== 'string' || !entry.identity.provider.trim()) {
+      throw new Error('Corrupt retired generation: browser identity requires valid non-empty provider');
+    }
+    let branch = null;
+    if (entry.identity.branch !== null && entry.identity.branch !== undefined) {
+      if (typeof entry.identity.branch !== 'string' || !entry.identity.branch.trim()) {
+        throw new Error('Corrupt retired generation: browser identity branch must be a non-empty string or null');
+      }
+      branch = entry.identity.branch.trim();
+    }
+    if (entry.identity.workspace_identity !== null && entry.identity.workspace_identity !== undefined) {
+      throw new Error('Corrupt retired generation: browser identity cannot contain workspace_identity');
+    }
+    if (entry.identity.repository_identity !== null && entry.identity.repository_identity !== undefined) {
+      throw new Error('Corrupt retired generation: browser identity cannot contain repository_identity');
+    }
+    identity = {
+      conversation_id: cleanConvId,
+      provider: entry.identity.provider.trim(),
+      branch,
+      workspace_identity: null,
+      repository_identity: null
+    };
+  }
 
   // 6. Endpoint Fact 校验：必须存在且与外部属性严格一致
   if (!entry.endpoint_fact || typeof entry.endpoint_fact !== 'object' || Array.isArray(entry.endpoint_fact)) {
@@ -89,24 +132,91 @@ export function normalizeRetiredGeneration(entry) {
   if (typeof fact.continuity.trusted !== 'boolean') {
     throw new Error('Corrupt retired generation: endpoint_fact.continuity.trusted must be a boolean');
   }
+  if (fact.continuity.unknown_reason !== null && fact.continuity.unknown_reason !== undefined) {
+    if (typeof fact.continuity.unknown_reason !== 'string') {
+      throw new Error('Corrupt retired generation: endpoint_fact.continuity.unknown_reason must be a string or null');
+    }
+  }
+
+  // 游标与时间戳严格校验
+  if (fact.latest_completed_cursor !== null && fact.latest_completed_cursor !== undefined) {
+    if (typeof fact.latest_completed_cursor !== 'string' || !fact.latest_completed_cursor.trim()) {
+      throw new Error('Corrupt retired generation: latest_completed_cursor must be a non-empty string or null');
+    }
+  }
+  if (fact.last_handled_cursor !== null && fact.last_handled_cursor !== undefined) {
+    if (typeof fact.last_handled_cursor !== 'string' || !fact.last_handled_cursor.trim()) {
+      throw new Error('Corrupt retired generation: last_handled_cursor must be a non-empty string or null');
+    }
+  }
+  if (fact.completed_at !== null && fact.completed_at !== undefined) {
+    if (typeof fact.completed_at !== 'string' || !fact.completed_at.trim() || Number.isNaN(Date.parse(fact.completed_at))) {
+      throw new Error('Corrupt retired generation: completed_at must be a valid ISO timestamp or null');
+    }
+  }
+  if (fact.updated_at !== null && fact.updated_at !== undefined) {
+    if (typeof fact.updated_at !== 'string' || !fact.updated_at.trim() || Number.isNaN(Date.parse(fact.updated_at))) {
+      throw new Error('Corrupt retired generation: updated_at must be a valid ISO timestamp');
+    }
+  }
+
+  // 结果材料严格校验
+  let normalizedResult = null;
+  if (fact.latest_completed_result !== null && fact.latest_completed_result !== undefined) {
+    const res = fact.latest_completed_result;
+    if (typeof res !== 'object' || Array.isArray(res)) {
+      throw new Error('Corrupt retired generation: latest_completed_result must be an object');
+    }
+    if (!fact.latest_completed_cursor) {
+      throw new Error('Corrupt retired generation: latest_completed_result cannot exist when latest_completed_cursor is null');
+    }
+    if (res.cursor !== fact.latest_completed_cursor) {
+      throw new Error(`Corrupt retired generation: latest_completed_result.cursor "${res.cursor}" does not match latest_completed_cursor "${fact.latest_completed_cursor}"`);
+    }
+    if (typeof res.result_ref !== 'string' || !res.result_ref.trim()) {
+      throw new Error('Corrupt retired generation: latest_completed_result.result_ref must be a non-empty string');
+    }
+    if (typeof res.text !== 'string') {
+      throw new Error('Corrupt retired generation: latest_completed_result.text must be a string');
+    }
+    if (typeof res.captured_at !== 'string' || Number.isNaN(Date.parse(res.captured_at))) {
+      throw new Error('Corrupt retired generation: latest_completed_result.captured_at must be a valid ISO timestamp');
+    }
+    normalizedResult = {
+      cursor: res.cursor,
+      result_ref: res.result_ref.trim(),
+      text: res.text,
+      captured_at: res.captured_at
+    };
+  }
 
   const endpointFact = {
     endpoint: endpointId,
     role,
     endpoint_revision: endpointRevision,
-    result_state: typeof fact.result_state === 'string' ? fact.result_state : 'UNKNOWN',
-    latest_completed_cursor: fact.latest_completed_cursor ?? null,
-    last_handled_cursor: fact.last_handled_cursor ?? null,
-    completed_at: fact.completed_at ?? null,
-    latest_completed_result: fact.latest_completed_result && typeof fact.latest_completed_result === 'object'
-      ? { ...fact.latest_completed_result }
-      : null,
+    latest_completed_cursor: fact.latest_completed_cursor ? fact.latest_completed_cursor.trim() : null,
+    last_handled_cursor: fact.last_handled_cursor ? fact.last_handled_cursor.trim() : null,
+    completed_at: fact.completed_at ? fact.completed_at.trim() : null,
+    latest_completed_result: normalizedResult,
     continuity: {
       trusted: fact.continuity.trusted,
-      unknown_reason: fact.continuity.unknown_reason ?? null
+      unknown_reason: fact.continuity.unknown_reason ? fact.continuity.unknown_reason.trim() : null
     },
-    updated_at: fact.updated_at || retiredAt
+    updated_at: fact.updated_at ? fact.updated_at.trim() : retiredAt
   };
+
+  // 杜绝不可能账本 (latest 为 null 但 handled 非 null)
+  if (!endpointFact.latest_completed_cursor && endpointFact.last_handled_cursor) {
+    throw new Error('Corrupt retired generation: impossible ledger (latest cursor is null but handled cursor is non-null)');
+  }
+
+  // 严格自洽性检查：若持久化中存在预先声明的 result_state，绝不能与 raw fact 的真确派生结果相矛盾
+  const derivedState = deriveEndpointResult(endpointFact);
+  if (fact.result_state !== undefined && fact.result_state !== null) {
+    if (fact.result_state !== derivedState) {
+      throw new Error(`Corrupt retired generation: contradictory result_state (persisted "${fact.result_state}", derived "${derivedState}")`);
+    }
+  }
 
   return {
     role,

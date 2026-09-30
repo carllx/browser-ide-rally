@@ -91,6 +91,79 @@ export function executeSafeRebind(params) {
     throw new Error('IDE_ENDPOINT_NOT_FOUND: SECURITY_REJECT: Generic "bound_ide" target is prohibited, specify exact endpoint_id');
   }
 
+  // 目标端点存在性校验（在创建 Action 之前校验）
+  const snapshotBefore = core.getSnapshot();
+  let targetEndpointFact = null;
+  if (target_endpoint === 'browser') {
+    targetEndpointFact = snapshotBefore.endpoints?.browser;
+  } else if (snapshotBefore.endpoints?.ide_endpoints) {
+    targetEndpointFact = snapshotBefore.endpoints.ide_endpoints[target_endpoint];
+  }
+
+  if (!targetEndpointFact) {
+    recordBlockedAction(registry, bindingId, {
+      actionId,
+      actionType: 'rebind',
+      targetEndpoint: target_endpoint,
+      expectedRevision: expected_binding_revision,
+      reason: `Target endpoint "${target_endpoint}" does not exist in project binding`
+    });
+    throw new Error(`Target endpoint "${target_endpoint}" does not exist in project binding`);
+  }
+
+  // === 关键前置检测：Exact Same-Target 检测（在创建 Action 之前完成） ===
+  // 必须使用有效身份完全比对：
+  // Browser: effective provider + conversation + branch
+  // IDE: conversation_id + workspace_identity + repository_identity
+  let isExactSameTarget = false;
+  if (target_endpoint === 'browser') {
+    if (cleanIdentity && typeof cleanIdentity === 'object' && cleanIdentity.conversation_id) {
+      const currentBr = currentBinding.browser || {};
+      const currentProvider = (currentBr.provider || 'chatgpt').trim();
+      const currentConv = (currentBr.conversation_id || '').trim();
+      const currentBranch = currentBr.branch ? currentBr.branch.trim() : null;
+
+      const targetProvider = (cleanIdentity.provider || currentProvider).trim();
+      const targetConv = cleanIdentity.conversation_id.trim();
+      const rawBranch = cleanIdentity.branch !== undefined ? cleanIdentity.branch : cleanIdentity.branch_name;
+      let targetBranch = currentBranch;
+      if (rawBranch !== undefined) {
+        targetBranch = (rawBranch !== null && typeof rawBranch === 'string') ? rawBranch.trim() : null;
+      }
+
+      if (
+        targetProvider === currentProvider &&
+        targetConv === currentConv &&
+        targetBranch === currentBranch
+      ) {
+        isExactSameTarget = true;
+      }
+    }
+  } else {
+    // IDE 端点
+    const currentIde = (currentBinding.ide_endpoints || []).find(e => e.endpoint_id === target_endpoint);
+    if (currentIde && cleanIdentity && typeof cleanIdentity === 'object' && cleanIdentity.conversation_id) {
+      const isSameConv = cleanIdentity.conversation_id.trim() === (currentIde.conversation_id || '').trim();
+      const isSameWs = (cleanIdentity.workspace_identity?.trim() || null) === (currentIde.workspace_identity?.trim() || null);
+      const isSameRepo = (cleanIdentity.repository_identity?.trim() || null) === (currentIde.repository_identity?.trim() || null);
+
+      if (isSameConv && isSameWs && isSameRepo) {
+        isExactSameTarget = true;
+      }
+    }
+  }
+
+  if (isExactSameTarget) {
+    // 绝对零变更 No-Op：
+    // 不创建 Action、不修改 updated_at、不改变 binding_revision、不改变 endpoint_revision/fact、不追加退役历史。
+    return {
+      success: true,
+      action: null,
+      snapshot: snapshotBefore,
+      is_same_target: true
+    };
+  }
+
   const action = core.recordActionFact({
     action_id: actionId,
     action_type: 'rebind',
@@ -99,23 +172,6 @@ export function executeSafeRebind(params) {
     binding_revision: expected_binding_revision,
     payload: { identity: cleanIdentity }
   });
-
-  // 目标端点存在性校验（若端点未配置则拦截）
-  const snapshot = core.getSnapshot();
-  let targetEndpointFact = null;
-  if (target_endpoint === 'browser') {
-    targetEndpointFact = snapshot.endpoints?.browser;
-  } else if (snapshot.endpoints?.ide_endpoints) {
-    targetEndpointFact = snapshot.endpoints.ide_endpoints[target_endpoint];
-  }
-
-  if (!targetEndpointFact) {
-    core.advanceActionStage(action.action_id, {
-      next_stage: 'BLOCKED',
-      evidence: `Target endpoint "${target_endpoint}" does not exist in project binding`
-    });
-    throw new Error(`Target endpoint "${target_endpoint}" does not exist in project binding`);
-  }
 
   try {
     core.advanceActionStage(action.action_id, {
@@ -135,10 +191,7 @@ export function executeSafeRebind(params) {
       ...options
     });
 
-    const isSameTarget = updatedSnapshot.binding.binding_revision === expected_binding_revision;
-    const evidence = isSameTarget
-      ? `Endpoint "${target_endpoint}" already bound to exact target identity (same-target no-op)`
-      : `Endpoint "${target_endpoint}" successfully rebound to revision ${updatedSnapshot.binding.binding_revision}`;
+    const evidence = `Endpoint "${target_endpoint}" successfully rebound to revision ${updatedSnapshot.binding.binding_revision}`;
 
     core.advanceActionStage(action.action_id, {
       next_stage: 'TARGET_COMPLETED',
@@ -149,7 +202,7 @@ export function executeSafeRebind(params) {
       success: true,
       action,
       snapshot: updatedSnapshot,
-      is_same_target: isSameTarget
+      is_same_target: false
     };
   } catch (err) {
     core.advanceActionStage(action.action_id, {

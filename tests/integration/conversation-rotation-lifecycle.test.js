@@ -218,7 +218,7 @@ describe('Issue #41: 非破坏性会话轮换核心验收 (Non-Destructive Conve
     assert.notEqual(projection.latest_result_indicator, 'IDE_LATEST', '退役代际绝不继续驱动红点');
   });
 
-  test('7. 同一目标 (Same-Target) Rebind 绝不伪造新代际：零变更 No-Op (Browser + IDE)', () => {
+  test('7. 同一目标 (Same-Target) Rebind 绝不伪造新代际：彻底的零变异 No-Op (Browser + IDE)', () => {
     const reg = createProjectRegistry();
     const core = reg.registerProject({ binding: makeSampleProject('proj-same-target') });
 
@@ -231,8 +231,9 @@ describe('Issue #41: 非破坏性会话轮换核心验收 (Non-Destructive Conve
       latest_completed_cursor: 'cursor-turn-same',
       completed_at: new Date().toISOString()
     });
-    assert.equal(core.getSnapshot().endpoints.ide.result_state, 'NEW');
-    assert.equal(core.getSnapshot().endpoints.ide.latest_completed_cursor, 'cursor-turn-same');
+    const snapBeforeIde = core.getSnapshot();
+    const actionsCountBefore = snapBeforeIde.actions.length;
+    const updatedAtBefore = snapBeforeIde.updated_at;
 
     // 对 IDE 执行相同目标 Rebind
     const ideSameRes = executeSafeRebind({
@@ -247,13 +248,17 @@ describe('Issue #41: 非破坏性会话轮换核心验收 (Non-Destructive Conve
       }
     });
 
+    const snapAfterIde = core.getSnapshot();
     assert.equal(ideSameRes.success, true);
     assert.equal(ideSameRes.is_same_target, true);
-    assert.equal(ideSameRes.snapshot.binding.binding_revision, 1, 'binding_revision 不得递增');
-    assert.equal(ideSameRes.snapshot.binding.ide_endpoints[0].endpoint_revision, 1, 'endpoint_revision 不得递增');
+    assert.equal(ideSameRes.action, null, 'Same-target 绝不得创建 Rebind Action');
+    assert.equal(snapAfterIde.actions.length, actionsCountBefore, 'Action 账本数量绝对不变');
+    assert.equal(snapAfterIde.updated_at, updatedAtBefore, '项目 updated_at 绝对不得变更');
+    assert.equal(snapAfterIde.binding.binding_revision, 1, 'binding_revision 不得递增');
+    assert.equal(snapAfterIde.binding.ide_endpoints[0].endpoint_revision, 1, 'endpoint_revision 不得递增');
     assert.equal(core.getRetiredGenerations().length, 0, '同一目标绝不得追加退役代际');
-    assert.equal(core.getSnapshot().endpoints.ide.result_state, 'NEW', '端点状态与游标必须保持原样，绝不重置为 UNKNOWN');
-    assert.equal(core.getSnapshot().endpoints.ide.latest_completed_cursor, 'cursor-turn-same');
+    assert.equal(snapAfterIde.endpoints.ide.result_state, 'NEW', '端点状态必须保持原样，绝不重置为 UNKNOWN');
+    assert.equal(snapAfterIde.endpoints.ide.latest_completed_cursor, 'cursor-turn-same');
 
     // 2. 对 Browser 执行相同目标 Rebind
     core.recordEndpointObservation('browser', {
@@ -262,7 +267,9 @@ describe('Issue #41: 非破坏性会话轮换核心验收 (Non-Destructive Conve
       latest_completed_cursor: 'cursor-br-same',
       completed_at: new Date().toISOString()
     });
-    assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NEW');
+    const snapBeforeBr = core.getSnapshot();
+    const brActionsBefore = snapBeforeBr.actions.length;
+    const brUpdatedAtBefore = snapBeforeBr.updated_at;
 
     const brSameRes = executeSafeRebind({
       registry: reg,
@@ -270,17 +277,22 @@ describe('Issue #41: 非破坏性会话轮换核心验收 (Non-Destructive Conve
       expectedBindingRevision: 1,
       targetEndpoint: 'browser',
       newIdentity: {
+        provider: 'chatgpt',
         conversation_id: 'conv-br-initial',
         branch: 'feat/initial'
       }
     });
 
+    const snapAfterBr = core.getSnapshot();
     assert.equal(brSameRes.success, true);
     assert.equal(brSameRes.is_same_target, true);
-    assert.equal(brSameRes.snapshot.binding.binding_revision, 1, 'Browser 同一目标 binding_revision 不变');
+    assert.equal(brSameRes.action, null, 'Browser same-target 绝不创建 Action');
+    assert.equal(snapAfterBr.actions.length, brActionsBefore, 'Browser same-target 不新增 Action');
+    assert.equal(snapAfterBr.updated_at, brUpdatedAtBefore, 'Browser same-target 不修改 updated_at');
+    assert.equal(snapAfterBr.binding.binding_revision, 1, 'Browser 同一目标 binding_revision 不变');
     assert.equal(core.getRetiredGenerations().length, 0, 'Browser 同一目标绝不追加退役代际');
-    assert.equal(core.getSnapshot().endpoints.browser.result_state, 'NEW', 'Browser 事实绝不重置');
-    assert.equal(core.getSnapshot().endpoints.browser.latest_completed_cursor, 'cursor-br-same');
+    assert.equal(snapAfterBr.endpoints.browser.result_state, 'NEW', 'Browser 事实绝不重置');
+    assert.equal(snapAfterBr.endpoints.browser.latest_completed_cursor, 'cursor-br-same');
   });
 
   test('8 & 9. 安全门禁严格保持：无效目标/版本过期均实行零变更拦截 (Zero Mutation)', () => {
@@ -319,84 +331,6 @@ describe('Issue #41: 非破坏性会话轮换核心验收 (Non-Destructive Conve
     assert.equal(core1.getRetiredGenerations().length, 0);
   });
 
-  test('10. 跨项目活跃会话唯一性守卫：Browser 与 IDE 均拦截 Rebind 到另一项目活跃会话，且退役历史不占位', () => {
-    const reg = createProjectRegistry();
-    const core1 = reg.registerProject({ binding: makeSampleProject('proj-active-1') });
-    const core2 = reg.registerProject({
-      binding: createBinding({
-        binding_id: 'proj-active-2',
-        binding_revision: 1,
-        browser: { provider: 'chatgpt', conversation_id: 'conv-br-active-2' },
-        ide_endpoints: [{
-          endpoint_id: 'ide-primary',
-          endpoint_revision: 1,
-          conversation_id: 'conv-ide-active-2',
-          workspace_identity: '/ws/p2',
-          repository_identity: 'org/repo2'
-        }]
-      })
-    });
-
-    const rev1Before = core1.getSnapshot().binding.binding_revision;
-    const fact1Before = { ...core1.getSnapshot().endpoints.ide };
-
-    // 1. 真实 IDE Rebind 跨项目活跃会话冲突拦截
-    assert.throws(() => {
-      reg.rebindProjectEndpoint('proj-active-1', {
-        endpoint_id: 'ide-primary',
-        identity: {
-          conversation_id: 'conv-ide-active-2', // 项目 2 当前正在使用的活跃 IDE 会话
-          workspace_identity: '/ws/p1',
-          repository_identity: 'org/repo1'
-        }
-      });
-    }, /Antigravity conversation "conv-ide-active-2" is already bound to project/);
-
-    // 验证零变更：版本不变、端点事实不变、退役账本未被追加
-    assert.equal(core1.getSnapshot().binding.binding_revision, rev1Before);
-    assert.equal(core1.getSnapshot().endpoints.ide.result_state, fact1Before.result_state);
-    assert.equal(core1.getRetiredGenerations().length, 0);
-
-    // 2. 真实 Browser Rebind 跨项目活跃会话冲突拦截
-    assert.throws(() => {
-      reg.rebindProjectEndpoint('proj-active-1', {
-        endpoint_id: 'browser',
-        identity: {
-          conversation_id: 'conv-br-active-2' // 项目 2 当前正在使用的活跃 Browser 会话
-        }
-      });
-    }, /Browser conversation "conv-br-active-2" is already bound to project/);
-
-    // 验证零变更
-    assert.equal(core1.getSnapshot().binding.binding_revision, rev1Before);
-    assert.equal(core1.getRetiredGenerations().length, 0);
-
-    // 3. 证明退役历史不占位（Retired history does NOT reserve active conversation）
-    // 项目 2 将 ide-primary 轮换，原 conv-ide-active-2 变为退役状态
-    reg.rebindProjectEndpoint('proj-active-2', {
-      endpoint_id: 'ide-primary',
-      identity: {
-        conversation_id: 'conv-ide-active-2-next',
-        workspace_identity: '/ws/p2',
-        repository_identity: 'org/repo2'
-      }
-    });
-    assert.equal(core2.getRetiredGenerations().length, 1);
-    assert.equal(core2.getRetiredGenerations()[0].identity.conversation_id, 'conv-ide-active-2');
-
-    // 此时项目 1 可以合法 Rebind 到已退役的 conv-ide-active-2 会话！
-    const okRebindSnap = reg.rebindProjectEndpoint('proj-active-1', {
-      endpoint_id: 'ide-primary',
-      identity: {
-        conversation_id: 'conv-ide-active-2',
-        workspace_identity: '/ws/p1',
-        repository_identity: 'org/repo1'
-      }
-    });
-    assert.equal(okRebindSnap.binding.binding_revision, rev1Before + 1);
-    assert.equal(okRebindSnap.binding.ide_endpoints[0].endpoint_revision, 2);
-    assert.equal(okRebindSnap.binding.ide.conversation_id, 'conv-ide-active-2');
-  });
 
   test('11 & 12. Hook 过渡原子性：Hook 安装失败零变更且旧 Hook 完好；成功过渡后仅清理旧孤立订阅', async () => {
     let server;

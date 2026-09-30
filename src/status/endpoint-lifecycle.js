@@ -141,8 +141,12 @@ export function executeRebindEndpoint({
       nextBranch = null;
     }
 
-    // 严格同目标检测：会话 ID 与分支均未变更时，作为零变更 No-Op
-    if (isSameConversation && (nextBranch ?? null) === (binding.browser?.branch ?? null)) {
+    const targetProvider = (identity.provider || binding.browser?.provider || 'chatgpt').trim();
+    const currentProvider = (binding.browser?.provider || 'chatgpt').trim();
+    const isSameProvider = targetProvider === currentProvider;
+
+    // 严格同目标检测：effective provider、会话 ID 与分支均未变更时，作为零变更 No-Op
+    if (isSameProvider && isSameConversation && (nextBranch ?? null) === (binding.browser?.branch ?? null)) {
       return {
         isSameTarget: true,
         targetRole: 'browser',

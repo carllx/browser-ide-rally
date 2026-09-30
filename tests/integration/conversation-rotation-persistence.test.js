@@ -319,11 +319,28 @@ describe('Issue #41: 退役代际持久化、Schema v3 升级与 Fail-Closed 水
         { desc: '负数 revision', mutate: e => ({ ...e, endpoint_revision: -1 }) },
         { desc: '缺少 identity', mutate: e => ({ ...e, identity: null }) },
         { desc: '缺少 identity.conversation_id', mutate: e => ({ ...e, identity: { workspace_identity: '/ws' } }) },
+        { desc: 'IDE 缺少 workspace_identity', mutate: e => ({ ...e, identity: { conversation_id: 'conv-1', repository_identity: 'r1' } }) },
+        { desc: 'IDE workspace_identity 为空串', mutate: e => ({ ...e, identity: { conversation_id: 'conv-1', workspace_identity: '   ', repository_identity: 'r1' } }) },
+        { desc: 'IDE 缺少 repository_identity', mutate: e => ({ ...e, identity: { conversation_id: 'conv-1', workspace_identity: '/ws' } }) },
+        { desc: 'IDE 携带非法 branch', mutate: e => ({ ...e, identity: { ...e.identity, branch: 'feat' } }) },
+        { desc: 'Browser 缺少 provider', mutate: e => ({ ...e, role: 'browser', endpoint_id: 'browser', identity: { conversation_id: 'conv-1' }, endpoint_fact: { ...e.endpoint_fact, role: 'browser', endpoint: 'browser' } }) },
+        { desc: 'Browser 携带非法 workspace_identity', mutate: e => ({ ...e, role: 'browser', endpoint_id: 'browser', identity: { conversation_id: 'conv-1', provider: 'chatgpt', workspace_identity: '/ws' }, endpoint_fact: { ...e.endpoint_fact, role: 'browser', endpoint: 'browser' } }) },
+        { desc: 'Browser branch 为非法类型', mutate: e => ({ ...e, role: 'browser', endpoint_id: 'browser', identity: { conversation_id: 'conv-1', provider: 'chatgpt', branch: 123 }, endpoint_fact: { ...e.endpoint_fact, role: 'browser', endpoint: 'browser' } }) },
         { desc: '缺少 endpoint_fact', mutate: e => ({ ...e, endpoint_fact: null }) },
         { desc: '缺少 endpoint_fact.continuity', mutate: e => ({ ...e, endpoint_fact: { ...e.endpoint_fact, continuity: null } }) },
+        { desc: 'continuity.trusted 不是布尔值', mutate: e => ({ ...e, endpoint_fact: { ...e.endpoint_fact, continuity: { trusted: 'true' } } }) },
         { desc: 'role 与 endpoint_fact.role 不匹配', mutate: e => ({ ...e, endpoint_fact: { ...e.endpoint_fact, role: 'browser' } }) },
         { desc: 'endpoint_revision 与 endpoint_fact.endpoint_revision 不匹配', mutate: e => ({ ...e, endpoint_fact: { ...e.endpoint_fact, endpoint_revision: 2 } }) },
-        { desc: 'endpoint_id 与 endpoint_fact.endpoint 不匹配', mutate: e => ({ ...e, endpoint_fact: { ...e.endpoint_fact, endpoint: 'ide-secondary' } }) }
+        { desc: 'endpoint_id 与 endpoint_fact.endpoint 不匹配', mutate: e => ({ ...e, endpoint_fact: { ...e.endpoint_fact, endpoint: 'ide-secondary' } }) },
+        { desc: 'retired_at 非法时间戳', mutate: e => ({ ...e, retired_at: 'not-a-timestamp' }) },
+        { desc: 'completed_at 非法时间戳', mutate: e => ({ ...e, endpoint_fact: { ...e.endpoint_fact, completed_at: 'bad-date' } }) },
+        { desc: 'updated_at 非法时间戳', mutate: e => ({ ...e, endpoint_fact: { ...e.endpoint_fact, updated_at: 'bad-date' } }) },
+        { desc: 'latest_completed_result cursor 不匹配', mutate: e => ({ ...e, endpoint_fact: { ...e.endpoint_fact, latest_completed_result: { cursor: 'diff-cursor', result_ref: 'ref', text: 't', captured_at: now } } }) },
+        { desc: 'latest_completed_result 缺少 result_ref', mutate: e => ({ ...e, endpoint_fact: { ...e.endpoint_fact, latest_completed_result: { cursor: 'cursor-1', result_ref: '', text: 't', captured_at: now } } }) },
+        { desc: 'latest_completed_result captured_at 非法', mutate: e => ({ ...e, endpoint_fact: { ...e.endpoint_fact, latest_completed_result: { cursor: 'cursor-1', result_ref: 'r', text: 't', captured_at: 'invalid' } } }) },
+        { desc: 'cursor 为 null 但携带 latest_completed_result', mutate: e => ({ ...e, endpoint_fact: { ...e.endpoint_fact, latest_completed_cursor: null, latest_completed_result: { cursor: 'c', result_ref: 'r', text: 't', captured_at: now } } }) },
+        { desc: '不可能账本 (latest 为空但 handled 非空)', mutate: e => ({ ...e, endpoint_fact: { ...e.endpoint_fact, latest_completed_cursor: null, last_handled_cursor: 'cur-1' } }) },
+        { desc: '自相矛盾的状态 (真实为 NEW 但声明为 UNKNOWN)', mutate: e => ({ ...e, endpoint_fact: { ...e.endpoint_fact, result_state: 'UNKNOWN' } }) }
       ];
 
       for (const { desc, mutate } of corruptCases) {
@@ -351,6 +368,52 @@ describe('Issue #41: 退役代际持久化、Schema v3 升级与 Fail-Closed 水
           `损坏场景 [${desc}] 必须严格 Fail-Closed 抛错拒绝加载`
         );
       }
+    } finally {
+      cleanup();
+    }
+  });
+
+  test('8. 回归验证：退役的 NEW 证据绝不能携带自相矛盾的 UNKNOWN 状态，且 raw facts 不伪造持久化 result_state', () => {
+    const { file, cleanup } = createTempStorage();
+    try {
+      const reg1 = createProjectRegistry({ storagePath: file });
+      const core1 = reg1.registerProject({ binding: makeSampleProject('proj-new-retired') });
+
+      // 制造一个明确的受信 NEW 事实并轮换
+      core1.recordEndpointObservation('ide-primary', {
+        trusted: true,
+        endpoint_id: 'ide-primary',
+        endpoint_revision: 1,
+        conversation_id: 'conv-ide-init',
+        latest_completed_cursor: 'cursor-new-100',
+        completed_at: new Date().toISOString()
+      });
+      assert.equal(core1.getSnapshot().endpoints.ide.result_state, 'NEW');
+
+      reg1.rebindProjectEndpoint('proj-new-retired', {
+        endpoint: 'ide-primary',
+        identity: {
+          conversation_id: 'conv-ide-next',
+          workspace_identity: '/ws/persist',
+          repository_identity: 'github.com/org/persist'
+        }
+      });
+
+      reg1.saveToFile(file);
+
+      // 读取磁盘 JSON 验证：
+      // 1. 退役代际的 endpoint_fact 保持原始规范结构，绝不伪造硬编码制造 result_state: "UNKNOWN"
+      const rawData = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const retiredEntry = rawData.projects['proj-new-retired'].retired_generations[0];
+      assert.ok(retiredEntry);
+      assert.equal(retiredEntry.endpoint_fact.latest_completed_cursor, 'cursor-new-100');
+      assert.notEqual(retiredEntry.endpoint_fact.result_state, 'UNKNOWN', '退役 NEW 证据绝不得硬造为 UNKNOWN');
+
+      // 2. 重新加载，验证依然可正常从磁盘还原
+      const reg2 = createProjectRegistry({ storagePath: file });
+      const core2 = reg2.getProject('proj-new-retired');
+      assert.equal(core2.getRetiredGenerations().length, 1);
+      assert.equal(core2.getRetiredGenerations()[0].endpoint_fact.latest_completed_cursor, 'cursor-new-100');
     } finally {
       cleanup();
     }
