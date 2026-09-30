@@ -86,9 +86,13 @@ export function normalizeRetiredGeneration(entry) {
       provider: null
     };
   } else {
-    // browser
-    if (typeof entry.identity.provider !== 'string' || !entry.identity.provider.trim()) {
-      throw new Error('Corrupt retired generation: browser identity requires valid non-empty provider');
+    // browser: 允许 provider 为 null（保留历史不确定性，绝不假造 'chatgpt'），若提供则必须为非空字符串
+    let provider = null;
+    if (entry.identity.provider !== null && entry.identity.provider !== undefined) {
+      if (typeof entry.identity.provider !== 'string' || !entry.identity.provider.trim()) {
+        throw new Error('Corrupt retired generation: browser identity provider must be a non-empty string or null');
+      }
+      provider = entry.identity.provider.trim();
     }
     let branch = null;
     if (entry.identity.branch !== null && entry.identity.branch !== undefined) {
@@ -105,7 +109,7 @@ export function normalizeRetiredGeneration(entry) {
     }
     identity = {
       conversation_id: cleanConvId,
-      provider: entry.identity.provider.trim(),
+      provider,
       branch,
       workspace_identity: null,
       repository_identity: null
@@ -154,10 +158,8 @@ export function normalizeRetiredGeneration(entry) {
       throw new Error('Corrupt retired generation: completed_at must be a valid ISO timestamp or null');
     }
   }
-  if (fact.updated_at !== null && fact.updated_at !== undefined) {
-    if (typeof fact.updated_at !== 'string' || !fact.updated_at.trim() || Number.isNaN(Date.parse(fact.updated_at))) {
-      throw new Error('Corrupt retired generation: updated_at must be a valid ISO timestamp');
-    }
+  if (!fact.updated_at || typeof fact.updated_at !== 'string' || !fact.updated_at.trim() || Number.isNaN(Date.parse(fact.updated_at))) {
+    throw new Error('Corrupt retired generation: endpoint_fact.updated_at must be a valid ISO timestamp');
   }
 
   // 结果材料严格校验
@@ -202,7 +204,7 @@ export function normalizeRetiredGeneration(entry) {
       trusted: fact.continuity.trusted,
       unknown_reason: fact.continuity.unknown_reason ? fact.continuity.unknown_reason.trim() : null
     },
-    updated_at: fact.updated_at ? fact.updated_at.trim() : retiredAt
+    updated_at: fact.updated_at.trim()
   };
 
   // 杜绝不可能账本 (latest 为 null 但 handled 非 null)

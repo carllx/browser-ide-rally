@@ -239,4 +239,59 @@ describe('Issue #41: 活跃会话唯一性守卫与目标槽位排除', () => {
     });
     assert.equal(okSnap.binding.ide_endpoints[0].conversation_id, 'conv-ide-p2');
   });
+
+  test('5. Rebind 支持 endpoint alias，且同一目标 Rebind 依然是严格零变更 No-Op', () => {
+    const reg = createProjectRegistry();
+    const core = reg.registerProject({
+      binding: createBinding({
+        binding_id: 'proj-alias-test',
+        binding_revision: 1,
+        browser: { provider: 'chatgpt', conversation_id: 'conv-br-init' },
+        ide_endpoints: [
+          {
+            endpoint_id: 'ide-primary',
+            endpoint_revision: 1,
+            conversation_id: 'conv-ide-alias-1',
+            workspace_identity: '/ws/main',
+            repository_identity: 'org/repo'
+          }
+        ]
+      })
+    });
+
+    const snapBefore = core.getSnapshot();
+    const revBefore = snapBefore.binding.binding_revision;
+    const actionsBefore = snapBefore.actions.length;
+    const updatedAtBefore = snapBefore.updated_at;
+
+    // 5a. 使用 endpoint: 'ide-primary' alias 进行同目标 Rebind
+    const snapSame1 = reg.rebindProjectEndpoint('proj-alias-test', {
+      endpoint: 'ide-primary',
+      identity: {
+        conversation_id: 'conv-ide-alias-1',
+        workspace_identity: '/ws/main',
+        repository_identity: 'org/repo'
+      }
+    });
+
+    assert.equal(snapSame1.binding.binding_revision, revBefore, '同目标 Rebind 绝对不得递增版本');
+    assert.equal(snapSame1.actions.length, actionsBefore, '不得创建任何 Action');
+    assert.equal(snapSame1.updated_at, updatedAtBefore, 'updated_at 绝对不得变异');
+    assert.equal(core.getRetiredGenerations().length, 0, '不得追加退役代际');
+
+    // 5b. 单槽位下使用 endpoint: 'ide' alias 进行同目标 Rebind
+    const snapSame2 = reg.rebindProjectEndpoint('proj-alias-test', {
+      endpoint: 'ide',
+      identity: {
+        conversation_id: 'conv-ide-alias-1',
+        workspace_identity: '/ws/main',
+        repository_identity: 'org/repo'
+      }
+    });
+
+    assert.equal(snapSame2.binding.binding_revision, revBefore, 'ide alias 同目标绝对不得递增版本');
+    assert.equal(snapSame2.actions.length, actionsBefore, 'ide alias 同目标不得创建 Action');
+    assert.equal(snapSame2.updated_at, updatedAtBefore, 'ide alias 同目标 updated_at 不得改变');
+    assert.equal(core.getRetiredGenerations().length, 0, 'ide alias 同目标不得追加退役代际');
+  });
 });

@@ -166,15 +166,17 @@ export class ProjectRegistry {
 
   rebindProjectEndpoint(bindingId, rebindOptions) {
     const core = this.getProject(bindingId);
-    const targetEndpoint = rebindOptions.endpoint_id || rebindOptions.target_endpoint;
-    const role = targetEndpoint === 'browser' ? 'browser' : 'ide';
+    const targetEndpoint = rebindOptions.endpoint_id || rebindOptions.endpoint || rebindOptions.target_endpoint;
+    const resolved = typeof core._resolveEndpoint === 'function' ? core._resolveEndpoint(targetEndpoint) : null;
+    const targetSlot = resolved ? resolved.id : targetEndpoint;
+    const role = (resolved ? resolved.role : (targetEndpoint === 'browser' ? 'browser' : 'ide'));
     const conversationId = rebindOptions.identity?.conversation_id;
     const provider = rebindOptions.identity?.provider || (role === 'browser' ? core.getBinding().browser?.provider : null);
 
     if (conversationId) {
       this.assertActiveConversationUnique({
         projectBindingId: bindingId,
-        targetSlot: targetEndpoint,
+        targetSlot,
         role,
         conversationId,
         provider

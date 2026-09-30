@@ -202,7 +202,7 @@ describe('Issue #41: 退役代际持久化、Schema v3 升级与 Fail-Closed 水
     }
   });
 
-  test('5. Candidate-era Schema v2 迁移：无损保留既有的合法退役代际历史', () => {
+  test('5. Candidate-era Schema v2 迁移：无损保留既有的合法退役代际历史（包含遗留 Browser 代际与 IDE 代际）', () => {
     const { file, cleanup } = createTempStorage();
     try {
       const sampleProj = makeSampleProject('proj-candidate-v2');
@@ -234,6 +234,29 @@ describe('Issue #41: 退役代际持久化、Schema v3 升级与 Fail-Closed 水
                   latest_completed_cursor: 'cursor-candidate-1',
                   last_handled_cursor: null,
                   completed_at: now,
+                  updated_at: now,
+                  continuity: { trusted: true, unknown_reason: null }
+                }
+              },
+              {
+                role: 'browser',
+                endpoint_id: 'browser',
+                endpoint_revision: 1,
+                retired_at: now,
+                reason: 'conversation_rotation',
+                identity: {
+                  conversation_id: 'conv-browser-cand-1',
+                  branch: 'feat-browser-cand',
+                  provider: null // 真实 candidate-era 遗留历史：未提供或为 null，绝不捏造成 'chatgpt'
+                },
+                endpoint_fact: {
+                  endpoint: 'browser',
+                  role: 'browser',
+                  endpoint_revision: 1,
+                  latest_completed_cursor: 'cursor-browser-1',
+                  last_handled_cursor: null,
+                  completed_at: now,
+                  updated_at: now,
                   continuity: { trusted: true, unknown_reason: null }
                 }
               }
@@ -250,17 +273,30 @@ describe('Issue #41: 退役代际持久化、Schema v3 升级与 Fail-Closed 水
       const reg = createProjectRegistry({ storagePath: file });
       const core = reg.getProject('proj-candidate-v2');
       const retired = core.getRetiredGenerations();
-      assert.equal(retired.length, 1);
+      assert.equal(retired.length, 2);
+      // IDE 代际
       assert.equal(retired[0].identity.conversation_id, 'conv-real-candidate-era-1');
       assert.equal(retired[0].endpoint_fact.latest_completed_cursor, 'cursor-candidate-1');
+      assert.equal(retired[0].endpoint_fact.updated_at, now);
+
+      // Browser 代际：保持 provider 为 null（保留有界不确定性），绝不假造 'chatgpt'
+      assert.equal(retired[1].identity.conversation_id, 'conv-browser-cand-1');
+      assert.equal(retired[1].identity.provider, null, '遗留 Browser 代际必须保持 provider: null，绝不制造虚假事实');
+      assert.equal(retired[1].identity.branch, 'feat-browser-cand');
+      assert.equal(retired[1].endpoint_fact.latest_completed_cursor, 'cursor-browser-1');
+      assert.equal(retired[1].endpoint_fact.updated_at, now);
 
       reg.saveToFile(file);
       const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
       assert.equal(raw.schema_version, 3);
-      assert.equal(raw.projects['proj-candidate-v2'].retired_generations.length, 1);
+      assert.equal(raw.projects['proj-candidate-v2'].retired_generations.length, 2);
       assert.equal(
         raw.projects['proj-candidate-v2'].retired_generations[0].identity.conversation_id,
         'conv-real-candidate-era-1'
+      );
+      assert.equal(
+        raw.projects['proj-candidate-v2'].retired_generations[1].identity.provider,
+        null
       );
     } finally {
       cleanup();
@@ -309,6 +345,7 @@ describe('Issue #41: 退役代际持久化、Schema v3 升级与 Fail-Closed 水
           latest_completed_cursor: 'cursor-1',
           last_handled_cursor: null,
           completed_at: now,
+          updated_at: now,
           continuity: { trusted: true, unknown_reason: null }
         }
       };
@@ -323,7 +360,8 @@ describe('Issue #41: 退役代际持久化、Schema v3 升级与 Fail-Closed 水
         { desc: 'IDE workspace_identity 为空串', mutate: e => ({ ...e, identity: { conversation_id: 'conv-1', workspace_identity: '   ', repository_identity: 'r1' } }) },
         { desc: 'IDE 缺少 repository_identity', mutate: e => ({ ...e, identity: { conversation_id: 'conv-1', workspace_identity: '/ws' } }) },
         { desc: 'IDE 携带非法 branch', mutate: e => ({ ...e, identity: { ...e.identity, branch: 'feat' } }) },
-        { desc: 'Browser 缺少 provider', mutate: e => ({ ...e, role: 'browser', endpoint_id: 'browser', identity: { conversation_id: 'conv-1' }, endpoint_fact: { ...e.endpoint_fact, role: 'browser', endpoint: 'browser' } }) },
+        { desc: 'Browser provider 为非法类型(数字)', mutate: e => ({ ...e, role: 'browser', endpoint_id: 'browser', identity: { conversation_id: 'conv-1', provider: 123 }, endpoint_fact: { ...e.endpoint_fact, role: 'browser', endpoint: 'browser' } }) },
+        { desc: 'Browser provider 为非法空串', mutate: e => ({ ...e, role: 'browser', endpoint_id: 'browser', identity: { conversation_id: 'conv-1', provider: '   ' }, endpoint_fact: { ...e.endpoint_fact, role: 'browser', endpoint: 'browser' } }) },
         { desc: 'Browser 携带非法 workspace_identity', mutate: e => ({ ...e, role: 'browser', endpoint_id: 'browser', identity: { conversation_id: 'conv-1', provider: 'chatgpt', workspace_identity: '/ws' }, endpoint_fact: { ...e.endpoint_fact, role: 'browser', endpoint: 'browser' } }) },
         { desc: 'Browser branch 为非法类型', mutate: e => ({ ...e, role: 'browser', endpoint_id: 'browser', identity: { conversation_id: 'conv-1', provider: 'chatgpt', branch: 123 }, endpoint_fact: { ...e.endpoint_fact, role: 'browser', endpoint: 'browser' } }) },
         { desc: '缺少 endpoint_fact', mutate: e => ({ ...e, endpoint_fact: null }) },
@@ -334,6 +372,8 @@ describe('Issue #41: 退役代际持久化、Schema v3 升级与 Fail-Closed 水
         { desc: 'endpoint_id 与 endpoint_fact.endpoint 不匹配', mutate: e => ({ ...e, endpoint_fact: { ...e.endpoint_fact, endpoint: 'ide-secondary' } }) },
         { desc: 'retired_at 非法时间戳', mutate: e => ({ ...e, retired_at: 'not-a-timestamp' }) },
         { desc: 'completed_at 非法时间戳', mutate: e => ({ ...e, endpoint_fact: { ...e.endpoint_fact, completed_at: 'bad-date' } }) },
+        { desc: '缺少 endpoint_fact.updated_at', mutate: e => { const copy = { ...e, endpoint_fact: { ...e.endpoint_fact } }; delete copy.endpoint_fact.updated_at; return copy; } },
+        { desc: 'endpoint_fact.updated_at 为 null', mutate: e => ({ ...e, endpoint_fact: { ...e.endpoint_fact, updated_at: null } }) },
         { desc: 'updated_at 非法时间戳', mutate: e => ({ ...e, endpoint_fact: { ...e.endpoint_fact, updated_at: 'bad-date' } }) },
         { desc: 'latest_completed_result cursor 不匹配', mutate: e => ({ ...e, endpoint_fact: { ...e.endpoint_fact, latest_completed_result: { cursor: 'diff-cursor', result_ref: 'ref', text: 't', captured_at: now } } }) },
         { desc: 'latest_completed_result 缺少 result_ref', mutate: e => ({ ...e, endpoint_fact: { ...e.endpoint_fact, latest_completed_result: { cursor: 'cursor-1', result_ref: '', text: 't', captured_at: now } } }) },
