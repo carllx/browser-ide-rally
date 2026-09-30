@@ -257,7 +257,7 @@ describe('Issue #17 综合验收测试', () => {
     const html = await res.text();
     assert.match(html, /rally-core-service<\/h2>/);
     assert.match(html, /rally-core-service-staging<\/h2>/);
-    assert.match(html, /PAUSED/); // staging 是 paused
+    assert.match(html, /已暂停/); // staging 是 paused
   });
 
   it('验收准则 7: 活跃会话身份可见，且不推断 Browser branch mainline / owner / Baton', async () => {
@@ -292,7 +292,7 @@ describe('Issue #17 综合验收测试', () => {
 
     const htmlRes = await fetch(`${baseUrl}/`);
     const html = await htmlRes.text();
-    assert.match(html, /HUMAN INTERVENTION REQUIRED/);
+    assert.match(html, /需要人工核验/);
     assert.match(html, /REQUESTED/);
     assert.match(html, /ACCEPTED_OR_DELIVERED/);
   });

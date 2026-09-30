@@ -227,7 +227,7 @@ describe('Live Surface Refresh 客户端单元测试', () => {
     const scanRow = card.querySelector('.project-scan-row');
     const uncertainTag = scanRow.querySelector('.indicator-uncertain');
     assert.ok(uncertainTag, '扫描行应包含 .indicator-uncertain 元素');
-    assert.match(uncertainTag.textContent, /排序未定|UNCERTAIN/i);
+    assert.match(uncertainTag.textContent, /无法判断哪边更新得更晚|排序未定|UNCERTAIN/i);
 
     // 两侧均无红点
     assert.equal(scanRow.querySelectorAll('.latest-dot').length, 0);

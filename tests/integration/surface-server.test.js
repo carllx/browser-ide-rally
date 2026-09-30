@@ -86,7 +86,7 @@ describe('Surface Server 集成测试', () => {
     assert.match(res.headers.get('content-type'), /text\/html/);
 
     const html = await res.text();
-    assert.match(html, /Rally Status Surface/);
+    assert.match(html, /<h1[^>]*>Rally<\/h1>/);
     assert.match(html, /proj-alpha/);
     assert.match(html, /Browser 端点/);
     assert.match(html, /IDE 端点 \[ide-a\]/);

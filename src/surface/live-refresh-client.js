@@ -118,7 +118,8 @@ function updateScanRowDom(scanRow, proj) {
       const epId = subSlot.getAttribute('data-endpoint-id');
       const slotData = ideSlots.find(e => e.endpoint_id === epId);
       const isThisSlotLatest = !isSideLevelIdeLatest && indicator === 'IDE_LATEST' && (slotData?.is_latest_result || latestEndpoint === epId);
-      updateLatestDot(subSlot, isThisSlotLatest, `最新完成结果: ${epId}`);
+      const slotLabel = subSlot.textContent.replace('●', '').trim() || epId;
+      updateLatestDot(subSlot, isThisSlotLatest, `最新完成结果: ${slotLabel}`);
     });
   }
 
@@ -130,8 +131,8 @@ function updateScanRowDom(scanRow, proj) {
       if (!uncertainEl) {
         uncertainEl = scanRow.ownerDocument.createElement('span');
         uncertainEl.className = 'indicator-uncertain';
-        uncertainEl.title = '端点完成先后顺序不确定 (UNCERTAIN)';
-        uncertainEl.textContent = '? 排序未定';
+        uncertainEl.title = '两端完成时间相近或未确立明确先后，暂时无法判断哪边更新得更晚';
+        uncertainEl.textContent = '暂时无法判断哪边更新得更晚';
         endpointsCell.appendChild(uncertainEl);
       }
     } else if (uncertainEl) {
@@ -168,7 +169,7 @@ function updateScanRowDom(scanRow, proj) {
       if (!humanTag) {
         attentionCell.innerHTML = `
           <span class="scan-attention-tag attention-human" role="alert">
-            <span class="badge badge-human">HUMAN INTERVENTION REQUIRED</span>
+            <span class="badge badge-human">需要人工核验</span>
             <span>${escapeText(proj.human_intervention.reason || '人工核验介入')}</span>
             <button
               type="button"
@@ -497,7 +498,7 @@ export function setSurfaceStaleStatus(doc, { isStale, reason = '', lastSyncTime 
       indicator.title = reason || '未能连接到状态服务器，呈现只读陈旧事实';
     } else {
       indicator.textContent = `● 实时已同步 (${timeStr})`;
-      indicator.title = '状态表面与服务端规范快照保持实时同步';
+      indicator.title = '与服务端保持实时同步';
     }
   }
 }

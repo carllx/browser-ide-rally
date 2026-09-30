@@ -57,15 +57,15 @@ export const SURFACE_CLIENT_JS = `
         });
         const result = await resp.json();
         if (resp.ok && result.success) {
-          showToast('已成功标记处理: ' + bindingId + ' / ' + endpointId);
+          showToast('已标记为已查看');
           await refreshOrReload();
         } else {
-          showToast('标记失败: ' + (result.reason || '未知错误'), true);
+          showToast('操作未完成，请检查端点状态后重试', true);
           btn.disabled = false;
           btn.textContent = originalText;
         }
       } catch (err) {
-        showToast('请求异常: ' + err.message, true);
+        showToast('网络请求异常，请稍后重试', true);
         btn.disabled = false;
         btn.textContent = originalText;
       }
@@ -95,16 +95,16 @@ export const SURFACE_CLIENT_JS = `
         });
         const result = await resp.json();
         if (resp.ok && result.success) {
-          showToast('已成功聚焦端点: ' + endpointId);
+          showToast('对话已打开');
           await refreshOrReload();
         } else {
-          showToast('聚焦失败 [' + (result.stage || 'BLOCKED') + ']: ' + (result.reason || '版本失配或目标异常'), true);
+          showToast('无法打开对话，请确认浏览器已开启或连接正常', true);
           btn.disabled = false;
           btn.textContent = originalText;
           await refreshOrReload();
         }
       } catch (err) {
-        showToast('请求异常: ' + err.message, true);
+        showToast('网络请求异常，请稍后重试', true);
         btn.disabled = false;
         btn.textContent = originalText;
       }
@@ -163,12 +163,12 @@ export const SURFACE_CLIENT_JS = `
 
       modalBody.innerHTML = 
         initialAlert +
-        '<div class="form-group"><label>' + convLabel + '</label><input type="text" id="m-conv-id" class="form-control" value="' + escapeText(curConv || '') + '" placeholder="' + convPlaceholder + '" /></div>';
+        '<div class="form-group"><label>' + convLabel + '</label><input type="text" id="m-conv-id" class="form-control" value="" placeholder="' + convPlaceholder + '" /></div>';
 
       currentModalAction = async function() {
         const convId = (document.getElementById('m-conv-id')?.value || '').trim();
         if (!convId) {
-          showToast(role === 'browser' ? '必须提供 ChatGPT 对话网址或会话 ID' : '必须提供目标会话 ID', true);
+          showToast(role === 'browser' ? '请提供 ChatGPT 对话网址或会话 ID' : '请提供目标会话 ID', true);
           return;
         }
         const newIdentity = { conversation_id: convId };
@@ -188,7 +188,7 @@ export const SURFACE_CLIENT_JS = `
           });
           const result = await resp.json();
           if (resp.ok && result.success) {
-            showToast('会话切换成功');
+            showToast('对话切换成功');
             closeModal();
             await refreshOrReload();
           } else {
@@ -221,7 +221,7 @@ export const SURFACE_CLIENT_JS = `
             await refreshOrReload();
           }
         } catch (err) {
-          showToast('请求异常: ' + err.message, true);
+          showToast('网络请求异常，请稍后重试', true);
           modalSubmit.disabled = false;
           modalSubmit.textContent = '确认切换';
         }
@@ -274,17 +274,17 @@ export const SURFACE_CLIENT_JS = `
           });
           const result = await resp.json();
           if (resp.ok && result.success) {
-            showToast('动作已提交: ' + result.stage);
+            showToast('消息已发送');
             closeModal();
             await refreshOrReload();
           } else {
-            showToast('发送失败 [' + (result.stage || 'BLOCKED') + ']: ' + (result.reason || '未知错误'), true);
+            showToast('发送受阻，请稍后重试', true);
             modalSubmit.disabled = false;
             modalSubmit.textContent = '确认执行';
             await refreshOrReload();
           }
         } catch (err) {
-          showToast('请求异常: ' + err.message, true);
+          showToast('网络请求异常，请稍后重试', true);
           modalSubmit.disabled = false;
           modalSubmit.textContent = '确认执行';
         }
@@ -391,16 +391,16 @@ export const SURFACE_CLIENT_JS = `
           });
           const result = await resp.json();
           if (resp.ok && result.success) {
-            showToast('已成功触发 Continue: ' + (result.stage || 'ACCEPTED_OR_DELIVERED'));
+            showToast('任务已接续');
             await refreshOrReload();
           } else {
-            showToast('Continue 受阻 [' + (result.stage || 'BLOCKED') + ']: ' + (result.reason || '未知原因'), true);
+            showToast('接续操作受阻，请稍后重试', true);
             btn.disabled = false;
             btn.textContent = originalText;
             await refreshOrReload();
           }
         } catch (err) {
-          showToast('请求异常: ' + err.message, true);
+          showToast('网络请求异常，请稍后重试', true);
           btn.disabled = false;
           btn.textContent = originalText;
         }

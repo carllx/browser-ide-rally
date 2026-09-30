@@ -71,20 +71,21 @@ export function renderProjectScanRow(proj) {
 
     const ideGroupHeader = `<span class="ide-group-indicator"><span class="endpoint-tag endpoint-tag-ide-group ${isSideLevelIdeLatest ? 'has-latest' : ''}">IDE${sideDot ? ' ' + sideDot : ''}</span></span>`;
 
-    const subSlotsHtml = ideSlots.map(ide => {
+    const subSlotsHtml = ideSlots.map((ide, idx) => {
       // 侧级最新时绝不向子端点打红点
       const isThisSlotLatest = !isSideLevelIdeLatest && indicator === 'IDE_LATEST' && (ide.is_latest_result || latestEndpoint === ide.endpoint_id);
-      const slotDot = isThisSlotLatest ? renderLatestDot(`最新完成结果: ${ide.endpoint_id}`) : '';
-      return `<span class="endpoint-tag endpoint-tag-ide ${isThisSlotLatest ? 'has-latest' : ''}" data-endpoint-id="${escapeHtml(ide.endpoint_id)}">${escapeHtml(ide.endpoint_id)}${slotDot ? ' ' + slotDot : ''}</span>`;
+      const humanLabel = ide.display_name || ide.alias || `IDE ${idx + 1}`;
+      const slotDot = isThisSlotLatest ? renderLatestDot(`最新完成结果: ${humanLabel}`) : '';
+      return `<span class="endpoint-tag endpoint-tag-ide ${isThisSlotLatest ? 'has-latest' : ''}" data-endpoint-id="${escapeHtml(ide.endpoint_id)}">${escapeHtml(humanLabel)}${slotDot ? ' ' + slotDot : ''}</span>`;
     }).join(' ');
 
     ideTagsHtml = `${ideGroupHeader} <span class="ide-sub-slots">(${subSlotsHtml})</span>`;
   }
 
-  // 排序未定指示器 (以人类后果语言呈现，消除字面量 UNCERTAIN)
+  // 排序未定指示器 (以人类后果语言呈现，消除字面量 UNCERTAIN 与技术表达)
   let uncertainHtml = '';
   if (indicator === 'UNCERTAIN') {
-    uncertainHtml = `<span class="indicator-uncertain" title="暂时无法确定最新结果顺序，两端完成时间相近或未确立明确先后">? 排序未定</span>`;
+    uncertainHtml = `<span class="indicator-uncertain" title="两端完成时间相近或未确立明确先后，暂时无法判断哪边更新得更晚">暂时无法判断哪边更新得更晚</span>`;
   }
 
   // 3. 诚实相对观察时间：仅依赖端点 observation/completion 时间戳，绝不以 project updated_at 冒充
@@ -99,7 +100,7 @@ export function renderProjectScanRow(proj) {
   if (proj.human_intervention?.active) {
     localAttentionHtml += `
       <span class="scan-attention-tag attention-human" role="alert">
-        <span class="badge badge-human">HUMAN INTERVENTION REQUIRED</span>
+        <span class="badge badge-human">需要人工核验</span>
         <span>${escapeHtml(proj.human_intervention.reason || '人工核验介入')}</span>
         <button
           type="button"
@@ -129,7 +130,7 @@ export function renderProjectScanRow(proj) {
     <div class="project-scan-row">
       <div class="scan-cell-identity">
         <h2 class="scan-display-name">${escapeHtml(displayName)}</h2>
-        ${isPaused ? '<span class="badge badge-paused">PAUSED</span>' : ''}
+        ${isPaused ? '<span class="badge badge-paused">已暂停</span>' : ''}
         ${disambiguationTags}
       </div>
 

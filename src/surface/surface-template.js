@@ -59,7 +59,7 @@ export function renderStatusSurfaceHtml({ projects = [], attentionTray = null } 
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Rally — Status Surface</title>
+  <title>Rally — 项目状态</title>
   <style>
     ${SURFACE_CSS}
     ${OPERATOR_CSS}
@@ -69,15 +69,15 @@ export function renderStatusSurfaceHtml({ projects = [], attentionTray = null } 
 <body>
   <header class="app-header">
     <div class="app-title-group">
-      <h1>Rally Status Surface</h1>
-      <div class="app-subtitle">多项目端点状态协同表面</div>
+      <h1>Rally</h1>
+      <div class="app-subtitle">多项目协同看板</div>
     </div>
     <div class="header-right-group" style="display: flex; align-items: center; gap: 14px;">
       <div class="status-summary-bar">
         <span>项目总数: <strong>${projectCount}</strong></span>
         <span>需关注: <strong style="color: ${attentionCount > 0 ? '#e3b341' : '#3fb950'};">${attentionCount}</strong></span>
       </div>
-      <div id="surface-sync-indicator" class="sync-indicator sync-live" title="状态表面与服务端规范快照保持实时同步">
+      <div id="surface-sync-indicator" class="sync-indicator sync-live" title="与服务端保持实时同步">
         ● 实时已同步
       </div>
     </div>
@@ -95,7 +95,7 @@ export function renderStatusSurfaceHtml({ projects = [], attentionTray = null } 
   </nav>
 
   <main class="surface-container">
-    <section class="projects-operator-plane" aria-label="项目扫描表面">
+    <section class="projects-operator-plane" aria-label="项目列表">
       ${projectCards || '<div class="text-muted" style="padding: 40px; text-align: center;">当前无已注册项目</div>'}
     </section>
 
@@ -115,13 +115,13 @@ export function renderStatusSurfaceHtml({ projects = [], attentionTray = null } 
   <div id="control-modal" class="modal-overlay" style="display: none;">
     <div class="modal-card">
       <div class="modal-header">
-        <h3 id="modal-title">安全控制操作</h3>
+        <h3 id="modal-title">操作</h3>
         <button type="button" class="btn-close" id="modal-close">&times;</button>
       </div>
       <div class="modal-body" id="modal-body"></div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" id="modal-cancel">取消</button>
-        <button type="button" class="btn btn-primary" id="modal-submit">确认执行</button>
+        <button type="button" class="btn btn-primary" id="modal-submit">确认</button>
       </div>
     </div>
   </div>

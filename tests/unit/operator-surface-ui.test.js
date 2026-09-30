@@ -228,7 +228,7 @@ describe('Issue #26 Operator Surface UI 紧凑首屏测试', () => {
 
     assert.equal(html.includes('class="latest-dot"'), false);
     assert.match(html, /indicator-uncertain/);
-    assert.match(html, /UNCERTAIN|排序未定/);
+    assert.match(html, /暂时无法判断哪边更新得更晚|排序未定|UNCERTAIN/);
   });
 
   it('7. 原始 ID、游标与 Action 历史移入 Details/Diagnostics 渐进披露', () => {

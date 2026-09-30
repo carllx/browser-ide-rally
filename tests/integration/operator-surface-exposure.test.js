@@ -1,16 +1,20 @@
 /**
  * Issue #43 User Exposure Necessity Gate Operator Surface 集成测试
  * 
- * 验证 Issue #43 规范与 Browser Mission Contract 5913105814:
+ * 验证 Issue #43 规范与 Browser Review 5917264364:
  * 1. 默认扫描视图消除内部 IDs、revisions、action stages 与状态机字面量 (NEW, UNKNOWN, NO_NEW_RESULT)；
- * 2. 排序未定使用人类后果语言（“暂时无法确定最新结果顺序”），消除字面量 UNCERTAIN；
- * 3. 普通 Browser 切换对话模态框仅要求 ChatGPT URL/ID，隐藏 endpoint_id、revision 与 branch 字段；
- * 4. 普通 IDE 切换对话模态框仅要求目标会话 ID，隐藏 endpoint_id 与工作区/代码仓库技术大文本；
+ * 2. 排序未定使用人类后果语言（“暂时无法判断哪边更新得更晚”），消除字面量 UNCERTAIN 与技术词“排序未定”；
+ * 3. 普通 Browser 切换对话模态框仅要求 ChatGPT URL/ID，无 endpoint/revision/branch 字段，且不预填当前 canonical ID；
+ * 4. 普通 IDE 切换对话模态框仅要求目标会话 ID，无 endpoint/revision/工作区技术大文本，且不预填当前 canonical ID；
  * 5. 切换会话失败时技术细节收起在 <details> 标签中按需查看；
  * 6. 控制表面隐藏 Phase-2 原型传输控件 (Send / Continue / Envelope / Allowlisted Op)；
  * 7. 移除不支持的 IDE Focus 按钮，仅在支持实际打开的 Browser 端点渲染“打开对话”；
  * 8. 工程术语重命名为“切换对话”与“已查看”，且“已查看”仅在端点可处理时呈现（无 disabled 死控件）；
- * 9. Details / Diagnostics 内部完整保留所有底层规范技术事实。
+ * 9. Details / Diagnostics 内部完整保留所有底层规范技术事实；
+ * 10. [Blocker 1 回归] 多 IDE 扫描行标签使用中性人类标签 (IDE 1 / IDE 2)，消除 raw endpoint IDs；
+ * 11. [Blocker 2 回归] Rebind 模态框默认输入框为空，不暴露当前正在运行的会话 ID；
+ * 12. [Blocker 3 回归] Toast 反馈中绝不泄露 binding_id, endpoint_id, stage (BLOCKED/FAILED) 或 raw machine reason；
+ * 13. [Blocker 4 回归] 默认首屏完全消除研发行话 (Status Surface / 端点状态协同表面 / PAUSED / HUMAN INTERVENTION REQUIRED)。
  */
 
 import { describe, it, before, after } from 'node:test';
@@ -26,6 +30,8 @@ describe('Issue #43 Operator Surface Exposure Gate 集成测试', () => {
   let baseUrl;
   let coreUncertain;
   let coreActive;
+  let coreMulti;
+  let corePausedHuman;
 
   before(async () => {
     registry = createProjectRegistry();
@@ -105,6 +111,54 @@ describe('Issue #43 Operator Surface Exposure Gate 集成测试', () => {
       completed_at: new Date(Date.now() - 60000).toISOString()
     });
 
+    // 3. 构造多 IDE 端点项目 (用于验证 Blocker 1: raw endpoint ID 隐藏)
+    coreMulti = registry.registerProject({
+      binding: {
+        binding_id: 'proj-multi-exposure',
+        display_name: 'Multi IDE Project',
+        binding_revision: 1,
+        browser: { provider: 'chatgpt', conversation_id: 'conv-multi-b' },
+        ide_endpoints: [
+          {
+            endpoint_id: 'ide-alpha-secret-id',
+            endpoint_revision: 1,
+            conversation_id: 'conv-multi-1',
+            workspace_identity: '/ws/1',
+            repository_identity: 'github.com/org/multi'
+          },
+          {
+            endpoint_id: 'ide-beta-secret-id',
+            endpoint_revision: 1,
+            conversation_id: 'conv-multi-2',
+            workspace_identity: '/ws/2',
+            repository_identity: 'github.com/org/multi'
+          }
+        ],
+        capabilities: ['read'],
+        paused: false
+      }
+    });
+
+    // 4. 构造处于暂停且有人工核验介入的项目 (用于验证 Blocker 4: 默认状态行去技术术语)
+    corePausedHuman = registry.registerProject({
+      binding: {
+        binding_id: 'proj-paused-human',
+        display_name: 'Paused Human Project',
+        binding_revision: 1,
+        browser: { provider: 'chatgpt', conversation_id: 'conv-ph-b' },
+        ide_endpoints: [{
+          endpoint_id: 'ide-ph',
+          endpoint_revision: 1,
+          conversation_id: 'conv-ph-i',
+          workspace_identity: '/ws/ph',
+          repository_identity: 'github.com/org/ph'
+        }],
+        capabilities: ['read'],
+        paused: true
+      }
+    });
+    corePausedHuman.setHumanIntervention({ active: true, reason: '待人工确认配置' });
+
     serverHandle = await startStatusSurfaceServer({
       registry,
       port: 0,
@@ -141,7 +195,7 @@ describe('Issue #43 Operator Surface Exposure Gate 集成测试', () => {
     }
   });
 
-  it('2. 排序未定 (Uncertain Ordering) 使用人类后果语言，消除字面量 UNCERTAIN', async () => {
+  it('2. 排序未定使用人类后果语言（“暂时无法判断哪边更新得更晚”），消除字面量 UNCERTAIN 与技术词“排序未定”', async () => {
     const resp = await fetch(baseUrl);
     const html = await resp.text();
 
@@ -152,13 +206,14 @@ describe('Issue #43 Operator Surface Exposure Gate 集成测试', () => {
     const uncScanRow = uncCard.querySelector('.project-scan-row');
     assert.ok(uncScanRow);
 
-    // 验证包含人类后果语言：“暂时无法确定最新结果顺序”与“排序未定”
+    // 验证包含人类后果语言：“暂时无法判断哪边更新得更晚”
     const uncIndicator = uncScanRow.querySelector('.indicator-uncertain');
     assert.ok(uncIndicator, '必须渲染排序未定指示器元素');
-    assert.match(uncIndicator.textContent, /排序未定/);
-    assert.match(uncIndicator.title, /暂时无法确定最新结果顺序/);
-    // 验证扫描行完全消除了字面量 "(UNCERTAIN)"
+    assert.match(uncIndicator.textContent, /暂时无法判断哪边更新得更晚/);
+    assert.match(uncIndicator.title, /暂时无法判断哪边更新得更晚/);
+    // 验证扫描行完全消除了字面量 "(UNCERTAIN)" 与“排序未定”
     assert.equal(uncScanRow.textContent.includes('UNCERTAIN'), false, '扫描行绝不出现 UNCERTAIN 字面量');
+    assert.equal(uncScanRow.textContent.includes('排序未定'), false, '扫描行绝不出现技术词“排序未定”');
   });
 
   it('3. 普通 Browser 切换对话模态框仅要求 ChatGPT URL/ID，无 endpoint/revision/branch 字段', async () => {
@@ -180,7 +235,6 @@ describe('Issue #43 Operator Surface Exposure Gate 集成测试', () => {
     assert.equal(modalTitle.textContent, '切换 Browser 对话');
 
     const modalBody = doc.getElementById('modal-body');
-    // 验证存在 ChatGPT URL 或会话 ID 输入框 (m-conv-id)
     const convInput = doc.getElementById('m-conv-id');
     assert.ok(convInput, '必须存在会话输入框');
     assert.match(modalBody.textContent, /ChatGPT 对话网址/);
@@ -229,7 +283,6 @@ describe('Issue #43 Operator Surface Exposure Gate 集成测试', () => {
     const html = await resp.text();
 
     const dom = new JSDOM(html, { runScripts: 'dangerously' });
-    // 模拟 fetch 返回 BLOCKED 且带有具体技术细节
     dom.window.fetch = async () => ({
       ok: false,
       json: async () => ({
@@ -257,11 +310,9 @@ describe('Issue #43 Operator Surface Exposure Gate 集成测试', () => {
     assert.ok(alertBox, '必须渲染错误提示容器');
     assert.equal(alertBox.style.display, 'block');
 
-    // 人类指导文案清晰易懂
     assert.match(alertBox.textContent, /已被其他项目占用/);
     assert.match(alertBox.textContent, /防止跨项目会话串线/);
 
-    // 技术细节收起在 <details> 标签中
     const detailsEl = alertBox.querySelector('details');
     assert.ok(detailsEl, '错误提示必须包含 details 折叠标签');
     const summaryEl = detailsEl.querySelector('summary');
@@ -276,11 +327,9 @@ describe('Issue #43 Operator Surface Exposure Gate 集成测试', () => {
     const dom = new JSDOM(html);
     const doc = dom.window.document;
 
-    // 默认控制表面绝无 safe-send、continue 按钮
     assert.equal(doc.querySelector('button[data-action="safe-send"]'), null, '日常控制表面绝不暴露 safe-send 原型按钮');
     assert.equal(doc.querySelector('button[data-action="continue"]'), null, '日常控制表面绝不暴露 continue 原型按钮');
 
-    // 检查卡片内容与控制按钮区域无 Allowlisted Op 或 Envelope 泄露
     const cards = doc.querySelectorAll('.endpoint-card');
     for (const card of cards) {
       assert.equal(card.textContent.includes('Allowlisted Op'), false, '卡片中绝不暴露 Allowlisted Op 字符');
@@ -295,13 +344,11 @@ describe('Issue #43 Operator Surface Exposure Gate 集成测试', () => {
     const dom = new JSDOM(html);
     const doc = dom.window.document;
 
-    // Browser 端点必须有“打开对话”按钮
     const browserCard = doc.querySelector('.endpoint-browser');
     const openFocusBtn = browserCard.querySelector('button[data-action="open-focus"]');
     assert.ok(openFocusBtn, 'Browser 端点卡片必须有打开对话按钮');
     assert.match(openFocusBtn.textContent, /打开对话/);
 
-    // IDE 端点绝不渲染任何 Focus / open-focus 按钮
     const ideCards = doc.querySelectorAll('.endpoint-ide');
     for (const ideCard of ideCards) {
       assert.equal(ideCard.querySelector('button[data-action="open-focus"]'), null, 'IDE 端点绝不得渲染打开/Focus死控件');
@@ -315,17 +362,14 @@ describe('Issue #43 Operator Surface Exposure Gate 集成测试', () => {
     const dom = new JSDOM(html);
     const doc = dom.window.document;
 
-    // proj-active-exposure 的 Browser 端点有新结果且未被处理，can_mark_handled 为 true
     const activeCard = doc.getElementById('card-proj-active-exposure');
     const browserHandledBtn = activeCard.querySelector('.endpoint-browser button[data-action="mark-handled"]');
     assert.ok(browserHandledBtn, '可处理的 Browser 端点必须渲染已查看按钮');
     assert.match(browserHandledBtn.textContent, /已查看/);
     assert.equal(browserHandledBtn.disabled, false);
 
-    // 将该 Browser 端点标为 handled
     coreActive.markEndpointHandled('browser', { expected_cursor: 'cur-b-act' });
 
-    // 重新请求并验证已无 handled 按钮（绝不保留 disabled 死控件）
     const resp2 = await fetch(baseUrl);
     const html2 = await resp2.text();
     const dom2 = new JSDOM(html2);
@@ -343,10 +387,153 @@ describe('Issue #43 Operator Surface Exposure Gate 集成测试', () => {
     assert.ok(details, '必须存在 Details 展开折叠区域');
 
     const detailsText = details.textContent;
-    // 包含技术事实
     assert.match(detailsText, /proj-uncertain-exposure|proj-active-exposure/);
     assert.match(detailsText, /ide-main|ide-worker/);
     assert.match(detailsText, /rev 1|rev 2/);
     assert.match(detailsText, /b_advanced|i_advanced/);
+  });
+
+  it('10. [Blocker 1 回归] 多 IDE 扫描行标签使用中性人类标签 (IDE 1 / IDE 2)，消除 raw endpoint IDs', async () => {
+    const resp = await fetch(baseUrl);
+    const html = await resp.text();
+
+    const dom = new JSDOM(html);
+    const doc = dom.window.document;
+    const multiCard = doc.getElementById('card-proj-multi-exposure');
+    assert.ok(multiCard, '必须存在多 IDE 项目卡片');
+
+    const scanRow = multiCard.querySelector('.project-scan-row');
+    const subSlots = scanRow.querySelectorAll('.ide-sub-slots .endpoint-tag-ide');
+    assert.equal(subSlots.length, 2, '必须有两个子端点标签');
+
+    // 验证标签可见文本使用中性人类序号，而非机器 raw ID
+    assert.equal(subSlots[0].textContent.trim(), 'IDE 1');
+    assert.equal(subSlots[1].textContent.trim(), 'IDE 2');
+
+    // 验证扫描行完全不包含内部原始 ID
+    assert.equal(scanRow.textContent.includes('ide-alpha-secret-id'), false, '扫描行绝不显示 raw endpoint ID');
+    assert.equal(scanRow.textContent.includes('ide-beta-secret-id'), false, '扫描行绝不显示 raw endpoint ID');
+
+    // 验证底层属性仍准确保留 data-endpoint-id 供选择器使用
+    assert.equal(subSlots[0].getAttribute('data-endpoint-id'), 'ide-alpha-secret-id');
+    assert.equal(subSlots[1].getAttribute('data-endpoint-id'), 'ide-beta-secret-id');
+
+    // 验证 Details 诊断中完整保留内部端点 ID
+    const details = multiCard.querySelector('.project-details');
+    assert.ok(details.textContent.includes('ide-alpha-secret-id'), 'Details 中应保留内部端点 ID');
+  });
+
+  it('11. [Blocker 2 回归] 普通 Browser 与 IDE Rebind 模态框默认输入框为空，不泄露当前 canonical conversation ID', async () => {
+    const resp = await fetch(baseUrl);
+    const html = await resp.text();
+
+    const dom = new JSDOM(html, { runScripts: 'dangerously' });
+    dom.window.eval(SURFACE_CLIENT_JS);
+    const doc = dom.window.document;
+
+    const actCard = doc.getElementById('card-proj-active-exposure');
+
+    // 1. 测试 Browser 切换模态框
+    const browserRebindBtn = actCard.querySelector('.endpoint-browser button[data-action="rebind"]');
+    browserRebindBtn.click();
+    const browserInput = doc.getElementById('m-conv-id');
+    assert.ok(browserInput);
+    assert.equal(browserInput.value, '', 'Browser 切换输入框初始值必须为空，绝不预填当前会话 ID');
+
+    // 2. 测试 IDE 切换模态框
+    const ideRebindBtn = actCard.querySelector('.endpoint-ide button[data-action="rebind"]');
+    ideRebindBtn.click();
+    const ideInput = doc.getElementById('m-conv-id');
+    assert.ok(ideInput);
+    assert.equal(ideInput.value, '', 'IDE 切换输入框初始值必须为空，绝不预填当前会话 ID');
+  });
+
+  it('12. [Blocker 3 回归] Toast 反馈中绝不泄露 binding_id, endpoint_id, stage (BLOCKED/FAILED) 或 raw machine reason', async () => {
+    coreActive.recordEndpointObservation('browser', {
+      trusted: true,
+      latest_completed_cursor: 'cur-b-toast-test',
+      provider: 'chatgpt',
+      conversation_id: 'conv-act-browser',
+      endpoint_revision: 2,
+      completed_at: new Date().toISOString()
+    });
+
+    const resp = await fetch(baseUrl);
+    const html = await resp.text();
+
+    const dom = new JSDOM(html, { runScripts: 'dangerously' });
+
+    let lastToast = { msg: '', isError: false };
+    dom.window.fetch = async (url) => {
+      if (url.includes('/handled')) {
+        return { ok: true, json: async () => ({ success: true }) };
+      }
+      if (url.includes('/open-focus')) {
+        return { ok: true, json: async () => ({ success: true }) };
+      }
+      return { ok: false, json: async () => ({ success: false, stage: 'BLOCKED', reason: 'machine_err_xyz' }) };
+    };
+
+    dom.window.eval(SURFACE_CLIENT_JS);
+    const doc = dom.window.document;
+    const toastEl = doc.getElementById('toast-msg');
+
+    const actCard = doc.getElementById('card-proj-active-exposure');
+
+    // 1. Mark Handled 成功反馈
+    const handledBtn = actCard.querySelector('.endpoint-browser button[data-action="mark-handled"]');
+    handledBtn.click();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(toastEl.textContent, '已标记为已查看');
+    assert.equal(toastEl.textContent.includes('proj-active-exposure'), false, 'Toast 绝不包含 binding_id');
+    assert.equal(toastEl.textContent.includes('browser'), false, 'Toast 绝不包含 endpoint_id');
+
+    // 2. Open Focus 成功反馈
+    const openBtn = actCard.querySelector('.endpoint-browser button[data-action="open-focus"]');
+    openBtn.click();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(toastEl.textContent, '对话已打开');
+    assert.equal(toastEl.textContent.includes('browser'), false, 'Toast 绝不包含 endpoint_id');
+
+    // 3. Open Focus 失败反馈（模拟失败）
+    dom.window.fetch = async () => ({ ok: false, json: async () => ({ success: false, stage: 'BLOCKED', reason: 'target_not_ready' }) });
+    openBtn.disabled = false;
+    openBtn.click();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(toastEl.textContent, '无法打开对话，请确认浏览器已开启或连接正常');
+    assert.equal(toastEl.textContent.includes('BLOCKED'), false, 'Toast 绝不包含 stage 标识');
+    assert.equal(toastEl.textContent.includes('target_not_ready'), false, 'Toast 绝不包含 raw reason');
+  });
+
+  it('13. [Blocker 4 回归] 默认首屏完全消除研发行话 (Status Surface / 端点状态协同表面 / PAUSED / HUMAN INTERVENTION REQUIRED)', async () => {
+    const resp = await fetch(baseUrl);
+    const html = await resp.text();
+
+    const dom = new JSDOM(html);
+    const doc = dom.window.document;
+
+    // Header 检查
+    const titleEl = doc.querySelector('title');
+    assert.equal(titleEl.textContent.includes('Status Surface'), false, 'title 不得包含 Status Surface');
+    const headerTitle = doc.querySelector('.app-title-group h1');
+    assert.equal(headerTitle.textContent, 'Rally', '主标题应为纯净产品名 Rally');
+    const subtitle = doc.querySelector('.app-subtitle');
+    assert.equal(subtitle.textContent.includes('端点状态协同表面'), false, '副标题不得包含端点状态协同表面');
+    assert.equal(subtitle.textContent, '多项目协同看板');
+
+    // Sync 指示器检查
+    const syncInd = doc.getElementById('surface-sync-indicator');
+    assert.equal(syncInd.title.includes('状态表面'), false, '同步悬浮提示不得包含状态表面等行话');
+    assert.equal(syncInd.title, '与服务端保持实时同步');
+
+    // 暂停与人工介入徽章检查
+    const phCard = doc.getElementById('card-proj-paused-human');
+    const pausedBadge = phCard.querySelector('.badge-paused');
+    assert.ok(pausedBadge);
+    assert.equal(pausedBadge.textContent, '已暂停', 'PAUSED 必须显示为中文 已暂停');
+
+    const humanBadge = phCard.querySelector('.badge-human');
+    assert.ok(humanBadge);
+    assert.equal(humanBadge.textContent, '需要人工核验', 'HUMAN INTERVENTION REQUIRED 必须显示为中文 需要人工核验');
   });
 });
