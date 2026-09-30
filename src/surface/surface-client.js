@@ -150,47 +150,31 @@ export const SURFACE_CLIENT_JS = `
         return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
       }
 
-      modalTitle.textContent = '安全重绑端点 [' + endpointId + '] (rev ' + bindingRev + ')';
-      let extraFields = '';
-      if (role === 'browser') {
-        extraFields = '<div class="form-group"><label>分支 (Branch，留空清除):</label><input type="text" id="m-branch" class="form-control" value="' + escapeText(curBranch || '') + '" /></div>';
-      } else {
-        extraFields = '<div class="form-group" style="background:var(--bg-subtle, #f6f8fa);border:1px solid var(--border-default, #d0d7de);border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:12px;color:var(--text-muted, #57606a);">' +
-                      '<div><strong>工作区与代码仓库：</strong>将由 Rally 通过 Antigravity 元数据自动验证并派生。</div>' +
-                      (curWs ? '<div style="margin-top:4px"><span style="color:var(--text-secondary, #24292f)">当前工作区:</span> <code style="word-break:break-all;">' + escapeText(curWs) + '</code></div>' : '') +
-                      (curRepo ? '<div style="margin-top:2px"><span style="color:var(--text-secondary, #24292f)">当前代码仓库:</span> <code style="word-break:break-all;">' + escapeText(curRepo) + '</code></div>' : '') +
-                      '</div>';
-      }
+      modalTitle.textContent = role === 'browser' ? '切换 Browser 对话' : '切换 IDE 对话';
 
       const initialAlert = '<div id="m-error-alert" style="display:none;background:#ffebe9;border:1px solid #ff8182;color:#cf222e;border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:12px;"></div>';
 
       const convLabel = role === 'browser'
         ? 'ChatGPT 对话网址（也可粘贴 Conversation ID）:'
-        : '新会话 ID (Conversation ID):';
+        : '目标会话 ID (Conversation ID):';
       const convPlaceholder = role === 'browser'
         ? 'https://chatgpt.com/c/<id> 或纯会话 ID'
-        : '必填会话 ID';
+        : '粘贴目标 Antigravity 会话 ID';
 
       modalBody.innerHTML = 
         initialAlert +
-        '<div class="form-group"><label>目标端点:</label><input type="text" class="form-control" value="' + endpointId + '" disabled /></div>' +
-        '<div class="form-group"><label>' + convLabel + '</label><input type="text" id="m-conv-id" class="form-control" value="' + escapeText(curConv || '') + '" placeholder="' + convPlaceholder + '" /></div>' +
-        extraFields;
+        '<div class="form-group"><label>' + convLabel + '</label><input type="text" id="m-conv-id" class="form-control" value="' + escapeText(curConv || '') + '" placeholder="' + convPlaceholder + '" /></div>';
 
       currentModalAction = async function() {
         const convId = (document.getElementById('m-conv-id')?.value || '').trim();
         if (!convId) {
-          showToast(role === 'browser' ? '必须提供 ChatGPT 对话网址或会话 ID' : '必须提供有效的会话 ID', true);
+          showToast(role === 'browser' ? '必须提供 ChatGPT 对话网址或会话 ID' : '必须提供目标会话 ID', true);
           return;
         }
         const newIdentity = { conversation_id: convId };
-        if (role === 'browser') {
-          const branchInput = document.getElementById('m-branch');
-          newIdentity.branch = branchInput && branchInput.value.trim() ? branchInput.value.trim() : null;
-        }
 
         modalSubmit.disabled = true;
-        modalSubmit.textContent = '提交中...';
+        modalSubmit.textContent = '切换中...';
 
         try {
           const resp = await fetch('/api/projects/' + encodeURIComponent(bindingId) + '/controls/rebind', {
@@ -204,7 +188,7 @@ export const SURFACE_CLIENT_JS = `
           });
           const result = await resp.json();
           if (resp.ok && result.success) {
-            showToast('端点重绑成功');
+            showToast('会话切换成功');
             closeModal();
             await refreshOrReload();
           } else {
@@ -220,8 +204,9 @@ export const SURFACE_CLIENT_JS = `
 
               let techDetailHtml = '';
               if (classified.technicalDetail) {
-                techDetailHtml = '<div style="margin-top:6px;font-size:11px;opacity:0.85;word-break:break-all;">' +
-                  '<span>技术详情: </span><code>' + escapeText(classified.technicalDetail) + '</code></div>';
+                techDetailHtml = '<details style="margin-top:8px;font-size:11px;opacity:0.85;">' +
+                  '<summary style="cursor:pointer;user-select:none;">查看技术详情 ▾</summary>' +
+                  '<div style="margin-top:4px;word-break:break-all;"><code>' + escapeText(classified.technicalDetail) + '</code></div></details>';
               }
 
               alertBox.innerHTML =
@@ -232,16 +217,20 @@ export const SURFACE_CLIENT_JS = `
 
             showToast(classified.title, true);
             modalSubmit.disabled = false;
-            modalSubmit.textContent = '确认执行';
+            modalSubmit.textContent = '确认切换';
             await refreshOrReload();
           }
         } catch (err) {
           showToast('请求异常: ' + err.message, true);
           modalSubmit.disabled = false;
-          modalSubmit.textContent = '确认执行';
+          modalSubmit.textContent = '确认切换';
         }
       };
 
+      if (modalSubmit) {
+        modalSubmit.disabled = false;
+        modalSubmit.textContent = '确认切换';
+      }
       modal.style.display = 'flex';
     });
 

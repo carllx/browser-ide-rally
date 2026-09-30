@@ -70,7 +70,7 @@ export function renderStatusSurfaceHtml({ projects = [], attentionTray = null } 
   <header class="app-header">
     <div class="app-title-group">
       <h1>Rally Status Surface</h1>
-      <div class="app-subtitle">多项目端点操作表面 (Phase 1 Compact Operator Surface)</div>
+      <div class="app-subtitle">多项目端点状态协同表面</div>
     </div>
     <div class="header-right-group" style="display: flex; align-items: center; gap: 14px;">
       <div class="status-summary-bar">

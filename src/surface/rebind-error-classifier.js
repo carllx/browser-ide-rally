@@ -121,7 +121,7 @@ export function classifyRebindError(rawReason = '', stage = 'BLOCKED') {
   }
 
   // 5. 跨项目已占用
-  if (reason.includes('already bound to project')) {
+  if (reason.includes('already bound to project') || reason.includes('target active in')) {
     return {
       category: 'CONVERSATION_ALREADY_BOUND',
       title: '该 Antigravity 会话已被其他项目占用',

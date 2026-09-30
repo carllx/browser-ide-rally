@@ -346,7 +346,7 @@ describe('Issue #26 Operator Surface UI 紧凑首屏测试', () => {
     assert.ok(browserCardMatch, 'Browser 端点诊断卡片必须具有 endpoint-card 类名与 data-endpoint-id');
   });
 
-  it('12. [Blocker 4 回归] 默认 DEFAULT_CAPABILITIES [rally.echo] 项目的控制按钮保持可用，绝不因虚构 write 禁用', () => {
+  it('12. [Issue #43 / Blocker 4 回归] 默认控制表面隐藏 Phase-2 原型控件 (Send/Continue)，且可用操作员控件保持启用', () => {
     // 使用权威默认 capability ['rally.echo']
     const proj = makeProjection({
       capabilities: ['rally.echo'],
@@ -356,14 +356,21 @@ describe('Issue #26 Operator Surface UI 紧凑首屏测试', () => {
 
     const html = renderStatusSurfaceHtml({ projects: [proj] });
 
-    // Send 按钮与 Continue 按钮绝不得被加上 disabled
+    // 根据 Issue #43 门禁，未完成的 Phase-2 原型控件 (Send / Continue) 不得在日常操作表面渲染
     const sendBtnMatch = html.match(/<button[^>]*data-action="safe-send"[\s\S]*?>/);
-    assert.ok(sendBtnMatch);
-    assert.equal(sendBtnMatch[0].includes('disabled'), false, '默认 capability 项目的 Send 按钮不得被禁用');
+    assert.equal(sendBtnMatch, null, '日常控制表面绝不暴露 safe-send 原型控件');
 
     const continueBtnMatch = html.match(/<button[^>]*data-action="continue"[\s\S]*?>/);
-    assert.ok(continueBtnMatch);
-    assert.equal(continueBtnMatch[0].includes('disabled'), false, '默认 capability 项目的 Continue 按钮不得被禁用');
+    assert.equal(continueBtnMatch, null, '日常控制表面绝不暴露 continue 原型控件');
+
+    // 真正支持的操作员控件（如“切换对话”与“打开对话”）保持可用，不被虚构 write 禁用
+    const rebindBtnMatch = html.match(/<button[^>]*data-action="rebind"[\s\S]*?>/);
+    assert.ok(rebindBtnMatch, '日常控制表面应包含切换对话控件');
+    assert.equal(rebindBtnMatch[0].includes('disabled'), false, '默认 capability 项目的切换对话按钮不得被禁用');
+
+    const openChatBtnMatch = html.match(/<button[^>]*data-action="open-focus"[\s\S]*?>/);
+    assert.ok(openChatBtnMatch, 'Browser 端点应包含打开对话控件');
+    assert.equal(openChatBtnMatch[0].includes('disabled'), false, '默认 capability 项目的打开对话按钮不得被禁用');
   });
 
   it('13. [Blocker 5 回归] 缺少端点 observation 时不得以 project updated_at 冒充观察时间', () => {
@@ -460,7 +467,7 @@ describe('Issue #26 Operator Surface UI 紧凑首屏测试', () => {
     assert.ok(html.includes('not-a-valid-date-string'), '原始脏字符串仅在 Details 诊断中留存供 Agent 排错');
   });
 
-  it('16. [Review 5862085979 Evidence Gap 回归] Browser-target Continue 行为测试：单 IDE 自动绑定与多 IDE 行内选择派发', async () => {
+  it('16. [Review 5862085979 Evidence Gap 回归] Browser-target Continue 客户端逻辑测试：单 IDE 自动绑定与多 IDE 行内选择派发', async () => {
     // 1. 单 IDE -> Browser Continue 行为验证
     const singleIdeProj = makeProjection({
       bindingId: 'proj-single-ide',
@@ -487,11 +494,17 @@ describe('Issue #26 Operator Surface UI 紧凑首屏测试', () => {
     };
     singleDom.window.eval(SURFACE_CLIENT_JS);
 
-    // 找到 Browser 端点诊断卡片下的 Continue 按钮
+    // 找到 Browser 端点诊断卡片并挂载 continue 触发按钮（Issue #43 默认界面隐藏此原型按钮）
     const singleBrowserCard = singleDom.window.document.querySelector('.endpoint-browser');
     assert.ok(singleBrowserCard, '必须存在 Browser 诊断卡片');
-    const singleContinueBtn = singleBrowserCard.querySelector('button[data-action="continue"]');
-    assert.ok(singleContinueBtn, 'Browser 诊断卡片中必须有 Continue 按钮');
+    const singleContinueBtn = singleDom.window.document.createElement('button');
+    singleContinueBtn.setAttribute('data-action', 'continue');
+    singleContinueBtn.setAttribute('data-endpoint-id', 'browser');
+    singleContinueBtn.setAttribute('data-target-endpoint', 'browser');
+    singleContinueBtn.setAttribute('data-role', 'browser');
+    singleContinueBtn.setAttribute('data-binding-id', 'proj-single-ide');
+    singleContinueBtn.setAttribute('data-binding-revision', '1');
+    singleBrowserCard.querySelector('.endpoint-action-bar').appendChild(singleContinueBtn);
 
     // 模拟点击 Continue
     singleContinueBtn.click();
@@ -540,7 +553,14 @@ describe('Issue #26 Operator Surface UI 紧凑首屏测试', () => {
     multiDom.window.eval(SURFACE_CLIENT_JS);
 
     const multiBrowserCard = multiDom.window.document.querySelector('.endpoint-browser');
-    const multiContinueBtn = multiBrowserCard.querySelector('button[data-action="continue"]');
+    const multiContinueBtn = multiDom.window.document.createElement('button');
+    multiContinueBtn.setAttribute('data-action', 'continue');
+    multiContinueBtn.setAttribute('data-endpoint-id', 'browser');
+    multiContinueBtn.setAttribute('data-target-endpoint', 'browser');
+    multiContinueBtn.setAttribute('data-role', 'browser');
+    multiContinueBtn.setAttribute('data-binding-id', 'proj-multi-ide');
+    multiContinueBtn.setAttribute('data-binding-revision', '1');
+    multiBrowserCard.querySelector('.endpoint-action-bar').appendChild(multiContinueBtn);
 
     // 第一次点击：多 IDE 时不应立即发送 fetch，而是展开行内 source picker
     multiContinueBtn.click();

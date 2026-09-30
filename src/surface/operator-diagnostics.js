@@ -67,17 +67,9 @@ export function renderEndpointDiagnosticCard(ep, projectContext) {
     `;
   }
 
-  const handledBtnDisabled = !ep.can_mark_handled;
-  const handledBtnTitle = handledBtnDisabled
-    ? (ep.result_state !== 'NEW' ? '仅在端点处于 NEW 时可处理' : '端点未受信或缺少有效游标')
-    : '将当前完成游标标记为已处理';
-
-  const cursorJsonAttr = ep.latest_completed_cursor !== null && ep.latest_completed_cursor !== undefined
-    ? `data-expected-cursor-json="${escapeHtml(encodeURIComponent(JSON.stringify(ep.latest_completed_cursor)))}"`
-    : '';
-
-  const controlButtons = `
-    <div class="control-btn-group">
+  // 1. 打开/聚焦按钮：仅对真实支持打开的 Browser 端点渲染，文案为人性化的“打开对话”；IDE 端点不支持则不渲染死控件
+  const focusButton = isBrowser
+    ? `
       <button
         type="button"
         class="btn btn-control btn-focus"
@@ -85,9 +77,13 @@ export function renderEndpointDiagnosticCard(ep, projectContext) {
         data-binding-id="${escapeHtml(bindingId)}"
         data-binding-revision="${escapeHtml(bindingRevision)}"
         data-endpoint-id="${escapeHtml(ep.endpoint_id)}"
-        title="聚焦/打开此目标端点">
-        Focus
-      </button>
+        title="在浏览器中打开/聚焦当前对话">
+        打开对话
+      </button>`
+    : '';
+
+  // 2. 切换会话按钮：面向人类意图，替代工程术语 Rebind
+  const rebindButton = `
       <button
         type="button"
         class="btn btn-control btn-rebind"
@@ -100,34 +96,25 @@ export function renderEndpointDiagnosticCard(ep, projectContext) {
         data-branch="${escapeHtml(ep.branch || '')}"
         data-workspace="${escapeHtml(ep.workspace_identity || '')}"
         data-repo="${escapeHtml(ep.repository_identity || '')}"
-        title="安全重绑此端点 (需匹配版本)">
-        Rebind
-      </button>
-      <button
-        type="button"
-        class="btn btn-control btn-send"
-        data-action="safe-send"
-        data-binding-id="${escapeHtml(bindingId)}"
-        data-binding-revision="${escapeHtml(bindingRevision)}"
-        data-endpoint-id="${escapeHtml(ep.endpoint_id)}"
-        title="向此端点发送受控 Envelope">
-        Send
-      </button>
-      <button
-        type="button"
-        class="btn btn-control btn-continue"
-        data-action="continue"
-        data-binding-id="${escapeHtml(bindingId)}"
-        data-binding-revision="${escapeHtml(bindingRevision)}"
-        data-target-endpoint="${escapeHtml(ep.endpoint_id)}"
-        data-role="${escapeHtml(ep.role)}"
-        title="${isBrowser ? '在 Browser 中一键继续' : `在 IDE [${escapeHtml(ep.endpoint_id)}] 中一键继续`}">
-        Continue
-      </button>
+        title="更换/切换此端点绑定的对话">
+        切换对话
+      </button>`;
+
+  // Phase-2 原型传输控件 (Send / Continue) 在 #32/#31 明确语义前从日常操作表面隐藏
+  const controlButtons = `
+    <div class="control-btn-group">
+      ${focusButton}
+      ${rebindButton}
     </div>
   `;
 
-  const handledButton = `
+  // 3. 已查看 (Handled) 按钮：仅在端点处于可处理状态时呈现，绝不渲染 disabled 死控件噪音
+  const cursorJsonAttr = ep.latest_completed_cursor !== null && ep.latest_completed_cursor !== undefined
+    ? `data-expected-cursor-json="${escapeHtml(encodeURIComponent(JSON.stringify(ep.latest_completed_cursor)))}"`
+    : '';
+
+  const handledButton = ep.can_mark_handled
+    ? `
     <button
       type="button"
       class="btn btn-handled"
@@ -136,11 +123,11 @@ export function renderEndpointDiagnosticCard(ep, projectContext) {
       data-endpoint-id="${escapeHtml(ep.endpoint_id)}"
       data-expected-cursor="${escapeHtml(ep.latest_completed_cursor ?? '')}"
       ${cursorJsonAttr}
-      title="${handledBtnTitle}"
-      ${handledBtnDisabled ? 'disabled' : ''}>
-      Mark handled
+      title="确认当前结果已查看并清除最新红点提醒">
+      已查看
     </button>
-  `;
+  `
+    : '';
 
   return `
     <div class="endpoint-diagnostic-card endpoint-card ${isBrowser ? 'endpoint-browser' : 'endpoint-ide'}"

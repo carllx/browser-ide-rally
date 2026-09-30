@@ -81,10 +81,10 @@ export function renderProjectScanRow(proj) {
     ideTagsHtml = `${ideGroupHeader} <span class="ide-sub-slots">(${subSlotsHtml})</span>`;
   }
 
-  // UNCERTAIN 指示器
+  // 排序未定指示器 (以人类后果语言呈现，消除字面量 UNCERTAIN)
   let uncertainHtml = '';
   if (indicator === 'UNCERTAIN') {
-    uncertainHtml = `<span class="indicator-uncertain" title="端点完成先后顺序不确定 (UNCERTAIN)">? 排序未定</span>`;
+    uncertainHtml = `<span class="indicator-uncertain" title="暂时无法确定最新结果顺序，两端完成时间相近或未确立明确先后">? 排序未定</span>`;
   }
 
   // 3. 诚实相对观察时间：仅依赖端点 observation/completion 时间戳，绝不以 project updated_at 冒充
