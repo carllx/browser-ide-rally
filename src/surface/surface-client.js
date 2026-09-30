@@ -164,16 +164,23 @@ export const SURFACE_CLIENT_JS = `
 
       const initialAlert = '<div id="m-error-alert" style="display:none;background:#ffebe9;border:1px solid #ff8182;color:#cf222e;border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:12px;"></div>';
 
+      const convLabel = role === 'browser'
+        ? 'ChatGPT 对话网址（也可粘贴 Conversation ID）:'
+        : '新会话 ID (Conversation ID):';
+      const convPlaceholder = role === 'browser'
+        ? 'https://chatgpt.com/c/<id> 或纯会话 ID'
+        : '必填会话 ID';
+
       modalBody.innerHTML = 
         initialAlert +
         '<div class="form-group"><label>目标端点:</label><input type="text" class="form-control" value="' + endpointId + '" disabled /></div>' +
-        '<div class="form-group"><label>新会话 ID (Conversation ID):</label><input type="text" id="m-conv-id" class="form-control" value="' + escapeText(curConv || '') + '" placeholder="必填会话 ID" /></div>' +
+        '<div class="form-group"><label>' + convLabel + '</label><input type="text" id="m-conv-id" class="form-control" value="' + escapeText(curConv || '') + '" placeholder="' + convPlaceholder + '" /></div>' +
         extraFields;
 
       currentModalAction = async function() {
         const convId = (document.getElementById('m-conv-id')?.value || '').trim();
         if (!convId) {
-          showToast('必须提供有效的会话 ID', true);
+          showToast(role === 'browser' ? '必须提供 ChatGPT 对话网址或会话 ID' : '必须提供有效的会话 ID', true);
           return;
         }
         const newIdentity = { conversation_id: convId };

@@ -17,6 +17,7 @@ import { executeSafeRebind, executeSafeOpenFocus, executeSafeSend, executeSafeCo
 import { verifyOnboardingIdentities, createOnboardingProject } from './onboarding-controller.js';
 import { verifyAndResolveIdeRebindIdentity } from '../adapters/ide/antigravity-identity-resolver.js';
 import { handleAntigravityHookRequest } from './hook-controller.js';
+import { normalizeChatGPTConversationInput } from './chatgpt-conversation-parser.js';
 import { sendJson, sendHtml, parseBody } from './http-helpers.js';
 
 /**
@@ -233,8 +234,11 @@ function handleControlError(res, err, defaultStage = 'BLOCKED') {
             repository_identity: resolved.repository_identity
           };
         } else {
+          const inputUrlOrId = rawIdentity.conversation_id || body.conversation_id;
+          const derivedConvId = normalizeChatGPTConversationInput(inputUrlOrId);
           normalizedIdentity = {
             ...rawIdentity,
+            conversation_id: derivedConvId,
             workspace_identity: rawIdentity.workspace_identity || rawIdentity.workspace,
             repository_identity: rawIdentity.repository_identity || rawIdentity.repository
           };

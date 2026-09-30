@@ -16,6 +16,9 @@ import {
   resolveProjectAndValidateRevision,
   recordBlockedAction
 } from './safe-controls-common.js';
+import {
+  normalizeChatGPTConversationInput
+} from '../surface/chatgpt-conversation-parser.js';
 
 /**
  * 执行安全端点重绑定
@@ -53,8 +56,13 @@ export function executeSafeRebind(params) {
 
   let cleanIdentity = identity;
   if (identity && typeof identity === 'object') {
+    let convId = identity.conversation_id;
+    if (target_endpoint === 'browser' && convId) {
+      convId = normalizeChatGPTConversationInput(convId);
+    }
     cleanIdentity = {
       ...identity,
+      conversation_id: convId,
       workspace_identity: identity.workspace_identity || identity.workspace,
       repository_identity: identity.repository_identity || identity.repository
     };

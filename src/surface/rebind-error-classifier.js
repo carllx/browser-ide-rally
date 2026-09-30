@@ -60,6 +60,18 @@ export function classifyRebindError(rawReason = '', stage = 'BLOCKED') {
     };
   }
 
+  // 3a. ChatGPT 链接或对话 ID 格式不合规或缺失
+  if (reason.includes('INVALID_CHATGPT_CONVERSATION') || reason.includes('Invalid ChatGPT conversation') || reason.includes('必须提供 ChatGPT 对话网址或会话 ID')) {
+    return {
+      category: 'INVALID_CHATGPT_CONVERSATION',
+      title: '无法识别的 ChatGPT 对话链接或对话 ID',
+      actionGuidance: '请提供完整的 ChatGPT 对话网址（例如 https://chatgpt.com/c/<id>）或有效的对话 ID。',
+      highlightUnhandledCheckbox: false,
+      highlightUnknownCheckbox: false,
+      technicalDetail: reason
+    };
+  }
+
   // 3b. 可执行文件丢失
   if (reason.includes('executable not found at') || reason.includes('EXECUTABLE_NOT_FOUND')) {
     return {

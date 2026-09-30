@@ -34,29 +34,11 @@ import {
   deriveAntigravityConversationIdentity
 } from '../adapters/ide/antigravity-identity-resolver.js';
 
-export { sanitizeIdeConversationId };
+import {
+  parseChatGPTConversationUrl
+} from './chatgpt-conversation-parser.js';
 
-/**
- * 解析完整 ChatGPT 会话 URL
- * 支持 https://chatgpt.com/c/<id>、https://chat.openai.com/c/<id>、https://chatgpt.com/g/<gpt>/c/<id>
- * @param {string} url
- * @returns {string} conversationId
- */
-export function parseChatGPTConversationUrl(url) {
-  if (!url || typeof url !== 'string' || !url.trim()) {
-    throw new Error('Invalid ChatGPT conversation URL. Please provide a full URL such as https://chatgpt.com/c/<conversation-id>');
-  }
-
-  const cleaned = url.trim();
-  const pattern = /^https?:\/\/(?:chatgpt\.com|chat\.openai\.com)\/(?:g\/[^\/]+\/)?c\/([a-zA-Z0-9_-]+)(?:[?#\/]|$)/i;
-  const match = cleaned.match(pattern);
-
-  if (!match || !match[1]) {
-    throw new Error('Invalid ChatGPT conversation URL. Please provide a full URL such as https://chatgpt.com/c/<conversation-id>');
-  }
-
-  return match[1];
-}
+export { sanitizeIdeConversationId, parseChatGPTConversationUrl };
 
 /**
  * 生成系统内部唯一的 Project Binding ID
