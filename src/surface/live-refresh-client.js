@@ -262,7 +262,7 @@ function updateDetailsDom(details, proj) {
 
   // 1. 同步更新摘要头部的 binding_revision badge
   if (bRev !== undefined) {
-    const revBadge = details.querySelector('.details-summary-header .badge-rev');
+    const revBadge = details.querySelector('.badge-rev');
     if (revBadge) {
       revBadge.textContent = `rev ${bRev}`;
     }

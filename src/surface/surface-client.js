@@ -82,7 +82,7 @@ export const SURFACE_CLIENT_JS = `
 
       btn.disabled = true;
       const originalText = btn.textContent;
-      btn.textContent = '聚焦中...';
+      btn.textContent = '正在打开...';
 
       try {
         const resp = await fetch('/api/projects/' + encodeURIComponent(bindingId) + '/controls/open-focus', {

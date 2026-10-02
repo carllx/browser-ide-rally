@@ -125,9 +125,9 @@ describe('Onboarding Surface 集成测试', () => {
     const html = await res.text();
 
     assert.match(html, /btn-add-project/);
-    assert.match(html, /\+ Add Project/);
+    assert.match(html, /\+ 添加项目/);
     assert.match(html, /id="onboarding-modal"/);
-    assert.match(html, /Project Display Name/);
+    assert.match(html, /项目名称/);
     assert.match(html, /btn-onboarding-verify/);
     assert.match(html, /btn-onboarding-create/);
   });

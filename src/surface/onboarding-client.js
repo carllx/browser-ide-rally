@@ -64,12 +64,12 @@ export const ONBOARDING_CLIENT_JS = `
       if (btnVerify) {
         btnVerify.style.display = 'inline-block';
         btnVerify.disabled = false;
-        btnVerify.textContent = 'Verify (核验身份)';
+        btnVerify.textContent = '检查';
       }
       if (btnCreate) {
         btnCreate.style.display = 'none';
         btnCreate.disabled = false;
-        btnCreate.textContent = 'Create Project (确认创建)';
+        btnCreate.textContent = '创建项目';
       }
       if (btnBack) btnBack.style.display = 'none';
       if (btnCancel) btnCancel.style.display = 'inline-block';
@@ -123,24 +123,24 @@ export const ONBOARDING_CLIENT_JS = `
         const ideConvId = inputIdeConvId ? inputIdeConvId.value.trim() : '';
 
         if (!displayName) {
-          showError('请填写 Project Display Name。');
+          showError('请填写项目名称。');
           if (inputDisplayName) inputDisplayName.focus();
           return;
         }
         if (!browserUrl) {
-          showError('请填写完整 ChatGPT 会话 URL。');
+          showError('请填写 ChatGPT 对话网址。');
           if (inputBrowserUrl) inputBrowserUrl.focus();
           return;
         }
         if (!ideConvId) {
-          showError('请填写精确 Antigravity 会话 ID。');
+          showError('请填写 Antigravity 会话标识。');
           if (inputIdeConvId) inputIdeConvId.focus();
           return;
         }
 
         btnVerify.disabled = true;
         const origText = btnVerify.textContent;
-        btnVerify.textContent = '正在核验身份...';
+        btnVerify.textContent = '正在检查...';
 
         try {
           const resp = await fetch('/api/onboarding/verify', {
@@ -192,7 +192,7 @@ export const ONBOARDING_CLIENT_JS = `
 
         btnCreate.disabled = true;
         const origText = btnCreate.textContent;
-        btnCreate.textContent = '正在创建并落盘...';
+        btnCreate.textContent = '正在创建...';
 
         try {
           const resp = await fetch('/api/onboarding/create', {
@@ -210,7 +210,7 @@ export const ONBOARDING_CLIENT_JS = `
             closeModal();
             const toast = document.getElementById('toast-msg');
             if (toast) {
-              toast.textContent = '✓ 成功创建项目绑定: ' + displayName;
+              toast.textContent = '项目创建成功: ' + displayName;
               toast.style.background = '#238636';
               toast.style.display = 'block';
             }

@@ -293,7 +293,7 @@ describe('Live Surface Refresh 客户端单元测试', () => {
     assert.ok(details);
 
     // 初始状态为 rev 1
-    const initialBadge = details.querySelector('.details-summary-header .badge-rev');
+    const initialBadge = details.querySelector('.badge-rev');
     assert.equal(initialBadge.textContent.trim(), 'rev 1');
     const initialRebindBtn = details.querySelector('button[data-action="rebind"][data-endpoint-id="ide-primary"]');
     assert.equal(initialRebindBtn.getAttribute('data-binding-revision'), '1');

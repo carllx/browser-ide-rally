@@ -102,7 +102,7 @@ export function renderStatusSurfaceHtml({ projects = [], attentionTray = null } 
     <!-- 全局诊断与 Attention Tray 折叠抽屉 (不占据默认扫描首屏) -->
     ${trayHtml ? `
       <details class="diagnostics-global-tray">
-        <summary class="diagnostics-tray-toggle">全局 Attention Tray 诊断视图 (${attentionTray?.total_count || 0} 项)</summary>
+        <summary class="diagnostics-tray-toggle">全局诊断 (${attentionTray?.total_count || 0} 项需关注)</summary>
         <div class="diagnostics-tray-body">
           ${trayHtml}
         </div>

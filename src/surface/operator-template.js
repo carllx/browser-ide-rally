@@ -173,11 +173,14 @@ export function renderProjectDetails(proj) {
   return `
     <details class="project-details" id="details-${escapeHtml(bindingId)}">
       <summary class="details-summary-header">
-        <span>诊断与高级控制 (Diagnostics & Controls)</span>
-        <code class="project-binding-id" style="margin-left: 10px; font-size: 0.8rem; color: #8b949e;">${escapeHtml(bindingId)}</code>
-        <span class="badge badge-rev" style="margin-left: 6px;">rev ${escapeHtml(bRev)}</span>
+        <span>详情 / 诊断</span>
       </summary>
       <div class="project-details-body">
+        <div class="project-diagnostics-header" style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+          <span class="text-muted" style="font-size: 0.85rem;">内部标识:</span>
+          <code class="project-binding-id" style="font-size: 0.82rem; color: #8b949e;">${escapeHtml(bindingId)}</code>
+          <span class="badge badge-rev">rev ${escapeHtml(bRev)}</span>
+        </div>
         <section class="endpoints-diagnostic-plane" aria-label="端点详细诊断">
           <div class="endpoints-grid">
             ${browserDiagHtml}

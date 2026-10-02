@@ -77,7 +77,7 @@ export function renderEndpointDiagnosticCard(ep, projectContext) {
         data-binding-id="${escapeHtml(bindingId)}"
         data-binding-revision="${escapeHtml(bindingRevision)}"
         data-endpoint-id="${escapeHtml(ep.endpoint_id)}"
-        title="在浏览器中打开/聚焦当前对话">
+        title="在浏览器中打开当前对话">
         打开对话
       </button>`
     : '';
