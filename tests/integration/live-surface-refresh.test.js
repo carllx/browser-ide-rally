@@ -264,7 +264,10 @@ describe('Live Surface Refresh 实时刷新集成测试', () => {
 
     const rebindRes = await fetch(`${baseUrl}/api/projects/proj-live-test/controls/rebind`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Rally-Session-Token': serverHandle.sessionToken
+      },
       body: JSON.stringify({
         expected_binding_revision: targetRev,
         target_endpoint: 'ide-primary',
@@ -309,7 +312,10 @@ describe('Live Surface Refresh 实时刷新集成测试', () => {
     // 故意提交一个版本失配的 Rebind 请求 -> 触发服务端安全阻断 (BLOCKED 409)
     const blockedRes = await fetch(`${baseUrl}/api/projects/proj-live-test/controls/rebind`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Rally-Session-Token': serverHandle.sessionToken
+      },
       body: JSON.stringify({
         expected_binding_revision: 999,
         target_endpoint: 'ide-primary',

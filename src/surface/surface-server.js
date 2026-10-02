@@ -19,6 +19,15 @@ import { verifyAndResolveIdeRebindIdentity } from '../adapters/ide/antigravity-i
 import { handleAntigravityHookRequest } from './hook-controller.js';
 import { normalizeChatGPTConversationInput } from './chatgpt-conversation-parser.js';
 import { sendJson, sendHtml, parseBody } from './http-helpers.js';
+import { handleControlError } from './control-error-handler.js';
+import {
+  assertLoopbackBind,
+  validateHostHeader,
+  generateSessionToken,
+  resolveOrCreateHookSecret,
+  verifyMutationSecurityGate,
+  isMutationRoute
+} from './surface-security.js';
 
 /**
  * 创建状态表面 HTTP 处理器
@@ -35,26 +44,53 @@ export function createStatusSurfaceRequestHandler({
   ideAdapters = null,
   agentApiBin = null,
   agentApiExecutor = null,
-  observationCoordinator = null
+  observationCoordinator = null,
+  sessionToken = null,
+  hookSecret = null
 }) {
   if (!registry || typeof registry.listProjects !== 'function') {
     throw new Error('Valid ProjectRegistry instance is required for Status Surface Server');
   }
 
+  const effectiveSessionToken = sessionToken || generateSessionToken();
+  const effectiveHookSecret = resolveOrCreateHookSecret({ hookSecret });
+
   return async function requestHandler(req, res) {
+    // 基础 Host 请求头校验（防 DNS 重新绑定）
+    const hostCheck = validateHostHeader(req);
+    if (!hostCheck.valid) {
+      return sendJson(res, 403, { success: false, reason: hostCheck.reason });
+    }
+
     const urlObj = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const pathname = urlObj.pathname;
     const method = req.method.toUpperCase();
 
-    // 1. GET / 或 /index.html: 渲染状态表面 HTML (附带 Attention Tray)
+    // 1. GET / 或 /index.html: 渲染状态表面 HTML (附带 Attention Tray 与 Session Token)
     if (method === 'GET' && (pathname === '/' || pathname === '/index.html')) {
       try {
         const projects = projectRegistrySurface(registry);
         const attentionTray = deriveAttentionTray(registry);
-        const html = renderStatusSurfaceHtml({ projects, attentionTray });
+        const html = renderStatusSurfaceHtml({
+          projects,
+          attentionTray,
+          sessionToken: effectiveSessionToken
+        });
+        res.setHeader('Set-Cookie', `rally_session_token=${effectiveSessionToken}; Path=/; SameSite=Strict; HttpOnly`);
         return sendHtml(res, 200, html);
       } catch (err) {
         return sendJson(res, 500, { error: `Internal Server Error: ${err.message}` });
+      }
+    }
+
+    // 突变请求统一安全门禁 (Seams 2, 3, 4: Host, Origin, Content-Type, Session/Hook 凭据隔离)
+    if (method === 'POST' && isMutationRoute(pathname)) {
+      if (!verifyMutationSecurityGate(req, res, {
+        sessionToken: effectiveSessionToken,
+        hookSecret: effectiveHookSecret,
+        pathname
+      })) {
+        return;
       }
     }
 
@@ -168,38 +204,6 @@ export function createStatusSurfaceRequestHandler({
         })
       );
     }
-
-function handleControlError(res, err, defaultStage = 'BLOCKED') {
-  const msg = err?.message || String(err);
-  const stage = err?.actionStage || defaultStage;
-  const isBlocked = stage === 'BLOCKED' ||
-                    msg.includes('STALE_OR_MISSING_BINDING_REVISION') ||
-                    msg.includes('BLOCKED') ||
-                    msg.includes('unhandled NEW') ||
-                    msg.includes('UNKNOWN') ||
-                    msg.includes('SECURITY_REJECT') ||
-                    msg.includes('IDE_ENDPOINT_NOT_FOUND') ||
-                    msg.includes('TARGET_LOOKUP_FAIL') ||
-                    msg.includes('FOCUS_NOT_AVAILABLE') ||
-                    msg.includes('FOCUS_NOT_SUPPORTED') ||
-                    msg.includes('IDENTITY_MISMATCH') ||
-                    msg.includes('IDENTITY_VERIFY_FAIL') ||
-                    msg.includes('SOURCE_ENDPOINT_REQUIRED') ||
-                    msg.includes('SOURCE_ENDPOINT_UNKNOWN') ||
-                    msg.includes('STALE_SOURCE_CONTEXT') ||
-                    msg.includes('SOURCE_RESULT_UNAVAILABLE') ||
-                    msg.includes('PAYLOAD_TOO_LARGE') ||
-                    msg.includes('INVALID_SOURCE_ENDPOINT') ||
-                    msg.includes('PREFLIGHT_BLOCKED');
-  const finalStage = stage === 'FAILED' ? 'FAILED' : (isBlocked ? 'BLOCKED' : 'FAILED');
-  return sendJson(res, finalStage === 'BLOCKED' ? 409 : 400, {
-    success: false,
-    stage: finalStage,
-    reason: msg,
-    ...(err?.category ? { category: err.category } : {}),
-    ...(err?.details ? { details: err.details } : {})
-  });
-}
 
     // 4. POST /api/projects/:bindingId/controls/rebind: 安全端点 Rebind
     const rebindMatch = pathname.match(/^\/api\/projects\/([^/]+)\/controls\/rebind$/);
@@ -502,15 +506,24 @@ export function startStatusSurfaceServer({
   agentApiExecutor = null,
   observationCoordinator = null,
   port = 0,
-  host = '127.0.0.1'
+  host = '127.0.0.1',
+  sessionToken = null,
+  hookSecret = null
 }) {
+  assertLoopbackBind(host);
+
+  const effectiveSessionToken = sessionToken || generateSessionToken();
+  const effectiveHookSecret = resolveOrCreateHookSecret({ hookSecret });
+
   const handler = createStatusSurfaceRequestHandler({
     registry,
     browserAdapter,
     ideAdapters,
     agentApiBin,
     agentApiExecutor,
-    observationCoordinator
+    observationCoordinator,
+    sessionToken: effectiveSessionToken,
+    hookSecret: effectiveHookSecret
   });
   const server = http.createServer(handler);
 
@@ -525,6 +538,8 @@ export function startStatusSurfaceServer({
         server,
         port: actualPort,
         url,
+        sessionToken: effectiveSessionToken,
+        hookSecret: effectiveHookSecret,
         close: () => new Promise(res => {
           if (observationCoordinator && typeof observationCoordinator.stop === 'function') {
             observationCoordinator.stop();

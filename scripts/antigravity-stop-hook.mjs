@@ -15,6 +15,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 
 async function main() {
   const outputSafeResult = () => {
@@ -112,6 +113,33 @@ async function main() {
     targetUrlStr = 'http://127.0.0.1:3123/api/hooks/antigravity';
   }
 
+  // 解析本地 Hook 凭据 (Hook Secret)
+  const tokenArgIdx = process.argv.indexOf('--token');
+  const secretArgIdx = process.argv.indexOf('--secret');
+  let hookSecret = null;
+  if (tokenArgIdx !== -1 && process.argv[tokenArgIdx + 1]) {
+    hookSecret = process.argv[tokenArgIdx + 1].trim();
+  } else if (secretArgIdx !== -1 && process.argv[secretArgIdx + 1]) {
+    hookSecret = process.argv[secretArgIdx + 1].trim();
+  } else if (process.env.RALLY_HOOK_SECRET && process.env.RALLY_HOOK_SECRET.trim()) {
+    hookSecret = process.env.RALLY_HOOK_SECRET.trim();
+  } else if (matchedWorkspace) {
+    try {
+      const wsSecretPath = path.resolve(matchedWorkspace, '.agents', 'hook-secret');
+      if (fs.existsSync(wsSecretPath)) {
+        hookSecret = fs.readFileSync(wsSecretPath, 'utf8').trim();
+      }
+    } catch (_) {}
+  }
+  if (!hookSecret) {
+    try {
+      const userSecretPath = path.join(os.homedir(), '.browser-ide-rally', 'hook-secret');
+      if (fs.existsSync(userSecretPath)) {
+        hookSecret = fs.readFileSync(userSecretPath, 'utf8').trim();
+      }
+    } catch (_) {}
+  }
+
   try {
     const targetUrl = new URL(targetUrlStr);
     const postData = Buffer.from(JSON.stringify(hookPayload), 'utf8');
@@ -125,7 +153,8 @@ async function main() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Content-Length': postData.length
+            'Content-Length': postData.length,
+            ...(hookSecret ? { 'X-Rally-Hook-Secret': hookSecret } : {})
           },
           timeout: 2000
         },

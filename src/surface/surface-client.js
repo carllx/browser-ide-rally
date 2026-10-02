@@ -27,6 +27,16 @@ export const SURFACE_CLIENT_JS = `
       }
     }
 
+    function getSessionHeaders() {
+      const tokenMeta = document.querySelector('meta[name="rally-session-token"]');
+      const token = tokenMeta ? tokenMeta.getAttribute('content') : '';
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) {
+        headers['X-Rally-Session-Token'] = token;
+      }
+      return headers;
+    }
+
     // 1. Mark handled 点击事件监听与 API 调用
     document.addEventListener('click', async function(e) {
       const btn = e.target.closest('button[data-action="mark-handled"]');
@@ -52,7 +62,7 @@ export const SURFACE_CLIENT_JS = `
       try {
         const resp = await fetch('/api/projects/' + encodeURIComponent(bindingId) + '/endpoints/' + encodeURIComponent(endpointId) + '/handled', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getSessionHeaders(),
           body: JSON.stringify({ expected_cursor: expectedCursor })
         });
         const result = await resp.json();
@@ -87,7 +97,7 @@ export const SURFACE_CLIENT_JS = `
       try {
         const resp = await fetch('/api/projects/' + encodeURIComponent(bindingId) + '/controls/open-focus', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getSessionHeaders(),
           body: JSON.stringify({
             expected_binding_revision: bindingRev,
             target_endpoint: endpointId
@@ -179,7 +189,7 @@ export const SURFACE_CLIENT_JS = `
         try {
           const resp = await fetch('/api/projects/' + encodeURIComponent(bindingId) + '/controls/rebind', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getSessionHeaders(),
             body: JSON.stringify({
               expected_binding_revision: bindingRev,
               target_endpoint: endpointId,
@@ -262,7 +272,7 @@ export const SURFACE_CLIENT_JS = `
         try {
           const resp = await fetch('/api/projects/' + encodeURIComponent(bindingId) + '/controls/send', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getSessionHeaders(),
             body: JSON.stringify({
               expected_binding_revision: bindingRev,
               target_endpoint: endpointId,
@@ -379,7 +389,7 @@ export const SURFACE_CLIENT_JS = `
         try {
           const resp = await fetch('/api/projects/' + encodeURIComponent(bindingId) + '/controls/continue', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getSessionHeaders(),
             body: JSON.stringify({
               expected_binding_revision: bindingRev,
               target_endpoint: targetEndpoint,

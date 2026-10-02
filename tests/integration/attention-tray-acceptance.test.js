@@ -71,6 +71,12 @@ describe('Issue #20 综合契约验收套件', () => {
     baseUrl = serverHandle.url;
   });
 
+  const authHeaders = (extra = {}) => ({
+    'Content-Type': 'application/json',
+    'X-Rally-Session-Token': serverHandle.sessionToken,
+    ...extra
+  });
+
   after(async () => {
     if (serverHandle) {
       await serverHandle.close();
@@ -425,7 +431,7 @@ describe('Issue #20 综合契约验收套件', () => {
     // 10d. POST assert human intervention - 成功
     const resAssert = await fetch(`${baseUrl}/api/projects/rally-core-staging/human-intervention/assert`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         expected_binding_revision: 1,
         reason: 'Staging manual migration lock'
@@ -440,7 +446,7 @@ describe('Issue #20 综合契约验收套件', () => {
     // 10d-2. POST assert human intervention - 空白/非字符串 reason 失败 (Blocker 1)
     const resBlankReason = await fetch(`${baseUrl}/api/projects/rally-core-staging/human-intervention/assert`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         expected_binding_revision: 1,
         reason: '   '
@@ -451,7 +457,7 @@ describe('Issue #20 综合契约验收套件', () => {
     // 10e. POST assert human intervention - 409 版本失配 fail-closed
     const resStaleAssert = await fetch(`${baseUrl}/api/projects/rally-core-staging/human-intervention/assert`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         expected_binding_revision: 999,
         reason: 'Stale attempt'
@@ -464,7 +470,7 @@ describe('Issue #20 综合契约验收套件', () => {
     // 10f. POST clear human intervention - 成功
     const resClear = await fetch(`${baseUrl}/api/projects/rally-core-staging/human-intervention/clear`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         expected_binding_revision: 1
       })
@@ -477,7 +483,7 @@ describe('Issue #20 综合契约验收套件', () => {
     // 10g. POST clear human intervention - 409 版本失配 fail-closed
     const resStaleClear = await fetch(`${baseUrl}/api/projects/rally-core-staging/human-intervention/clear`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         expected_binding_revision: 999
       })

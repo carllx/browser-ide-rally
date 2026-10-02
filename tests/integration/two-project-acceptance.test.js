@@ -216,14 +216,20 @@ describe('Issue #34 双项目验收集成门禁 (Two-Project Acceptance Gate)', 
     // 6. 门禁验证 D: 显式标记 handled 并关闭 Session 1
     const markRes = await fetch(`${server1.url}/api/projects/${rallyBinding.binding_id}/endpoints/${rallyIdeId}/handled`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Rally-Session-Token': server1.sessionToken
+      },
       body: JSON.stringify({ expected_cursor: 'cur-i-step-1' })
     });
     assert.equal(markRes.status, 200);
 
     const markBrowserRes = await fetch(`${server1.url}/api/projects/${rallyBinding.binding_id}/endpoints/browser/handled`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Rally-Session-Token': server1.sessionToken
+      },
       body: JSON.stringify({ expected_cursor: 'cur-b-step-1' })
     });
     assert.equal(markBrowserRes.status, 200);

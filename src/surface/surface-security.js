@@ -1,0 +1,336 @@
+/**
+ * 状态表面安全与本地信任边界模块 (Surface Security)
+ * 遵循 Issue #28 规范与最小本地信任边界原则：
+ * 1. 严格限制仅监听环回地址 (Loopback Only)；
+ * 2. 校验请求 Host 与 Origin，阻断跨源攻击与 DNS 重新绑定；
+ * 3. 校验应用层会话能力令牌 (Session Capability Token)；
+ * 4. 严格强制突变端点必须提供 application/json Content-Type；
+ * 5. 校验独立的 Antigravity Hook 凭据 (Hook Secret)。
+ */
+
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { sendJson } from './http-helpers.js';
+
+/**
+ * 判断指定主机名/IP 是否为合法环回地址
+ * @param {string} host
+ * @returns {boolean}
+ */
+export function isLoopbackHost(host) {
+  if (!host || typeof host !== 'string') {
+    return false;
+  }
+  const clean = host.trim().toLowerCase();
+  if (clean === 'localhost') {
+    return true;
+  }
+  if (clean === '::1' || clean === '[::1]' || clean === '0:0:0:0:0:0:0:1') {
+    return true;
+  }
+  // IPv4 环回地址段: 127.0.0.0/8
+  const ipv4LoopbackRegex = /^127(?:\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/;
+  if (ipv4LoopbackRegex.test(clean)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * 校验监听地址，若非环回地址则严格 Fail-Closed
+ * @param {string} host
+ */
+export function assertLoopbackBind(host) {
+  if (!isLoopbackHost(host)) {
+    throw new Error(
+      `NON_LOOPBACK_BIND_REFUSED: Status Surface only permits loopback binding (e.g. 127.0.0.1, localhost, ::1). Received: "${host}"`
+    );
+  }
+}
+
+/**
+ * 校验请求的 Host 请求头是否为环回地址
+ * @param {import('node:http').IncomingMessage} req
+ * @returns {{ valid: boolean, reason?: string }}
+ */
+export function validateHostHeader(req) {
+  const rawHost = req.headers.host;
+  if (!rawHost || typeof rawHost !== 'string') {
+    return { valid: false, reason: 'MISSING_HOST_HEADER' };
+  }
+
+  // 去除端口号，兼容 IPv6 格式如 [::1]:3123
+  let hostname = rawHost.trim();
+  if (hostname.startsWith('[')) {
+    const endBracket = hostname.indexOf(']');
+    if (endBracket !== -1) {
+      hostname = hostname.slice(0, endBracket + 1);
+    }
+  } else {
+    const colonIdx = hostname.indexOf(':');
+    if (colonIdx !== -1) {
+      hostname = hostname.slice(0, colonIdx);
+    }
+  }
+
+  if (!isLoopbackHost(hostname)) {
+    return { valid: false, reason: 'INVALID_HOST_HEADER' };
+  }
+  return { valid: true };
+}
+
+/**
+ * 校验请求的 Origin / Referer 请求头（若存在）
+ * @param {import('node:http').IncomingMessage} req
+ * @returns {{ valid: boolean, reason?: string }}
+ */
+export function validateOriginHeader(req) {
+  const origin = req.headers.origin;
+  if (origin && typeof origin === 'string') {
+    try {
+      const url = new URL(origin);
+      if (!isLoopbackHost(url.hostname)) {
+        return { valid: false, reason: 'UNAUTHORIZED_ORIGIN' };
+      }
+    } catch (_) {
+      return { valid: false, reason: 'MALFORMED_ORIGIN' };
+    }
+  }
+
+  const referer = req.headers.referer;
+  if (!origin && referer && typeof referer === 'string') {
+    try {
+      const url = new URL(referer);
+      if (!isLoopbackHost(url.hostname)) {
+        return { valid: false, reason: 'UNAUTHORIZED_REFERER' };
+      }
+    } catch (_) {
+      return { valid: false, reason: 'MALFORMED_REFERER' };
+    }
+  }
+
+  return { valid: true };
+}
+
+/**
+ * 校验突变请求的 Content-Type 是否为 application/json
+ * @param {import('node:http').IncomingMessage} req
+ * @returns {{ valid: boolean, reason?: string }}
+ */
+export function validateJsonContentType(req) {
+  const ct = req.headers['content-type'];
+  if (!ct || typeof ct !== 'string') {
+    return { valid: false, reason: 'UNSUPPORTED_MEDIA_TYPE_JSON_REQUIRED' };
+  }
+  const mainType = ct.split(';')[0].trim().toLowerCase();
+  if (mainType !== 'application/json') {
+    return { valid: false, reason: 'UNSUPPORTED_MEDIA_TYPE_JSON_REQUIRED' };
+  }
+  return { valid: true };
+}
+
+/**
+ * 生成安全的随机会话能力令牌
+ * @returns {string}
+ */
+export function generateSessionToken() {
+  return crypto.randomBytes(24).toString('hex');
+}
+
+/**
+ * 安全时间比对两个字符串，防止时序侧信道攻击
+ * @param {string} a
+ * @param {string} b
+ * @returns {boolean}
+ */
+function safeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') {
+    return false;
+  }
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+/**
+ * 校验 Browser/Operator 的会话能力令牌
+ * @param {import('node:http').IncomingMessage} req
+ * @param {string} expectedToken
+ * @returns {{ valid: boolean, reason?: string }}
+ */
+export function validateOperatorSession(req, expectedToken) {
+  if (!expectedToken) {
+    return { valid: false, reason: 'SERVER_SESSION_TOKEN_UNSET' };
+  }
+
+  // 1. 尝试从 Header 获取: X-Rally-Session-Token
+  const headerToken = req.headers['x-rally-session-token'];
+  if (typeof headerToken === 'string' && safeEqual(headerToken.trim(), expectedToken)) {
+    return { valid: true };
+  }
+
+  // 2. 尝试从 Authorization Bearer 获取
+  const authHeader = req.headers.authorization;
+  if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+    const bearerToken = authHeader.slice(7).trim();
+    if (safeEqual(bearerToken, expectedToken)) {
+      return { valid: true };
+    }
+  }
+
+  // 3. 尝试从 Cookie 获取: rally_session_token=<token>
+  const cookieHeader = req.headers.cookie;
+  if (typeof cookieHeader === 'string') {
+    const cookies = cookieHeader.split(';');
+    for (const part of cookies) {
+      const [k, v] = part.split('=').map(s => s?.trim());
+      if (k === 'rally_session_token' && safeEqual(v, expectedToken)) {
+        return { valid: true };
+      }
+    }
+  }
+
+  return { valid: false, reason: 'MISSING_OR_INVALID_SESSION_TOKEN' };
+}
+
+const DEFAULT_RALLY_USER_DIR = path.join(os.homedir(), '.browser-ide-rally');
+const DEFAULT_HOOK_SECRET_PATH = path.join(DEFAULT_RALLY_USER_DIR, 'hook-secret');
+
+/**
+ * 解析或初始化本地 Hook 凭据 (Hook Secret)
+ * 严格保留单机隔离，绝不提交至代码仓库
+ * @param {object} [options]
+ * @param {string} [options.hookSecret]
+ * @param {string} [options.secretFilePath]
+ * @returns {string}
+ */
+export function resolveOrCreateHookSecret({ hookSecret = null, secretFilePath = null } = {}) {
+  if (hookSecret && typeof hookSecret === 'string' && hookSecret.trim()) {
+    return hookSecret.trim();
+  }
+
+  if (process.env.RALLY_HOOK_SECRET && process.env.RALLY_HOOK_SECRET.trim()) {
+    return process.env.RALLY_HOOK_SECRET.trim();
+  }
+
+  const targetPath = secretFilePath || DEFAULT_HOOK_SECRET_PATH;
+  try {
+    if (fs.existsSync(targetPath)) {
+      const content = fs.readFileSync(targetPath, 'utf8').trim();
+      if (content.length > 0) {
+        return content;
+      }
+    }
+
+    const dir = path.dirname(targetPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    }
+
+    const newSecret = crypto.randomBytes(32).toString('hex');
+    fs.writeFileSync(targetPath, newSecret + '\n', { encoding: 'utf8', mode: 0o600 });
+    return newSecret;
+  } catch (_) {
+    // 若文件系统不可写（如受限沙箱），回退到内存生成
+    return crypto.randomBytes(32).toString('hex');
+  }
+}
+
+/**
+ * 校验 Antigravity Hook 凭据
+ * @param {import('node:http').IncomingMessage} req
+ * @param {string} expectedHookSecret
+ * @returns {{ valid: boolean, reason?: string }}
+ */
+export function validateHookCredential(req, expectedHookSecret) {
+  if (!expectedHookSecret) {
+    return { valid: false, reason: 'SERVER_HOOK_SECRET_UNSET' };
+  }
+
+  // 1. 尝试从 Header 获取: X-Rally-Hook-Secret
+  const headerSecret = req.headers['x-rally-hook-secret'];
+  if (typeof headerSecret === 'string' && safeEqual(headerSecret.trim(), expectedHookSecret)) {
+    return { valid: true };
+  }
+
+  // 2. 尝试从 Authorization Bearer 获取
+  const authHeader = req.headers.authorization;
+  if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+    const bearerSecret = authHeader.slice(7).trim();
+    if (safeEqual(bearerSecret, expectedHookSecret)) {
+      return { valid: true };
+    }
+  }
+
+  return { valid: false, reason: 'MISSING_OR_INVALID_HOOK_CREDENTIAL' };
+}
+
+/**
+ * 校验所有 POST 突变请求的安全门禁 (Host + Origin + Content-Type + 隔离凭据)
+ * @param {import('node:http').IncomingMessage} req
+ * @param {import('node:http').ServerResponse} res
+ * @param {object} params
+ * @param {string} params.sessionToken
+ * @param {string} params.hookSecret
+ * @param {string} params.pathname
+ * @returns {boolean} true 表示放行，false 表示已被门禁拦截并响应
+ */
+export function verifyMutationSecurityGate(req, res, { sessionToken, hookSecret, pathname }) {
+  // 1. 校验 Host 请求头（防 DNS 重新绑定）
+  const hostCheck = validateHostHeader(req);
+  if (!hostCheck.valid) {
+    sendJson(res, 403, { success: false, reason: hostCheck.reason });
+    return false;
+  }
+
+  // 2. 校验 Origin / Referer 请求头（防跨源 CSRF / 外网调用）
+  const originCheck = validateOriginHeader(req);
+  if (!originCheck.valid) {
+    sendJson(res, 403, { success: false, reason: originCheck.reason });
+    return false;
+  }
+
+  // 3. 校验 Content-Type 必须为 application/json
+  const ctCheck = validateJsonContentType(req);
+  if (!ctCheck.valid) {
+    sendJson(res, 415, { success: false, reason: ctCheck.reason });
+    return false;
+  }
+
+  // 4. 凭据隔离：Hook 端点与普通 Operator 突变端点严格分离
+  if (pathname === '/api/hooks/antigravity') {
+    const hookCheck = validateHookCredential(req, hookSecret);
+    if (!hookCheck.valid) {
+      sendJson(res, 401, { success: false, reason: hookCheck.reason });
+      return false;
+    }
+  } else {
+    const sessionCheck = validateOperatorSession(req, sessionToken);
+    if (!sessionCheck.valid) {
+      sendJson(res, 403, { success: false, reason: sessionCheck.reason });
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * 判断指定请求路径是否为状态表面规范突变端点
+ * @param {string} pathname
+ * @returns {boolean}
+ */
+export function isMutationRoute(pathname) {
+  if (typeof pathname !== 'string') return false;
+  return /^\/api\/projects\/[^/]+\/endpoints\/[^/]+\/handled$/.test(pathname) ||
+         /^\/api\/projects\/[^/]+\/human-intervention\/(?:assert|clear)$/.test(pathname) ||
+         /^\/api\/projects\/[^/]+\/controls\/(?:rebind|open-focus|send|continue)$/.test(pathname) ||
+         pathname === '/api/onboarding/verify' ||
+         pathname === '/api/onboarding/create' ||
+         pathname === '/api/hooks/antigravity';
+}

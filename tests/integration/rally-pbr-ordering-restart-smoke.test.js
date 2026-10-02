@@ -156,7 +156,10 @@ describe('Rally + PBR Ordering Isolation & Restart Smoke', () => {
     // 3. 通过真实 HTTP POST 请求分发 Stop Hook 事件至 Rally
     const hookResponse = await fetch(`${server1.url}/api/hooks/antigravity`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Rally-Hook-Secret': server1.hookSecret
+      },
       body: JSON.stringify({
         conversationId: rallyConvId,
         workspacePaths: [rallyWorkspaceDir],

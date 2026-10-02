@@ -38,7 +38,7 @@ function renderProjectCard(proj) {
   `;
 }
 
-export function renderStatusSurfaceHtml({ projects = [], attentionTray = null } = {}) {
+export function renderStatusSurfaceHtml({ projects = [], attentionTray = null, sessionToken = null } = {}) {
   const projectCards = projects.map(p => renderProjectCard(p)).join('\n');
   const trayHtml = attentionTray ? renderAttentionTrayHtml(attentionTray) : '';
 
@@ -59,6 +59,7 @@ export function renderStatusSurfaceHtml({ projects = [], attentionTray = null } 
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  ${sessionToken ? `<meta name="rally-session-token" content="${escapeHtml(sessionToken)}" />` : ''}
   <title>Rally — 项目状态</title>
   <style>
     ${SURFACE_CSS}

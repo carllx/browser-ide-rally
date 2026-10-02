@@ -74,6 +74,12 @@ describe('Surface Server 集成测试', () => {
     baseUrl = serverHandle.url;
   });
 
+  const authHeaders = (extra = {}) => ({
+    'Content-Type': 'application/json',
+    'X-Rally-Session-Token': serverHandle.sessionToken,
+    ...extra
+  });
+
   after(async () => {
     if (serverHandle) {
       await serverHandle.close();
@@ -116,7 +122,7 @@ describe('Surface Server 集成测试', () => {
   it('3. POST mark handled 精确作用于 Browser 端点，IDE 两端点保持 NEW 不变', async () => {
     const res = await fetch(`${baseUrl}/api/projects/proj-alpha/endpoints/browser/handled`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({ expected_cursor: 'cursor-browser-1' })
     });
 
@@ -136,7 +142,7 @@ describe('Surface Server 集成测试', () => {
   it('4. POST mark handled 精确作用于 IDE-A 端点，Browser 与 IDE-B 不受干扰', async () => {
     const res = await fetch(`${baseUrl}/api/projects/proj-alpha/endpoints/ide-a/handled`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({ expected_cursor: 'cursor-ide-a-1' })
     });
 
@@ -156,7 +162,7 @@ describe('Surface Server 集成测试', () => {
   it('5. 游标失配时拒绝处理，返回 400 且不改写状态', async () => {
     const res = await fetch(`${baseUrl}/api/projects/proj-alpha/endpoints/ide-b/handled`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({ expected_cursor: 'wrong-cursor' })
     });
 
@@ -174,7 +180,7 @@ describe('Surface Server 集成测试', () => {
   it('6. 请求不存在的项目返回 404', async () => {
     const res = await fetch(`${baseUrl}/api/projects/proj-nonexistent/endpoints/browser/handled`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({ expected_cursor: 'any' })
     });
     assert.equal(res.status, 404);
@@ -209,7 +215,7 @@ describe('Surface Server 集成测试', () => {
 
     const res = await fetch(`${baseUrl}/api/projects/proj-numeric-cursor/endpoints/ide-num/handled`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({ expected_cursor: 0 })
     });
 
@@ -280,7 +286,7 @@ describe('Surface Server 集成测试', () => {
     // 3. 用户触发 Mark handled 该端点
     const handledRes = await fetch(`${baseUrl}/api/projects/proj-solo-new/endpoints/browser/handled`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({ expected_cursor: 'cur-solo-browser' })
     });
     assert.equal(handledRes.status, 200);

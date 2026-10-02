@@ -57,6 +57,16 @@ export const ONBOARDING_CLIENT_JS = `
       errorAlert.style.display = 'none';
     }
 
+    function getSessionHeaders() {
+      const tokenMeta = document.querySelector('meta[name="rally-session-token"]');
+      const token = tokenMeta ? tokenMeta.getAttribute('content') : '';
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) {
+        headers['X-Rally-Session-Token'] = token;
+      }
+      return headers;
+    }
+
     function resetModal() {
       clearError();
       if (formEl) formEl.style.display = 'block';
@@ -145,7 +155,7 @@ export const ONBOARDING_CLIENT_JS = `
         try {
           const resp = await fetch('/api/onboarding/verify', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getSessionHeaders(),
             body: JSON.stringify({
               display_name: displayName,
               browser_url: browserUrl,
@@ -197,7 +207,7 @@ export const ONBOARDING_CLIENT_JS = `
         try {
           const resp = await fetch('/api/onboarding/create', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getSessionHeaders(),
             body: JSON.stringify({
               display_name: displayName,
               browser_url: browserUrl,

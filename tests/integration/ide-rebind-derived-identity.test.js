@@ -165,6 +165,12 @@ describe('IDE Rebind 自动派生身份集成测试 (#40)', () => {
     baseUrl = serverHandle.url;
   });
 
+  const authHeaders = (extra = {}) => ({
+    'Content-Type': 'application/json',
+    'X-Rally-Session-Token': serverHandle.sessionToken,
+    ...extra
+  });
+
   after(async () => {
     if (serverHandle) {
       await serverHandle.close();
@@ -177,7 +183,7 @@ describe('IDE Rebind 自动派生身份集成测试 (#40)', () => {
     // 仅提交 conversation_id，甚至故意传入旧的/脏的 workspace_identity
     const resp = await fetch(`${baseUrl}/api/projects/proj-rebind-1/controls/rebind`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         expected_binding_revision: revBefore,
         target_endpoint: 'ide-primary',
@@ -218,7 +224,7 @@ describe('IDE Rebind 自动派生身份集成测试 (#40)', () => {
 
     const resp = await fetch(`${baseUrl}/api/projects/proj-rebind-1/controls/rebind`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         expected_binding_revision: revBefore,
         target_endpoint: 'ide-primary',
@@ -253,7 +259,7 @@ describe('IDE Rebind 自动派生身份集成测试 (#40)', () => {
     // 尝试重绑为已经存在于项目 2 的 conv-ide-proj2
     const resp = await fetch(`${baseUrl}/api/projects/proj-rebind-1/controls/rebind`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         expected_binding_revision: revBefore,
         target_endpoint: 'ide-primary',
@@ -299,7 +305,7 @@ describe('IDE Rebind 自动派生身份集成测试 (#40)', () => {
     // 普通轮换：无需任何 allow_replace_unhandled 标志，直接成功
     const successResp = await fetch(`${baseUrl}/api/projects/proj-rebind-1/controls/rebind`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         expected_binding_revision: revBefore,
         target_endpoint: 'ide-primary',
@@ -347,7 +353,7 @@ describe('IDE Rebind 自动派生身份集成测试 (#40)', () => {
 
     const resp = await fetch(`${baseUrl}/api/projects/proj-rebind-1/controls/rebind`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         expected_binding_revision: revBefore,
         target_endpoint: 'ide-primary',

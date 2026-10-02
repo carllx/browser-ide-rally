@@ -110,6 +110,12 @@ describe('Onboarding Surface 集成测试', () => {
     baseUrl = serverHandle.url;
   });
 
+  const authHeaders = (extra = {}) => ({
+    'Content-Type': 'application/json',
+    'X-Rally-Session-Token': serverHandle.sessionToken,
+    ...extra
+  });
+
   after(async () => {
     if (serverHandle) {
       await serverHandle.close();
@@ -136,7 +142,7 @@ describe('Onboarding Surface 集成测试', () => {
     // 负向测试 1: 非法 URL
     const resBadUrl = await fetch(`${baseUrl}/api/onboarding/verify`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         display_name: 'Alpha Project',
         browser_url: 'not-a-url',
@@ -151,7 +157,7 @@ describe('Onboarding Surface 集成测试', () => {
     // 负向测试 2: 未打开的 Browser 会话
     const resMissingTab = await fetch(`${baseUrl}/api/onboarding/verify`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         display_name: 'Alpha Project',
         browser_url: 'https://chatgpt.com/c/conv-browser-nonexistent',
@@ -169,7 +175,7 @@ describe('Onboarding Surface 集成测试', () => {
     // 1. 先调用 verify
     const verifyRes = await fetch(`${baseUrl}/api/onboarding/verify`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         display_name: 'Rally Alpha Project',
         browser_url: 'https://chatgpt.com/c/conv-browser-alpha',
@@ -187,7 +193,7 @@ describe('Onboarding Surface 集成测试', () => {
     // 2. 调用 create
     const createRes = await fetch(`${baseUrl}/api/onboarding/create`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         display_name: 'Rally Alpha Project',
         browser_url: 'https://chatgpt.com/c/conv-browser-alpha',
@@ -228,7 +234,7 @@ describe('Onboarding Surface 集成测试', () => {
     // 尝试以相同 display_name 创建
     const resDupName = await fetch(`${baseUrl}/api/onboarding/create`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         display_name: 'rally alpha project',
         browser_url: 'https://chatgpt.com/c/conv-browser-beta',
@@ -242,7 +248,7 @@ describe('Onboarding Surface 集成测试', () => {
     // 尝试以相同 browser 会话创建
     const resDupBrowser = await fetch(`${baseUrl}/api/onboarding/create`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         display_name: 'Second Project',
         browser_url: 'https://chatgpt.com/c/conv-browser-alpha',
@@ -256,7 +262,7 @@ describe('Onboarding Surface 集成测试', () => {
     // 尝试以相同 IDE 会话创建
     const resDupIde = await fetch(`${baseUrl}/api/onboarding/create`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         display_name: 'Second Project',
         browser_url: 'https://chatgpt.com/c/conv-browser-beta',
@@ -296,7 +302,7 @@ describe('Onboarding Surface 集成测试', () => {
     // 1. 先验证尝试绑定重复 IDE 会话会被拦截
     const resConflict = await fetch(`${baseUrl}/api/onboarding/create`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         display_name: 'Rally Beta Project',
         browser_url: 'https://chatgpt.com/c/conv-browser-beta',
@@ -310,7 +316,7 @@ describe('Onboarding Surface 集成测试', () => {
     // 2. 正向创建第 2 个独立项目 Beta
     const resBeta = await fetch(`${baseUrl}/api/onboarding/create`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         display_name: 'Rally Beta Project',
         browser_url: 'https://chatgpt.com/c/conv-browser-beta',

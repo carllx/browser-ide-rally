@@ -143,6 +143,12 @@ export class WorkspaceHookManager {
       if (!excludeContent.includes('.agents/hook-url')) {
         linesToAdd.push('.agents/hook-url');
       }
+      if (!excludeContent.includes('.agents/hook-secret')) {
+        linesToAdd.push('.agents/hook-secret');
+      }
+      if (!excludeContent.includes('.agents/hook-token')) {
+        linesToAdd.push('.agents/hook-token');
+      }
 
       if (linesToAdd.length > 0) {
         const prefix = excludeContent.length > 0 && !excludeContent.endsWith('\n') ? '\n' : '';

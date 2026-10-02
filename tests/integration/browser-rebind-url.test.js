@@ -67,13 +67,15 @@ function makeSampleProject(id = 'proj-url-test', browserConvId = 'conv-br-init',
  * 启动临时 HTTP 服务用于真实请求测试
  */
 function createTestHttpServer(registry) {
-  const handler = createStatusSurfaceRequestHandler({ registry });
+  const sessionToken = 'test-session-token-browser-url';
+  const handler = createStatusSurfaceRequestHandler({ registry, sessionToken });
   const server = http.createServer(handler);
   return new Promise((resolve) => {
     server.listen(0, '127.0.0.1', () => {
       const port = server.address().port;
       resolve({
         url: `http://127.0.0.1:${port}`,
+        sessionToken,
         close: () => new Promise(r => server.close(r))
       });
     });
@@ -341,7 +343,10 @@ describe('Issue #39: Browser Rebind Full ChatGPT URL Input Integration', () => {
       // 12a. 提交合法完整 ChatGPT URL
       const postUrlSuccess = await fetch(`${server.url}/api/projects/proj-http-test/controls/rebind`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Rally-Session-Token': server.sessionToken
+        },
         body: JSON.stringify({
           expected_binding_revision: 1,
           target_endpoint: 'browser',
@@ -364,7 +369,10 @@ describe('Issue #39: Browser Rebind Full ChatGPT URL Input Integration', () => {
       // 12b. 提交非 ChatGPT 链接，验证友好错误返回且零变异
       const postUrlFail = await fetch(`${server.url}/api/projects/proj-http-test/controls/rebind`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Rally-Session-Token': server.sessionToken
+        },
         body: JSON.stringify({
           expected_binding_revision: 2,
           target_endpoint: 'browser',

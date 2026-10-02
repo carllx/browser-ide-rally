@@ -168,7 +168,10 @@ describe('ObservationRuntimeCoordinator Integration', () => {
 
     const res = await fetch(`${surfaceServer.url}/api/hooks/antigravity`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Rally-Hook-Secret': surfaceServer.hookSecret
+      },
       body: JSON.stringify(hookPayload)
     });
 
@@ -356,7 +359,10 @@ describe('ObservationRuntimeCoordinator Integration', () => {
     // 尝试重绑定到同一个已有会话（或者尝试重绑但缺少确认），导致 409 BLOCKED
     const blockedRes1 = await fetch(`${surfaceServer.url}/api/projects/proj-rebind-test/controls/rebind`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Rally-Session-Token': surfaceServer.sessionToken
+      },
       body: JSON.stringify({
         expected_binding_revision: 1,
         target_endpoint: 'ide-primary',
@@ -379,7 +385,10 @@ describe('ObservationRuntimeCoordinator Integration', () => {
     const newConvId = 'conv-new-blocked-456';
     const blockedRes2 = await fetch(`${surfaceServer.url}/api/projects/proj-rebind-test/controls/rebind`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Rally-Session-Token': surfaceServer.sessionToken
+      },
       body: JSON.stringify({
         expected_binding_revision: 1,
         target_endpoint: 'ide-primary',

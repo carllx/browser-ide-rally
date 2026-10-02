@@ -354,9 +354,11 @@ describe('Issue #41: 非破坏性会话轮换核心验收 (Non-Destructive Conve
       const core = reg.registerProject({ binding: makeSampleProject('proj-hook-atomicity') });
 
       // 启动轻量 surface server 进行原子性测试
+      const testSessionToken = 'test-token-rotation-lifecycle';
       const app = createStatusSurfaceRequestHandler({
         registry: reg,
         observationCoordinator: mockCoordinator,
+        sessionToken: testSessionToken,
         agentapiResolver: { resolveAgentapiExecutable: () => '/bin/echo' },
         agentApiExecutor: (bin, args) => {
           const convId = args[args.length - 1];
@@ -386,7 +388,11 @@ describe('Issue #41: 非破坏性会话轮换核心验收 (Non-Destructive Conve
       // 1. Hook 安装失败用例
       const failRes = await fetch(`${baseUrl}/api/projects/proj-hook-atomicity/controls/rebind`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Connection: 'close' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Rally-Session-Token': testSessionToken,
+          Connection: 'close'
+        },
         body: JSON.stringify({
           expected_binding_revision: 1,
           target_endpoint: 'ide-primary',
@@ -407,7 +413,11 @@ describe('Issue #41: 非破坏性会话轮换核心验收 (Non-Destructive Conve
       // 2. Hook 成功过渡用例
       const okRes = await fetch(`${baseUrl}/api/projects/proj-hook-atomicity/controls/rebind`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Connection: 'close' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Rally-Session-Token': testSessionToken,
+          Connection: 'close'
+        },
         body: JSON.stringify({
           expected_binding_revision: 1,
           target_endpoint: 'ide-primary',

@@ -176,6 +176,12 @@ describe('Safe Controls Surface 集成测试', () => {
     baseUrl = serverHandle.url;
   });
 
+  const authHeaders = (extra = {}) => ({
+    'Content-Type': 'application/json',
+    'X-Rally-Session-Token': serverHandle.sessionToken,
+    ...extra
+  });
+
   after(async () => {
     if (serverHandle) {
       await serverHandle.close();
@@ -196,7 +202,7 @@ describe('Safe Controls Surface 集成测试', () => {
   it('2. POST /controls/open-focus 成功聚焦 Browser 端点并记录 TARGET_COMPLETED Action', async () => {
     const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/open-focus`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         expected_binding_revision: 1,
         target_endpoint: 'browser'
@@ -224,7 +230,7 @@ describe('Safe Controls Surface 集成测试', () => {
     const prevCalls = mockBrowserAdapter.focusCalls.length;
     const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/open-focus`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         expected_binding_revision: 999, // 错误版本
         target_endpoint: 'browser'
@@ -243,7 +249,7 @@ describe('Safe Controls Surface 集成测试', () => {
     // browser 端点目前有未处理 NEW (cursor-browser-1)
     const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/rebind`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         expected_binding_revision: 1,
         target_endpoint: 'browser',
@@ -271,7 +277,7 @@ describe('Safe Controls Surface 集成测试', () => {
   it('5. POST /controls/rebind 版本失配时严格拦截为 409 BLOCKED', async () => {
     const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/rebind`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         expected_binding_revision: 999,
         target_endpoint: 'browser',
@@ -292,7 +298,7 @@ describe('Safe Controls Surface 集成测试', () => {
   it('6. POST /controls/send 成功格式化受控 Envelope 并在目标适配器上派发 (与客户端 JSON 结构一致)', async () => {
     const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/send`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         expected_binding_revision: 2,
         target_endpoint: 'browser',
@@ -320,7 +326,7 @@ describe('Safe Controls Surface 集成测试', () => {
   it('7. POST /controls/send 严禁通用 bound_ide，必须按 exact endpoint_id 寻址', async () => {
     const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/send`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         expected_binding_revision: 2,
         target_endpoint: 'bound_ide', // 禁止泛化
@@ -341,7 +347,7 @@ describe('Safe Controls Surface 集成测试', () => {
   it('8. POST /controls/send 发送给 IDE 端点 ide-a 精确派发且不干扰 ide-b', async () => {
     const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/send`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         expected_binding_revision: 2,
         target_endpoint: 'ide-a',
@@ -365,7 +371,7 @@ describe('Safe Controls Surface 集成测试', () => {
     // 制造一个 BLOCKED 的控制请求
     const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/send`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         expected_binding_revision: 1, // 过期版本，导致 BLOCKED
         target_endpoint: 'ide-a',
@@ -392,7 +398,7 @@ describe('Safe Controls Surface 集成测试', () => {
   it('10. IDE Rebind: 目标端点处于 NEW 时无需确认标志直接成功轮换 (#41)', async () => {
     const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/rebind`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         expected_binding_revision: 2,
         target_endpoint: 'ide-a',
@@ -425,7 +431,7 @@ describe('Safe Controls Surface 集成测试', () => {
     // ide-b 目前处于初始 UNKNOWN 状态
     const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/rebind`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         expected_binding_revision: 3,
         target_endpoint: 'ide-b',
@@ -461,7 +467,7 @@ describe('Safe Controls Surface 集成测试', () => {
 
     const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/open-focus`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         expected_binding_revision: 4,
         target_endpoint: 'ide-a'
@@ -493,7 +499,7 @@ describe('Safe Controls Surface 集成测试', () => {
 
     const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/open-focus`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         expected_binding_revision: 4,
         target_endpoint: 'ide-a'
@@ -524,7 +530,7 @@ describe('Safe Controls Surface 集成测试', () => {
 
     const res = await fetch(`${baseUrl}/api/projects/proj-alpha/controls/open-focus`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         expected_binding_revision: 4,
         target_endpoint: 'ide-a'

@@ -68,7 +68,7 @@ test('Surface Integration — 1. POST /api/projects/:bindingId/controls/continue
     }
   });
 
-  const { server, port, close } = await startStatusSurfaceServer({
+  const { server, port, sessionToken, close } = await startStatusSurfaceServer({
     registry,
     browserAdapter,
     ideAdapters: ideAdapter
@@ -78,7 +78,10 @@ test('Surface Integration — 1. POST /api/projects/:bindingId/controls/continue
     // 1) Continue in IDE
     const resIde = await fetch(`http://127.0.0.1:${port}/api/projects/proj-http-continue/controls/continue`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Rally-Session-Token': sessionToken
+      },
       body: JSON.stringify({
         expected_binding_revision: 1,
         target_endpoint: 'ide-1',
@@ -100,7 +103,10 @@ test('Surface Integration — 1. POST /api/projects/:bindingId/controls/continue
     // 2) Continue in Browser (单 IDE 项目机械解析 source 为 ide-1)
     const resBr = await fetch(`http://127.0.0.1:${port}/api/projects/proj-http-continue/controls/continue`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Rally-Session-Token': sessionToken
+      },
       body: JSON.stringify({
         expected_binding_revision: 1,
         target_endpoint: 'browser',
@@ -141,12 +147,15 @@ test('Surface Integration — 2. 多 IDE 场景下缺少 source_endpoint 返回 
   });
   registry.registerProject({ binding });
 
-  const { port, close } = await startStatusSurfaceServer({ registry });
+  const { port, sessionToken, close } = await startStatusSurfaceServer({ registry });
 
   try {
     const res = await fetch(`http://127.0.0.1:${port}/api/projects/proj-multi-err/controls/continue`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Rally-Session-Token': sessionToken
+      },
       body: JSON.stringify({
         expected_binding_revision: 1,
         target_endpoint: 'browser'

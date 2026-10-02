@@ -301,7 +301,10 @@ describe('Issue #17 综合验收测试', () => {
     // 标记 rally-core-service 的 ide-agent-primary handled
     const res = await fetch(`${baseUrl}/api/projects/rally-core-service/endpoints/ide-agent-primary/handled`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Rally-Session-Token': serverHandle.sessionToken
+      },
       body: JSON.stringify({ expected_cursor: 'cur-ide-1' })
     });
     assert.equal(res.status, 200);
