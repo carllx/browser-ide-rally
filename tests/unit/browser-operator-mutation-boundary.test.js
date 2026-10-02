@@ -166,7 +166,160 @@ describe('TDD Seam 2: Browser/operator mutation HTTP boundary seam', () => {
     assert.equal(proj.endpoints.browser.result_state, 'NEW');
   });
 
-  it('6. 来自合法本地 UI 的正常请求（具备合法 Session Token）成功执行突变', async () => {
+  it('6. Host 头为正确 loopback 主机但端口不匹配 (wrong port) 必须被拦截 (403)，且零状态改变', async () => {
+    const postData = JSON.stringify({ expected_cursor: 'cur-bound-1' });
+    const parsedUrl = new URL(baseUrl);
+    const wrongPort = parseInt(parsedUrl.port, 10) + 1;
+
+    const { statusCode, body } = await new Promise((resolve, reject) => {
+      const req = http.request({
+        hostname: parsedUrl.hostname,
+        port: parsedUrl.port,
+        path: '/api/projects/boundary-test-proj/endpoints/browser/handled',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(postData),
+          'Host': `127.0.0.1:${wrongPort}`,
+          'X-Rally-Session-Token': validSessionToken
+        }
+      }, (res) => {
+        let raw = '';
+        res.setEncoding('utf8');
+        res.on('data', chunk => { raw += chunk; });
+        res.on('end', () => {
+          try {
+            resolve({ statusCode: res.statusCode, body: JSON.parse(raw) });
+          } catch (e) {
+            resolve({ statusCode: res.statusCode, body: raw });
+          }
+        });
+      });
+      req.on('error', reject);
+      req.write(postData);
+      req.end();
+    });
+
+    assert.equal(statusCode, 403);
+    assert.equal(body.success, false);
+    assert.match(body.reason, /INVALID_HOST_HEADER_PORT_MISMATCH/i);
+
+    // 零状态改变验证
+    const proj = registry.getProject('boundary-test-proj').getSnapshot();
+    assert.equal(proj.endpoints.browser.result_state, 'NEW');
+  });
+
+  it('7. Host 头为不同 loopback IP (如 127.0.0.99) 必须被拦截 (403)，且零状态改变', async () => {
+    const postData = JSON.stringify({ expected_cursor: 'cur-bound-1' });
+    const parsedUrl = new URL(baseUrl);
+
+    const { statusCode, body } = await new Promise((resolve, reject) => {
+      const req = http.request({
+        hostname: parsedUrl.hostname,
+        port: parsedUrl.port,
+        path: '/api/projects/boundary-test-proj/endpoints/browser/handled',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(postData),
+          'Host': `127.0.0.99:${parsedUrl.port}`,
+          'X-Rally-Session-Token': validSessionToken
+        }
+      }, (res) => {
+        let raw = '';
+        res.setEncoding('utf8');
+        res.on('data', chunk => { raw += chunk; });
+        res.on('end', () => {
+          try {
+            resolve({ statusCode: res.statusCode, body: JSON.parse(raw) });
+          } catch (e) {
+            resolve({ statusCode: res.statusCode, body: raw });
+          }
+        });
+      });
+      req.on('error', reject);
+      req.write(postData);
+      req.end();
+    });
+
+    assert.equal(statusCode, 403);
+    assert.equal(body.success, false);
+    assert.match(body.reason, /INVALID_HOST_HEADER_HOST_MISMATCH/i);
+
+    // 零状态改变验证
+    const proj = registry.getProject('boundary-test-proj').getSnapshot();
+    assert.equal(proj.endpoints.browser.result_state, 'NEW');
+  });
+
+  it('8. Origin 头为相同主机但不同端口 (different loopback port) 必须被拦截 (403)，且零状态改变', async () => {
+    const parsedUrl = new URL(baseUrl);
+    const wrongPort = parseInt(parsedUrl.port, 10) + 2;
+
+    const res = await fetch(`${baseUrl}/api/projects/boundary-test-proj/endpoints/browser/handled`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Origin': `http://127.0.0.1:${wrongPort}`,
+        'X-Rally-Session-Token': validSessionToken
+      },
+      body: JSON.stringify({ expected_cursor: 'cur-bound-1' })
+    });
+
+    assert.equal(res.status, 403);
+    const data = await res.json();
+    assert.equal(data.success, false);
+    assert.match(data.reason, /UNAUTHORIZED_ORIGIN_PORT_MISMATCH/i);
+
+    // 零状态改变验证
+    const proj = registry.getProject('boundary-test-proj').getSnapshot();
+    assert.equal(proj.endpoints.browser.result_state, 'NEW');
+  });
+
+  it('9. Origin 头为不同 loopback IP (wrong loopback Origin) 必须被拦截 (403)，且零状态改变', async () => {
+    const parsedUrl = new URL(baseUrl);
+
+    const res = await fetch(`${baseUrl}/api/projects/boundary-test-proj/endpoints/browser/handled`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Origin': `http://127.0.0.88:${parsedUrl.port}`,
+        'X-Rally-Session-Token': validSessionToken
+      },
+      body: JSON.stringify({ expected_cursor: 'cur-bound-1' })
+    });
+
+    assert.equal(res.status, 403);
+    const data = await res.json();
+    assert.equal(data.success, false);
+    assert.match(data.reason, /UNAUTHORIZED_ORIGIN_HOST_MISMATCH/i);
+
+    // 零状态改变验证
+    const proj = registry.getProject('boundary-test-proj').getSnapshot();
+    assert.equal(proj.endpoints.browser.result_state, 'NEW');
+  });
+
+  it('10. 仅依赖 Cookie (cookie-only) 发起突变请求必须被拒绝 (403)，防止隐式授权削弱显式 Token 门禁', async () => {
+    const res = await fetch(`${baseUrl}/api/projects/boundary-test-proj/endpoints/browser/handled`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Cookie': `rally_session_token=${validSessionToken}`
+        // 故意缺少 X-Rally-Session-Token 请求头
+      },
+      body: JSON.stringify({ expected_cursor: 'cur-bound-1' })
+    });
+
+    assert.equal(res.status, 403);
+    const data = await res.json();
+    assert.equal(data.success, false);
+    assert.match(data.reason, /MISSING_OR_INVALID_SESSION_TOKEN/i);
+
+    // 零状态改变验证
+    const proj = registry.getProject('boundary-test-proj').getSnapshot();
+    assert.equal(proj.endpoints.browser.result_state, 'NEW');
+  });
+
+  it('11. 来自合法本地 UI 的正常请求（具备合法 Session Token 与合法 Host）成功执行突变', async () => {
     const res = await fetch(`${baseUrl}/api/projects/boundary-test-proj/endpoints/browser/handled`, {
       method: 'POST',
       headers: {

@@ -113,6 +113,39 @@ async function main() {
     targetUrlStr = 'http://127.0.0.1:3123/api/hooks/antigravity';
   }
 
+  // 严格验证目标 URL：必须是 loopback 且指向 /api/hooks/antigravity
+  // 防止 Hook secret 被恶意/错误 custom URL 外发 (Blocker 2)
+  let targetUrl;
+  try {
+    targetUrl = new URL(targetUrlStr);
+  } catch (_) {
+    outputSafeResult();
+    process.exit(0);
+  }
+
+  const isLoopbackTarget = (host) => {
+    if (!host || typeof host !== 'string') return false;
+    const clean = host.trim().toLowerCase();
+    if (clean === 'localhost') return true;
+    if (clean === '::1' || clean === '[::1]' || clean === '0:0:0:0:0:0:0:1') return true;
+    return /^127(?:\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/.test(clean);
+  };
+
+  if (targetUrl.protocol !== 'http:' && targetUrl.protocol !== 'https:') {
+    outputSafeResult();
+    process.exit(0);
+  }
+
+  if (!isLoopbackTarget(targetUrl.hostname)) {
+    outputSafeResult();
+    process.exit(0);
+  }
+
+  if (targetUrl.pathname !== '/api/hooks/antigravity') {
+    outputSafeResult();
+    process.exit(0);
+  }
+
   // 解析本地 Hook 凭据 (Hook Secret)
   const tokenArgIdx = process.argv.indexOf('--token');
   const secretArgIdx = process.argv.indexOf('--secret');
@@ -141,7 +174,6 @@ async function main() {
   }
 
   try {
-    const targetUrl = new URL(targetUrlStr);
     const postData = Buffer.from(JSON.stringify(hookPayload), 'utf8');
 
     await new Promise((resolve) => {

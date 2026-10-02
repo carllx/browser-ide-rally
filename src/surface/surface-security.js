@@ -51,64 +51,129 @@ export function assertLoopbackBind(host) {
 }
 
 /**
- * 校验请求的 Host 请求头是否为环回地址
+ * 校验请求的 Host 请求头是否为当前 Rally 实例的 loopback 监听地址 (listener-aware)
  * @param {import('node:http').IncomingMessage} req
+ * @param {object} [context]
+ * @param {string} [context.expectedHost] 期望的 host (如 127.0.0.1, localhost)
+ * @param {number} [context.expectedPort] 期望的 port
  * @returns {{ valid: boolean, reason?: string }}
  */
-export function validateHostHeader(req) {
+export function validateHostHeader(req, context = {}) {
   const rawHost = req.headers.host;
   if (!rawHost || typeof rawHost !== 'string') {
     return { valid: false, reason: 'MISSING_HOST_HEADER' };
   }
 
-  // 去除端口号，兼容 IPv6 格式如 [::1]:3123
-  let hostname = rawHost.trim();
-  if (hostname.startsWith('[')) {
-    const endBracket = hostname.indexOf(']');
+  const cleanHost = rawHost.trim();
+  let hostname = cleanHost;
+  let port = null;
+
+  if (cleanHost.startsWith('[')) {
+    const endBracket = cleanHost.indexOf(']');
     if (endBracket !== -1) {
-      hostname = hostname.slice(0, endBracket + 1);
+      hostname = cleanHost.slice(0, endBracket + 1);
+      const after = cleanHost.slice(endBracket + 1);
+      if (after.startsWith(':')) {
+        port = parseInt(after.slice(1), 10);
+      }
     }
   } else {
-    const colonIdx = hostname.indexOf(':');
+    const colonIdx = cleanHost.indexOf(':');
     if (colonIdx !== -1) {
-      hostname = hostname.slice(0, colonIdx);
+      hostname = cleanHost.slice(0, colonIdx);
+      port = parseInt(cleanHost.slice(colonIdx + 1), 10);
     }
   }
 
   if (!isLoopbackHost(hostname)) {
     return { valid: false, reason: 'INVALID_HOST_HEADER' };
   }
+
+  const { expectedHost, expectedPort } = context;
+  if (expectedPort !== undefined && expectedPort !== null) {
+    if (port === null || isNaN(port) || port !== expectedPort) {
+      return { valid: false, reason: 'INVALID_HOST_HEADER_PORT_MISMATCH' };
+    }
+  }
+
+  if (expectedHost && typeof expectedHost === 'string') {
+    const cleanExp = expectedHost.trim().toLowerCase();
+    const cleanReq = hostname.toLowerCase();
+    const reqIsLocalhost = cleanReq === 'localhost';
+    const expIsLocalhost = cleanExp === 'localhost';
+    const reqIsIpv4Loop = /^127(?:\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/.test(cleanReq);
+    const expIsIpv4Loop = /^127(?:\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/.test(cleanExp);
+
+    if (cleanExp !== cleanReq) {
+      if (!((reqIsLocalhost && expIsIpv4Loop) || (expIsLocalhost && reqIsIpv4Loop))) {
+        return { valid: false, reason: 'INVALID_HOST_HEADER_HOST_MISMATCH' };
+      }
+    }
+  }
+
   return { valid: true };
 }
 
 /**
- * 校验请求的 Origin / Referer 请求头（若存在）
+ * 校验请求的 Origin / Referer 请求头是否严格匹配当前 Rally 实例的服务 Origin (listener-aware)
  * @param {import('node:http').IncomingMessage} req
+ * @param {object} [context]
+ * @param {string} [context.expectedHost]
+ * @param {number} [context.expectedPort]
  * @returns {{ valid: boolean, reason?: string }}
  */
-export function validateOriginHeader(req) {
+export function validateOriginHeader(req, context = {}) {
+  const { expectedHost, expectedPort } = context;
+
+  const checkUrl = (urlStr, isOrigin) => {
+    let url;
+    try {
+      url = new URL(urlStr);
+    } catch (_) {
+      return { valid: false, reason: isOrigin ? 'MALFORMED_ORIGIN' : 'MALFORMED_REFERER' };
+    }
+
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return { valid: false, reason: isOrigin ? 'UNAUTHORIZED_ORIGIN' : 'UNAUTHORIZED_REFERER' };
+    }
+
+    if (!isLoopbackHost(url.hostname)) {
+      return { valid: false, reason: isOrigin ? 'UNAUTHORIZED_ORIGIN' : 'UNAUTHORIZED_REFERER' };
+    }
+
+    if (expectedPort !== undefined && expectedPort !== null) {
+      const portNum = url.port ? parseInt(url.port, 10) : (url.protocol === 'https:' ? 443 : 80);
+      if (portNum !== expectedPort) {
+        return { valid: false, reason: isOrigin ? 'UNAUTHORIZED_ORIGIN_PORT_MISMATCH' : 'UNAUTHORIZED_REFERER_PORT_MISMATCH' };
+      }
+    }
+
+    if (expectedHost && typeof expectedHost === 'string') {
+      const cleanExp = expectedHost.trim().toLowerCase();
+      const cleanUrlHost = url.hostname.toLowerCase();
+      const urlIsLocalhost = cleanUrlHost === 'localhost';
+      const expIsLocalhost = cleanExp === 'localhost';
+      const urlIsIpv4Loop = /^127(?:\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/.test(cleanUrlHost);
+      const expIsIpv4Loop = /^127(?:\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/.test(cleanExp);
+
+      if (cleanExp !== cleanUrlHost) {
+        if (!((urlIsLocalhost && expIsIpv4Loop) || (expIsLocalhost && urlIsIpv4Loop))) {
+          return { valid: false, reason: isOrigin ? 'UNAUTHORIZED_ORIGIN_HOST_MISMATCH' : 'UNAUTHORIZED_REFERER_HOST_MISMATCH' };
+        }
+      }
+    }
+
+    return { valid: true };
+  };
+
   const origin = req.headers.origin;
   if (origin && typeof origin === 'string') {
-    try {
-      const url = new URL(origin);
-      if (!isLoopbackHost(url.hostname)) {
-        return { valid: false, reason: 'UNAUTHORIZED_ORIGIN' };
-      }
-    } catch (_) {
-      return { valid: false, reason: 'MALFORMED_ORIGIN' };
-    }
+    return checkUrl(origin, true);
   }
 
   const referer = req.headers.referer;
-  if (!origin && referer && typeof referer === 'string') {
-    try {
-      const url = new URL(referer);
-      if (!isLoopbackHost(url.hostname)) {
-        return { valid: false, reason: 'UNAUTHORIZED_REFERER' };
-      }
-    } catch (_) {
-      return { valid: false, reason: 'MALFORMED_REFERER' };
-    }
+  if (referer && typeof referer === 'string') {
+    return checkUrl(referer, false);
   }
 
   return { valid: true };
@@ -159,6 +224,8 @@ function safeEqual(a, b) {
 
 /**
  * 校验 Browser/Operator 的会话能力令牌
+ * 遵循 Issue #28 Blocker 1: 必须要求显式 X-Rally-Session-Token 或 Authorization: Bearer，
+ * 绝不允许仅凭 cookie 进行隐式突变授权
  * @param {import('node:http').IncomingMessage} req
  * @param {string} expectedToken
  * @returns {{ valid: boolean, reason?: string }}
@@ -168,7 +235,7 @@ export function validateOperatorSession(req, expectedToken) {
     return { valid: false, reason: 'SERVER_SESSION_TOKEN_UNSET' };
   }
 
-  // 1. 尝试从 Header 获取: X-Rally-Session-Token
+  // 1. 尝试从 Header 获取: X-Rally-Session-Token (主要能力凭证)
   const headerToken = req.headers['x-rally-session-token'];
   if (typeof headerToken === 'string' && safeEqual(headerToken.trim(), expectedToken)) {
     return { valid: true };
@@ -183,18 +250,6 @@ export function validateOperatorSession(req, expectedToken) {
     }
   }
 
-  // 3. 尝试从 Cookie 获取: rally_session_token=<token>
-  const cookieHeader = req.headers.cookie;
-  if (typeof cookieHeader === 'string') {
-    const cookies = cookieHeader.split(';');
-    for (const part of cookies) {
-      const [k, v] = part.split('=').map(s => s?.trim());
-      if (k === 'rally_session_token' && safeEqual(v, expectedToken)) {
-        return { valid: true };
-      }
-    }
-  }
-
   return { valid: false, reason: 'MISSING_OR_INVALID_SESSION_TOKEN' };
 }
 
@@ -203,7 +258,7 @@ const DEFAULT_HOOK_SECRET_PATH = path.join(DEFAULT_RALLY_USER_DIR, 'hook-secret'
 
 /**
  * 解析或初始化本地 Hook 凭据 (Hook Secret)
- * 严格保留单机隔离，绝不提交至代码仓库
+ * 遵循 Issue #28 Blocker 3: 若无显式 secret、无环境变量且持久化存储无法可靠读写，严格 Fail-Closed
  * @param {object} [options]
  * @param {string} [options.hookSecret]
  * @param {string} [options.secretFilePath]
@@ -235,9 +290,13 @@ export function resolveOrCreateHookSecret({ hookSecret = null, secretFilePath = 
     const newSecret = crypto.randomBytes(32).toString('hex');
     fs.writeFileSync(targetPath, newSecret + '\n', { encoding: 'utf8', mode: 0o600 });
     return newSecret;
-  } catch (_) {
-    // 若文件系统不可写（如受限沙箱），回退到内存生成
-    return crypto.randomBytes(32).toString('hex');
+  } catch (err) {
+    const durableError = new Error(
+      `DURABLE_HOOK_SECRET_UNAVAILABLE: Failed to read or create durable Hook credential at "${targetPath}". ` +
+      `Failing closed to prevent unreachable in-memory secret divergence: ${err.message}`
+    );
+    durableError.code = 'DURABLE_HOOK_SECRET_UNAVAILABLE';
+    throw durableError;
   }
 }
 
@@ -278,18 +337,19 @@ export function validateHookCredential(req, expectedHookSecret) {
  * @param {string} params.sessionToken
  * @param {string} params.hookSecret
  * @param {string} params.pathname
+ * @param {object} [params.context] listener-aware 校验上下文 ({ expectedHost, expectedPort })
  * @returns {boolean} true 表示放行，false 表示已被门禁拦截并响应
  */
-export function verifyMutationSecurityGate(req, res, { sessionToken, hookSecret, pathname }) {
-  // 1. 校验 Host 请求头（防 DNS 重新绑定）
-  const hostCheck = validateHostHeader(req);
+export function verifyMutationSecurityGate(req, res, { sessionToken, hookSecret, pathname, context = {} }) {
+  // 1. 校验 Host 请求头（防 DNS 重新绑定，listener-aware）
+  const hostCheck = validateHostHeader(req, context);
   if (!hostCheck.valid) {
     sendJson(res, 403, { success: false, reason: hostCheck.reason });
     return false;
   }
 
-  // 2. 校验 Origin / Referer 请求头（防跨源 CSRF / 外网调用）
-  const originCheck = validateOriginHeader(req);
+  // 2. 校验 Origin / Referer 请求头（防跨源 CSRF / 外网调用，listener-aware）
+  const originCheck = validateOriginHeader(req, context);
   if (!originCheck.valid) {
     sendJson(res, 403, { success: false, reason: originCheck.reason });
     return false;

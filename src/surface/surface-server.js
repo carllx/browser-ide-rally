@@ -46,7 +46,8 @@ export function createStatusSurfaceRequestHandler({
   agentApiExecutor = null,
   observationCoordinator = null,
   sessionToken = null,
-  hookSecret = null
+  hookSecret = null,
+  serverContext = null
 }) {
   if (!registry || typeof registry.listProjects !== 'function') {
     throw new Error('Valid ProjectRegistry instance is required for Status Surface Server');
@@ -56,8 +57,10 @@ export function createStatusSurfaceRequestHandler({
   const effectiveHookSecret = resolveOrCreateHookSecret({ hookSecret });
 
   return async function requestHandler(req, res) {
-    // 基础 Host 请求头校验（防 DNS 重新绑定）
-    const hostCheck = validateHostHeader(req);
+    const secContext = typeof serverContext === 'function' ? serverContext() : (serverContext || {});
+
+    // 基础 Host 请求头校验（防 DNS 重新绑定，listener-aware）
+    const hostCheck = validateHostHeader(req, secContext);
     if (!hostCheck.valid) {
       return sendJson(res, 403, { success: false, reason: hostCheck.reason });
     }
@@ -83,12 +86,13 @@ export function createStatusSurfaceRequestHandler({
       }
     }
 
-    // 突变请求统一安全门禁 (Seams 2, 3, 4: Host, Origin, Content-Type, Session/Hook 凭据隔离)
+    // 突变请求统一安全门禁 (Seams 2, 3, 4: Host, Origin, Content-Type, Session/Hook 凭据隔离，listener-aware)
     if (method === 'POST' && isMutationRoute(pathname)) {
       if (!verifyMutationSecurityGate(req, res, {
         sessionToken: effectiveSessionToken,
         hookSecret: effectiveHookSecret,
-        pathname
+        pathname,
+        context: secContext
       })) {
         return;
       }
@@ -515,6 +519,7 @@ export function startStatusSurfaceServer({
   const effectiveSessionToken = sessionToken || generateSessionToken();
   const effectiveHookSecret = resolveOrCreateHookSecret({ hookSecret });
 
+  let dynamicPort = null;
   const handler = createStatusSurfaceRequestHandler({
     registry,
     browserAdapter,
@@ -523,7 +528,11 @@ export function startStatusSurfaceServer({
     agentApiExecutor,
     observationCoordinator,
     sessionToken: effectiveSessionToken,
-    hookSecret: effectiveHookSecret
+    hookSecret: effectiveHookSecret,
+    serverContext: () => ({
+      expectedHost: host,
+      expectedPort: dynamicPort
+    })
   });
   const server = http.createServer(handler);
 
@@ -532,6 +541,7 @@ export function startStatusSurfaceServer({
     server.listen(port, host, () => {
       const addr = server.address();
       const actualPort = typeof addr === 'object' && addr !== null ? addr.port : port;
+      dynamicPort = actualPort;
       const url = `http://${host}:${actualPort}`;
 
       resolve({

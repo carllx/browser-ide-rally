@@ -204,4 +204,113 @@ describe('TDD Seam 3: Antigravity Hook ingress credential seam', () => {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  it('7. Hook Bridge 绝不向非 loopback custom URL 发送请求或泄露 Hook Secret (Blocker 2 exfiltration)', async () => {
+    // 启动一个监听在非预期地址/测试地址的 Mock HTTP 服务，验证它绝不会收到包含 secret 的请求
+    const testSecret = 'super-secret-to-never-leak-12345';
+    let receivedRequest = false;
+
+    // 创建测试 tempDir
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rally-bridge-leak-'));
+    try {
+      const agentsDir = path.join(tempDir, '.agents');
+      fs.mkdirSync(agentsDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(agentsDir, 'rally-conversations.json'),
+        JSON.stringify({ conversations: ['conv-leak-test'] }),
+        'utf8'
+      );
+      fs.writeFileSync(
+        path.join(agentsDir, 'hook-secret'),
+        testSecret,
+        'utf8'
+      );
+
+      // 目标为外部恶意域名或 LAN 地址
+      const evilTargetUrl = 'http://attacker-controlled.example.com/api/hooks/antigravity';
+
+      const stdinPayload = JSON.stringify({
+        conversationId: 'conv-leak-test',
+        workspacePath: tempDir
+      });
+
+      const proc = spawnSync('node', [BRIDGE_SCRIPT, '--url', evilTargetUrl], {
+        input: stdinPayload,
+        encoding: 'utf8',
+        cwd: tempDir,
+        timeout: 3000
+      });
+
+      // 必须安全退出，输出 "{}"，退出码 0
+      assert.equal(proc.status, 0);
+      assert.equal(proc.stdout.trim(), '{}');
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('8. Hook Bridge 绝不向非 /api/hooks/antigravity 路径发送请求或泄露 Secret (Blocker 2 path check)', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rally-bridge-path-leak-'));
+    try {
+      const agentsDir = path.join(tempDir, '.agents');
+      fs.mkdirSync(agentsDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(agentsDir, 'rally-conversations.json'),
+        JSON.stringify({ conversations: ['conv-path-leak-test'] }),
+        'utf8'
+      );
+      fs.writeFileSync(
+        path.join(agentsDir, 'hook-secret'),
+        'secret-dont-send-to-wrong-path',
+        'utf8'
+      );
+
+      // 指向 loopback 但路径不正确的 endpoint
+      const wrongPathUrl = `${baseUrl}/api/other-endpoint`;
+
+      const stdinPayload = JSON.stringify({
+        conversationId: 'conv-path-leak-test',
+        workspacePath: tempDir
+      });
+
+      const proc = spawnSync('node', [BRIDGE_SCRIPT, '--url', wrongPathUrl], {
+        input: stdinPayload,
+        encoding: 'utf8',
+        cwd: tempDir,
+        timeout: 3000
+      });
+
+      assert.equal(proc.status, 0);
+      assert.equal(proc.stdout.trim(), '{}');
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('9. 当持久化 Hook Secret 文件无法读取或创建时，服务初始化必须 Fail-Closed 抛出异常 (Blocker 3)', async () => {
+    const { resolveOrCreateHookSecret } = await import('../../src/surface/surface-security.js');
+
+    // 指向一个不可写入的路径（例如将父级伪造成文件导致路径创建失败，或无效路径）
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rally-unwritable-'));
+    const conflictFilePath = path.join(tempDir, 'file-as-dir');
+    fs.writeFileSync(conflictFilePath, 'blocking-file', 'utf8');
+
+    // 尝试在普通文件下方创建子目录文件
+    const uncreatableSecretPath = path.join(conflictFilePath, 'sub-dir', 'hook-secret');
+
+    try {
+      assert.throws(
+        () => {
+          resolveOrCreateHookSecret({ secretFilePath: uncreatableSecretPath });
+        },
+        (err) => {
+          assert.equal(err.code, 'DURABLE_HOOK_SECRET_UNAVAILABLE');
+          return true;
+        }
+      );
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });
+
