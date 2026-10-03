@@ -92,19 +92,16 @@ describe('TDD Seam 1: Server startup / loopback bind seam', () => {
     );
   });
 
-  it('7. Surface 以 "::1" 启动时，合法 "[::1]:<actual-port>" Host 绝不被自身 security gate 拒绝', async () => {
+  it('7. Surface 以 "::1" 启动时，server.url 必须为有效 bracketed URL 且直接请求成功', async () => {
     const registry = createProjectRegistry();
     const server = await startStatusSurfaceServer({ registry, port: 0, host: '::1' });
     try {
       assert.ok(server.port > 0);
-      assert.match(server.url, /^http:\/\/\[?::1\]?:\d+$/);
+      // server.url 必须为合法有效带方括号的 IPv6 URL: http://[::1]:<port>
+      assert.match(server.url, /^http:\/\/\[::1\]:\d+$/);
 
-      // 发起请求并携带规范的 HTTP IPv6 Host 请求头 "[::1]:<port>"
-      const res = await fetch(`http://[::1]:${server.port}/`, {
-        headers: {
-          'Host': `[::1]:${server.port}`
-        }
-      });
+      // 直接使用 server.url 发起请求并成功，验证 server.url 的原生契约
+      const res = await fetch(server.url);
       assert.equal(res.status, 200);
       const text = await res.text();
       assert.ok(text.includes('Rally'));

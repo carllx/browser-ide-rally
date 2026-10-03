@@ -371,4 +371,122 @@ describe('TDD Seam 2: Browser/operator mutation HTTP boundary seam', () => {
     assert.equal(proj.endpoints.browser.result_state, 'NEW');
     assert.equal(proj.endpoints.browser.latest_completed_cursor, 'cur-bound-2');
   });
+
+  it('13. listener 为 127.0.0.1 时，Origin: http://localhost:<port> 必须被拒绝 (403)，且零状态改变', async () => {
+    const parsedUrl = new URL(baseUrl);
+    const core = registry.getProject('boundary-test-proj');
+    core.recordEndpointObservation('browser', {
+      trusted: true,
+      latest_completed_cursor: 'cur-bound-3',
+      provider: 'chatgpt',
+      conversation_id: 'conv-bound-browser',
+      endpoint_revision: 1
+    });
+
+    const res = await fetch(`${baseUrl}/api/projects/boundary-test-proj/endpoints/browser/handled`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Origin': `http://localhost:${parsedUrl.port}`,
+        'X-Rally-Session-Token': validSessionToken
+      },
+      body: JSON.stringify({ expected_cursor: 'cur-bound-3' })
+    });
+
+    assert.equal(res.status, 403);
+    const data = await res.json();
+    assert.equal(data.success, false);
+    assert.match(data.reason, /UNAUTHORIZED_ORIGIN_HOST_MISMATCH/i);
+
+    const proj = registry.getProject('boundary-test-proj').getSnapshot();
+    assert.equal(proj.endpoints.browser.result_state, 'NEW');
+    assert.equal(proj.endpoints.browser.latest_completed_cursor, 'cur-bound-3');
+  });
+
+  it('14. listener 为 localhost 时，Origin: http://127.0.0.1:<port> 必须被拒绝 (403)，且零状态改变', async () => {
+    // 启动一个专门监听在 localhost 的临时服务实例
+    const localhostServer = await startStatusSurfaceServer({ registry, port: 0, host: 'localhost' });
+    const localParsedUrl = new URL(localhostServer.url);
+    const core = registry.getProject('boundary-test-proj');
+    core.recordEndpointObservation('browser', {
+      trusted: true,
+      latest_completed_cursor: 'cur-bound-4',
+      provider: 'chatgpt',
+      conversation_id: 'conv-bound-browser',
+      endpoint_revision: 1
+    });
+
+    try {
+      const res = await fetch(`${localhostServer.url}/api/projects/boundary-test-proj/endpoints/browser/handled`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Origin': `http://127.0.0.1:${localParsedUrl.port}`,
+          'X-Rally-Session-Token': localhostServer.sessionToken
+        },
+        body: JSON.stringify({ expected_cursor: 'cur-bound-4' })
+      });
+
+      assert.equal(res.status, 403);
+      const data = await res.json();
+      assert.equal(data.success, false);
+      assert.match(data.reason, /UNAUTHORIZED_ORIGIN_HOST_MISMATCH/i);
+
+      const proj = registry.getProject('boundary-test-proj').getSnapshot();
+      assert.equal(proj.endpoints.browser.result_state, 'NEW');
+      assert.equal(proj.endpoints.browser.latest_completed_cursor, 'cur-bound-4');
+    } finally {
+      await localhostServer.close();
+    }
+  });
+
+  it('15. listener 为 127.0.0.1 时，Host 头为 localhost:<port> 必须被拦截 (403)，不能因都是 loopback 而被接受', async () => {
+    const postData = JSON.stringify({ expected_cursor: 'cur-bound-5' });
+    const parsedUrl = new URL(baseUrl);
+    const core = registry.getProject('boundary-test-proj');
+    core.recordEndpointObservation('browser', {
+      trusted: true,
+      latest_completed_cursor: 'cur-bound-5',
+      provider: 'chatgpt',
+      conversation_id: 'conv-bound-browser',
+      endpoint_revision: 1
+    });
+
+    const { statusCode, body } = await new Promise((resolve, reject) => {
+      const req = http.request({
+        hostname: parsedUrl.hostname,
+        port: parsedUrl.port,
+        path: '/api/projects/boundary-test-proj/endpoints/browser/handled',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(postData),
+          'Host': `localhost:${parsedUrl.port}`,
+          'X-Rally-Session-Token': validSessionToken
+        }
+      }, (res) => {
+        let raw = '';
+        res.setEncoding('utf8');
+        res.on('data', chunk => { raw += chunk; });
+        res.on('end', () => {
+          try {
+            resolve({ statusCode: res.statusCode, body: JSON.parse(raw) });
+          } catch (e) {
+            resolve({ statusCode: res.statusCode, body: raw });
+          }
+        });
+      });
+      req.on('error', reject);
+      req.write(postData);
+      req.end();
+    });
+
+    assert.equal(statusCode, 403);
+    assert.equal(body.success, false);
+    assert.match(body.reason, /INVALID_HOST_HEADER_HOST_MISMATCH/i);
+
+    const proj = registry.getProject('boundary-test-proj').getSnapshot();
+    assert.equal(proj.endpoints.browser.result_state, 'NEW');
+    assert.equal(proj.endpoints.browser.latest_completed_cursor, 'cur-bound-5');
+  });
 });

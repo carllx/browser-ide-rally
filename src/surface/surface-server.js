@@ -542,7 +542,8 @@ export function startStatusSurfaceServer({
       const addr = server.address();
       const actualPort = typeof addr === 'object' && addr !== null ? addr.port : port;
       dynamicPort = actualPort;
-      const url = `http://${host}:${actualPort}`;
+      const formattedHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+      const url = `http://${formattedHost}:${actualPort}`;
 
       resolve({
         server,

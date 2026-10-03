@@ -102,24 +102,16 @@ export function validateHostHeader(req, context = {}) {
       if (s.startsWith('[') && s.endsWith(']')) {
         s = s.slice(1, -1);
       }
+      if (s === '0:0:0:0:0:0:0:1') {
+        s = '::1';
+      }
       return s;
     };
     const cleanExp = normalizeHost(expectedHost);
     const cleanReq = normalizeHost(hostname);
-    const reqIsLocalhost = cleanReq === 'localhost';
-    const expIsLocalhost = cleanExp === 'localhost';
-    const reqIsIpv4Loop = /^127(?:\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/.test(cleanReq);
-    const expIsIpv4Loop = /^127(?:\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/.test(cleanExp);
-    const reqIsIpv6Loop = cleanReq === '::1' || cleanReq === '0:0:0:0:0:0:0:1';
-    const expIsIpv6Loop = cleanExp === '::1' || cleanExp === '0:0:0:0:0:0:0:1';
 
     if (cleanExp !== cleanReq) {
-      const isCompatLoopback = (reqIsLocalhost && expIsIpv4Loop) ||
-                               (expIsLocalhost && reqIsIpv4Loop) ||
-                               (reqIsIpv6Loop && expIsIpv6Loop);
-      if (!isCompatLoopback) {
-        return { valid: false, reason: 'INVALID_HOST_HEADER_HOST_MISMATCH' };
-      }
+      return { valid: false, reason: 'INVALID_HOST_HEADER_HOST_MISMATCH' };
     }
   }
 
@@ -129,6 +121,7 @@ export function validateHostHeader(req, context = {}) {
 /**
  * 校验请求的 Origin / Referer 请求头是否严格匹配当前 Rally 实例的服务 Origin (listener-aware)
  * 必须同时匹配实际 served scheme (http:) + host + port
+ * 遵循 Issue #28 Blocker 1: 严格匹配实际 listener host，禁止将 localhost 与 127.x 视为 same-origin
  * @param {import('node:http').IncomingMessage} req
  * @param {object} [context]
  * @param {string} [context.expectedHost]
@@ -165,31 +158,23 @@ export function validateOriginHeader(req, context = {}) {
       }
     }
 
-    // 4. 严格校验主机 (支持 IPv6 括号规范化与 localhost/127 兼容)
+    // 4. 严格校验主机 (语法规范化：case, IPv6 brackets, 纯等价 IPv6 textual form；严禁将 localhost 与 127.x 当成 same-origin)
     if (expectedHost && typeof expectedHost === 'string') {
       const normalizeHost = (h) => {
         let s = h.trim().toLowerCase();
         if (s.startsWith('[') && s.endsWith(']')) {
           s = s.slice(1, -1);
         }
+        if (s === '0:0:0:0:0:0:0:1') {
+          s = '::1';
+        }
         return s;
       };
       const cleanExp = normalizeHost(expectedHost);
       const cleanUrlHost = normalizeHost(url.hostname);
-      const urlIsLocalhost = cleanUrlHost === 'localhost';
-      const expIsLocalhost = cleanExp === 'localhost';
-      const urlIsIpv4Loop = /^127(?:\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/.test(cleanUrlHost);
-      const expIsIpv4Loop = /^127(?:\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/.test(cleanExp);
-      const urlIsIpv6Loop = cleanUrlHost === '::1' || cleanUrlHost === '0:0:0:0:0:0:0:1';
-      const expIsIpv6Loop = cleanExp === '::1' || cleanExp === '0:0:0:0:0:0:0:1';
 
       if (cleanExp !== cleanUrlHost) {
-        const isCompatLoopback = (urlIsLocalhost && expIsIpv4Loop) ||
-                                 (expIsLocalhost && urlIsIpv4Loop) ||
-                                 (urlIsIpv6Loop && expIsIpv6Loop);
-        if (!isCompatLoopback) {
-          return { valid: false, reason: isOrigin ? 'UNAUTHORIZED_ORIGIN_HOST_MISMATCH' : 'UNAUTHORIZED_REFERER_HOST_MISMATCH' };
-        }
+        return { valid: false, reason: isOrigin ? 'UNAUTHORIZED_ORIGIN_HOST_MISMATCH' : 'UNAUTHORIZED_REFERER_HOST_MISMATCH' };
       }
     }
 
