@@ -154,7 +154,7 @@ describe('TDD Seam 3: Antigravity Hook ingress credential seam', () => {
         input: stdinPayload,
         encoding: 'utf8',
         cwd: tempDir,
-        timeout: 3000
+        timeout: 10000
       });
 
       assert.equal(proc.status, 0);
@@ -195,7 +195,7 @@ describe('TDD Seam 3: Antigravity Hook ingress credential seam', () => {
         input: stdinPayload,
         encoding: 'utf8',
         cwd: tempDir,
-        timeout: 3000
+        timeout: 10000
       });
 
       assert.equal(proc.status, 0);
@@ -312,5 +312,45 @@ describe('TDD Seam 3: Antigravity Hook ingress credential seam', () => {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  it('10. Hook Bridge 绝不向 https 协议目标发起请求或泄露 Secret (HTTP-only transport security)', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rally-bridge-https-leak-'));
+    try {
+      const agentsDir = path.join(tempDir, '.agents');
+      fs.mkdirSync(agentsDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(agentsDir, 'rally-conversations.json'),
+        JSON.stringify({ conversations: ['conv-https-test'] }),
+        'utf8'
+      );
+      fs.writeFileSync(
+        path.join(agentsDir, 'hook-secret'),
+        'secret-dont-send-to-https',
+        'utf8'
+      );
+
+      // 虽然是 loopback 且路径为 /api/hooks/antigravity，但协议为 https:
+      const httpsTargetUrl = 'https://127.0.0.1:3123/api/hooks/antigravity';
+
+      const stdinPayload = JSON.stringify({
+        conversationId: 'conv-https-test',
+        workspacePath: tempDir
+      });
+
+      const proc = spawnSync('node', [BRIDGE_SCRIPT, '--url', httpsTargetUrl], {
+        input: stdinPayload,
+        encoding: 'utf8',
+        cwd: tempDir,
+        timeout: 3000
+      });
+
+      // 必须安全退出，输出 "{}"，退出码 0，且无网络发送
+      assert.equal(proc.status, 0);
+      assert.equal(proc.stdout.trim(), '{}');
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });
+
 

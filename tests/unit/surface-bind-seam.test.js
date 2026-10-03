@@ -91,4 +91,25 @@ describe('TDD Seam 1: Server startup / loopback bind seam', () => {
       }
     );
   });
+
+  it('7. Surface 以 "::1" 启动时，合法 "[::1]:<actual-port>" Host 绝不被自身 security gate 拒绝', async () => {
+    const registry = createProjectRegistry();
+    const server = await startStatusSurfaceServer({ registry, port: 0, host: '::1' });
+    try {
+      assert.ok(server.port > 0);
+      assert.match(server.url, /^http:\/\/\[?::1\]?:\d+$/);
+
+      // 发起请求并携带规范的 HTTP IPv6 Host 请求头 "[::1]:<port>"
+      const res = await fetch(`http://[::1]:${server.port}/`, {
+        headers: {
+          'Host': `[::1]:${server.port}`
+        }
+      });
+      assert.equal(res.status, 200);
+      const text = await res.text();
+      assert.ok(text.includes('Rally'));
+    } finally {
+      await server.close();
+    }
+  });
 });

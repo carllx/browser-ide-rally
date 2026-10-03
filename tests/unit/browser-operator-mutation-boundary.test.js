@@ -338,4 +338,37 @@ describe('TDD Seam 2: Browser/operator mutation HTTP boundary seam', () => {
     assert.equal(proj.endpoints.browser.result_state, 'NO_NEW_RESULT');
     assert.equal(proj.endpoints.browser.last_handled_cursor, 'cur-bound-1');
   });
+
+  it('12. Origin 为相同 host + 相同 port 但协议为 https (wrong scheme) 必须被拦截 (403)，且零状态改变', async () => {
+    const parsedUrl = new URL(baseUrl);
+    // 重新将状态置为 NEW 以验证零状态变更
+    const core = registry.getProject('boundary-test-proj');
+    core.recordEndpointObservation('browser', {
+      trusted: true,
+      latest_completed_cursor: 'cur-bound-2',
+      provider: 'chatgpt',
+      conversation_id: 'conv-bound-browser',
+      endpoint_revision: 1
+    });
+
+    const res = await fetch(`${baseUrl}/api/projects/boundary-test-proj/endpoints/browser/handled`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Origin': `https://${parsedUrl.hostname}:${parsedUrl.port}`,
+        'X-Rally-Session-Token': validSessionToken
+      },
+      body: JSON.stringify({ expected_cursor: 'cur-bound-2' })
+    });
+
+    assert.equal(res.status, 403);
+    const data = await res.json();
+    assert.equal(data.success, false);
+    assert.match(data.reason, /UNAUTHORIZED_ORIGIN_SCHEME_MISMATCH/i);
+
+    // 零状态改变验证
+    const proj = registry.getProject('boundary-test-proj').getSnapshot();
+    assert.equal(proj.endpoints.browser.result_state, 'NEW');
+    assert.equal(proj.endpoints.browser.latest_completed_cursor, 'cur-bound-2');
+  });
 });

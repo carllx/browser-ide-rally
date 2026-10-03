@@ -131,7 +131,8 @@ async function main() {
     return /^127(?:\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$/.test(clean);
   };
 
-  if (targetUrl.protocol !== 'http:' && targetUrl.protocol !== 'https:') {
+  // 必须使用 http: 协议（当前 Bridge 传输仅实现 node:http）
+  if (targetUrl.protocol !== 'http:') {
     outputSafeResult();
     process.exit(0);
   }
