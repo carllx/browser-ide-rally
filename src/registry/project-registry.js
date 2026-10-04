@@ -33,6 +33,8 @@ export class ProjectRegistry {
     this._storagePath = storagePath;
     /** @type {Map<string, import('../status/status-core.js').ProjectStatusCore>} */
     this._projects = new Map();
+    /** @type {Map<string, object>} 规范留存的已移出项目事实账本 */
+    this._removedProjects = new Map();
   }
 
   registerProject({
@@ -113,6 +115,78 @@ export class ProjectRegistry {
 
   listProjects() {
     return Array.from(this._projects.values()).map(core => core.getSnapshot());
+  }
+
+  /**
+   * 从活跃集合中安全移出项目，并将其完整规范事实留存于持久化已移出账本中
+   * 遵循 Issue #36 契约：
+   * 1. 严格要求 exact binding_id + exact expected_binding_revision；
+   * 2. 脏版本或缺失版本严格抛出 STALE_OR_MISSING_BINDING_REVISION 并保证 Zero Mutation；
+   * 3. 持久化失败时内存原子回滚，保持存储真值权威；
+   * 4. 兄弟项目与底层真实环境（外部会话/工作区/代码仓）完全不受修改。
+   * @param {string} bindingId
+   * @param {object} options
+   * @param {number} options.expected_binding_revision
+   * @returns {{ success: boolean, binding_id: string, removed_at: string }}
+   */
+  removeProject(bindingId, { expected_binding_revision } = {}) {
+    if (expected_binding_revision === undefined || expected_binding_revision === null || typeof expected_binding_revision !== 'number') {
+      throw new Error('expected_binding_revision is required for removeProject');
+    }
+
+    const core = this.getProject(bindingId);
+    const snapshot = core.getSnapshot();
+
+    if (snapshot.binding.binding_revision !== expected_binding_revision) {
+      const err = new Error(
+        `STALE_OR_MISSING_BINDING_REVISION: expected ${expected_binding_revision}, actual ${snapshot.binding.binding_revision}`
+      );
+      err.code = 'STALE_OR_MISSING_BINDING_REVISION';
+      throw err;
+    }
+
+    const removedAt = new Date().toISOString();
+    const retainedEvidence = {
+      ...core.exportState(),
+      removed_at: removedAt
+    };
+
+    // 内存事务性转移
+    this._projects.delete(bindingId);
+    this._removedProjects.set(bindingId, retainedEvidence);
+
+    if (this._storagePath) {
+      try {
+        this.saveToFile(this._storagePath);
+      } catch (err) {
+        // 存储失败：内存原子回滚
+        this._projects.set(bindingId, core);
+        this._removedProjects.delete(bindingId);
+        throw err;
+      }
+    }
+
+    return {
+      success: true,
+      binding_id: bindingId,
+      removed_at: removedAt
+    };
+  }
+
+  hasRemovedProject(bindingId) {
+    return this._removedProjects.has(bindingId);
+  }
+
+  getRemovedProject(bindingId) {
+    const retained = this._removedProjects.get(bindingId);
+    if (!retained) {
+      throw new Error(`Removed project "${bindingId}" not found in retention ledger`);
+    }
+    return retained;
+  }
+
+  listRemovedProjects() {
+    return Array.from(this._removedProjects.values());
   }
 
   /**
@@ -281,10 +355,15 @@ export class ProjectRegistry {
     for (const [bindingId, core] of this._projects.entries()) {
       projectsObj[bindingId] = core.exportState();
     }
+    const removedProjectsObj = {};
+    for (const [bindingId, retained] of this._removedProjects.entries()) {
+      removedProjectsObj[bindingId] = retained;
+    }
     return {
       schema_version: CURRENT_SCHEMA_VERSION,
       saved_at: new Date().toISOString(),
-      projects: projectsObj
+      projects: projectsObj,
+      removed_projects: removedProjectsObj
     };
   }
 
@@ -433,7 +512,27 @@ export class ProjectRegistry {
       nextProjects.set(bindingId, core);
     }
 
+    const nextRemovedProjects = new Map();
+    if (parsed.removed_projects !== undefined && parsed.removed_projects !== null) {
+      if (typeof parsed.removed_projects !== 'object' || Array.isArray(parsed.removed_projects)) {
+        throw new Error('Invalid registry storage format: "removed_projects" must be an object');
+      }
+      for (const [bindingId, retainedData] of Object.entries(parsed.removed_projects)) {
+        if (!retainedData || typeof retainedData !== 'object' || !retainedData.binding) {
+          throw new Error(`Corrupt removed project data for binding_id "${bindingId}"`);
+        }
+        const internalId = retainedData.binding.binding_id;
+        if (bindingId !== internalId) {
+          throw new Error(
+            `Durable removed project key mismatch: outer key "${bindingId}" does not match internal binding_id "${internalId}"`
+          );
+        }
+        nextRemovedProjects.set(bindingId, retainedData);
+      }
+    }
+
     this._projects = nextProjects;
+    this._removedProjects = nextRemovedProjects;
     this._storagePath = filePath;
   }
 }

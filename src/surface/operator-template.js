@@ -210,6 +210,22 @@ export function renderProjectDetails(proj) {
             ${renderActionsTable(proj.actions)}
           </div>
         </section>
+
+        <section class="details-section project-lifecycle-plane">
+          <div class="section-title"><strong>项目工作区生命周期</strong></div>
+          <div style="display: flex; gap: 12px; align-items: center; margin-top: 8px;">
+            <button
+              type="button"
+              class="btn btn-secondary btn-remove-project"
+              data-action="remove-project"
+              data-binding-id="${escapeHtml(bindingId)}"
+              data-binding-revision="${escapeHtml(bRev)}"
+              title="从当前活跃工作区移出该项目 (保留历史规范事实与外部会话/仓库)">
+              移出项目
+            </button>
+            <span class="text-muted" style="font-size: 0.82rem;">从当前活跃看板中移出，保留历史事实与外部会话/代码仓，不执行破坏性清除。</span>
+          </div>
+        </section>
       </div>
     </details>
   `;

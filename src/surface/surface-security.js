@@ -405,6 +405,7 @@ export function isMutationRoute(pathname) {
   return /^\/api\/projects\/[^/]+\/endpoints\/[^/]+\/handled$/.test(pathname) ||
          /^\/api\/projects\/[^/]+\/human-intervention\/(?:assert|clear)$/.test(pathname) ||
          /^\/api\/projects\/[^/]+\/controls\/(?:rebind|open-focus|send|continue)$/.test(pathname) ||
+         /^\/api\/projects\/[^/]+\/remove$/.test(pathname) ||
          pathname === '/api/onboarding/verify' ||
          pathname === '/api/onboarding/create' ||
          pathname === '/api/hooks/antigravity';

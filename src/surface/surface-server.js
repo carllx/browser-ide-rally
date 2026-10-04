@@ -20,6 +20,7 @@ import { handleAntigravityHookRequest } from './hook-controller.js';
 import { normalizeChatGPTConversationInput } from './chatgpt-conversation-parser.js';
 import { sendJson, sendHtml, parseBody } from './http-helpers.js';
 import { handleControlError } from './control-error-handler.js';
+import { handleProjectRemovalRequest } from './project-removal-controller.js';
 import {
   assertLoopbackBind,
   validateHostHeader,
@@ -45,6 +46,7 @@ export function createStatusSurfaceRequestHandler({
   agentApiBin = null,
   agentApiExecutor = null,
   observationCoordinator = null,
+  workspaceHookManager = null,
   sessionToken = null,
   hookSecret = null,
   serverContext = null
@@ -207,6 +209,20 @@ export function createStatusSurfaceRequestHandler({
           expected_binding_revision: body.expected_binding_revision
         })
       );
+    }
+
+    // 3d. POST /api/projects/:bindingId/remove: 安全移出项目 (带版本锁与孤立 Hook 清理)
+    const removeMatch = pathname.match(/^\/api\/projects\/([^/]+)\/remove$/);
+    if (method === 'POST' && removeMatch) {
+      const bindingId = decodeURIComponent(removeMatch[1]);
+      return handleProjectRemovalRequest({
+        req,
+        res,
+        bindingId,
+        registry,
+        observationCoordinator,
+        workspaceHookManager
+      });
     }
 
     // 4. POST /api/projects/:bindingId/controls/rebind: 安全端点 Rebind

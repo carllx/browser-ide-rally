@@ -9,7 +9,8 @@
     "surface:demo": "node scripts/start-surface.mjs --demo",
     "hooks:cleanup": "node scripts/rally-hooks.mjs cleanup",
     "hooks:reconcile": "node scripts/rally-hooks.mjs reconcile",
-    "acceptance:two-project": "node scripts/run-two-project-acceptance.mjs"
+    "acceptance:two-project": "node scripts/run-two-project-acceptance.mjs",
+    "acceptance:removal": "node scripts/run-safe-removal-acceptance.mjs"
   },
   "repository": {
     "type": "git",

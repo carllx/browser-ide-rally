@@ -23,6 +23,7 @@ import { renderAttentionTrayHtml } from './attention-template.js';
 import { renderAddProjectButtonHtml, renderAddProjectModalHtml } from './onboarding-template.js';
 import { ONBOARDING_CLIENT_JS } from './onboarding-client.js';
 import { LIVE_REFRESH_CLIENT_JS } from './live-refresh-client.js';
+import { PROJECT_REMOVAL_CLIENT_JS } from './project-removal-client.js';
 import { renderProjectScanRow, renderProjectDetails, escapeHtml } from './operator-template.js';
 
 function renderProjectCard(proj) {
@@ -133,6 +134,7 @@ export function renderStatusSurfaceHtml({ projects = [], attentionTray = null, s
   <script>${ATTENTION_CLIENT_JS}</script>
   <script>${ONBOARDING_CLIENT_JS}</script>
   <script>${LIVE_REFRESH_CLIENT_JS}</script>
+  <script>${PROJECT_REMOVAL_CLIENT_JS}</script>
 </body>
 </html>
 `;
