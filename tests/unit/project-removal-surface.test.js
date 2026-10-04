@@ -41,8 +41,11 @@ test('Seam 4.1: renderProjectDetails 渐进式披露中渲染“移出项目”�
   assert.ok(html.includes('data-action="remove-project"'));
   assert.ok(html.includes('data-binding-id="proj-demo"'));
   assert.ok(html.includes('data-binding-revision="3"'));
-  // 必须明确说明保留历史与外部会话/代码仓
-  assert.ok(html.includes('保留历史事实与外部会话'));
+  // 必须使用普通用户后果语言，绝不暴露内部机制术语 (Blocker 3)
+  assert.ok(html.includes('只从 Rally 项目列表中移出，不会删除对话或代码仓库'));
+  assert.equal(html.includes('历史规范事实'), false);
+  assert.equal(html.includes('retention'), false);
+  assert.equal(html.includes('破坏性清除'), false);
 });
 
 test('Seam 4.2: 项目移出后，checkStructuralTopologyMatches 准确识别拓扑变更', () => {
@@ -115,4 +118,51 @@ test('Seam 4.4: 拓扑收敛后卡片消失、计数准确且兄弟项目卡片�
   const allFilterBtn = doc.querySelector('.filter-btn[data-filter="all"]');
   assert.ok(allFilterBtn);
   assert.equal(allFilterBtn.textContent.trim(), '全部 (1)');
+});
+
+test('Seam 4.5: 客户端错误拦截 (User Exposure Gate): 错误提示严格掩盖内部状态机和版本术语，呈现人类 recovery 语言', async () => {
+  const proj = makeMockProject('proj-stale-ui', { rev: 1 });
+  const html = renderStatusSurfaceHtml({
+    projects: [proj],
+    sessionToken: 'test-session-token'
+  });
+
+  const dom = new JSDOM(html, { runScripts: 'dangerously' });
+  const doc = dom.window.document;
+
+  let capturedToast = null;
+  let isErrorToast = false;
+  dom.window.__showToast = (msg, isErr) => {
+    capturedToast = msg;
+    isErrorToast = Boolean(isErr);
+  };
+
+  // 劫持全局 fetch 模拟 409 STALE_OR_MISSING_BINDING_REVISION 错误
+  dom.window.fetch = async () => {
+    return {
+      ok: false,
+      status: 409,
+      json: async () => ({
+        success: false,
+        stage: 'BLOCKED',
+        reason: 'STALE_OR_MISSING_BINDING_REVISION: expected 1, actual 2'
+      })
+    };
+  };
+
+  const btn = doc.querySelector('button[data-action="remove-project"]');
+  assert.ok(btn);
+  btn.click();
+
+  // 等待微任务完成
+  await new Promise(r => setTimeout(r, 50));
+
+  assert.equal(isErrorToast, true);
+  assert.ok(capturedToast);
+  // 必须为人类 recovery 语言
+  assert.equal(capturedToast, '项目状态已变化，请刷新后重试');
+  // 严格杜绝技术术语外泄
+  assert.equal(capturedToast.includes('STALE_OR_MISSING_BINDING_REVISION'), false);
+  assert.equal(capturedToast.includes('revision'), false);
+  assert.equal(capturedToast.includes('BLOCKED'), false);
 });

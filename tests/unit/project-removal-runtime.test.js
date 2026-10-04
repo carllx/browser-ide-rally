@@ -282,7 +282,192 @@ test('Seam 3.4: Hook 清理异常容错 (Fail-Visible，绝不破坏 active regi
     assert.equal(registry.hasProject('proj-fail-visible'), false);
     assert.equal(registry.hasRemovedProject('proj-fail-visible'), true);
     assert.ok(loggedWarning);
-    assert.match(loggedWarning, /Failed to cleanup workspace hook/);
+    assert.match(loggedWarning, /Failed to (?:cleanup|reconcile) workspace hooks?/i);
+  } finally {
+    cleanup();
+  }
+});
+
+test('Seam 3.5: 活跃 sibling 存在但本地 allowlist 缺失 sibling conversation 时，移出操作以 active registry 为权威修复并保留 Hook', async () => {
+  const { workspacePath, cleanup } = createTempWorkspace();
+  try {
+    const registry = createProjectRegistry();
+    const bindingA = createBinding({
+      binding_id: 'proj-a-departing',
+      binding_revision: 1,
+      browser: { provider: 'chatgpt', conversation_id: 'b-conv-a', branch: 'main' },
+      ide_endpoints: [{
+        endpoint_id: 'ide-1',
+        endpoint_revision: 1,
+        conversation_id: 'conv-a-departing',
+        workspace_identity: workspacePath,
+        repository_identity: 'repo-shared'
+      }]
+    });
+    const bindingB = createBinding({
+      binding_id: 'proj-b-surviving',
+      binding_revision: 1,
+      browser: { provider: 'chatgpt', conversation_id: 'b-conv-b', branch: 'main' },
+      ide_endpoints: [{
+        endpoint_id: 'ide-1',
+        endpoint_revision: 1,
+        conversation_id: 'conv-b-surviving',
+        workspace_identity: workspacePath,
+        repository_identity: 'repo-shared'
+      }]
+    });
+
+    registry.registerProject({ binding: bindingA });
+    registry.registerProject({ binding: bindingB });
+
+    const hookMgr = new WorkspaceHookManager();
+    // 模拟不完整的本地 allowlist：只记录了即将离开的 conv-a-departing，遗漏了 conv-b-surviving
+    hookMgr.ensureWorkspaceHook(workspacePath, 'conv-a-departing');
+    const allowlistPath = path.join(workspacePath, '.agents', 'rally-conversations.json');
+    const hooksJsonPath = path.join(workspacePath, '.agents', 'hooks.json');
+    fs.writeFileSync(allowlistPath, JSON.stringify({ conversations: ['conv-a-departing'] }, null, 2), 'utf8');
+
+    // 移出项目 A
+    const req = makeMockRequest({ expected_binding_revision: 1 });
+    const res = makeMockResponse();
+    await handleProjectRemovalRequest({
+      req,
+      res,
+      bindingId: 'proj-a-departing',
+      registry,
+      workspaceHookManager: hookMgr
+    });
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(registry.hasProject('proj-a-departing'), false);
+    assert.equal(registry.hasProject('proj-b-surviving'), true);
+
+    // 权威对齐结果：Rally Hook 绝对没有被误删！
+    assert.equal(fs.existsSync(hooksJsonPath), true);
+    const hooksData = JSON.parse(fs.readFileSync(hooksJsonPath, 'utf8'));
+    assert.ok(hooksData['rally-ide-stop-hook'], 'Rally stop hook must survive for active sibling');
+
+    // 白名单根据 active registry 权威真值被自动修复为包含 conv-b-surviving
+    assert.equal(fs.existsSync(allowlistPath), true);
+    const allowlist = JSON.parse(fs.readFileSync(allowlistPath, 'utf8'));
+    assert.deepEqual(allowlist.conversations, ['conv-b-surviving']);
+  } finally {
+    cleanup();
+  }
+});
+
+test('Seam 3.6: 本地 allowlist 损坏时，活跃 sibling 仍需该工作区，Hook 必须保留且 allowlist 被自动修复', async () => {
+  const { workspacePath, cleanup } = createTempWorkspace();
+  try {
+    const registry = createProjectRegistry();
+    const bindingA = createBinding({
+      binding_id: 'proj-corrupt-a',
+      binding_revision: 1,
+      browser: { provider: 'chatgpt', conversation_id: 'b-conv-ca', branch: 'main' },
+      ide_endpoints: [{
+        endpoint_id: 'ide-1',
+        endpoint_revision: 1,
+        conversation_id: 'conv-ca',
+        workspace_identity: workspacePath,
+        repository_identity: 'repo-shared'
+      }]
+    });
+    const bindingB = createBinding({
+      binding_id: 'proj-corrupt-b',
+      binding_revision: 1,
+      browser: { provider: 'chatgpt', conversation_id: 'b-conv-cb', branch: 'main' },
+      ide_endpoints: [{
+        endpoint_id: 'ide-1',
+        endpoint_revision: 1,
+        conversation_id: 'conv-cb',
+        workspace_identity: workspacePath,
+        repository_identity: 'repo-shared'
+      }]
+    });
+
+    registry.registerProject({ binding: bindingA });
+    registry.registerProject({ binding: bindingB });
+
+    const hookMgr = new WorkspaceHookManager();
+    hookMgr.ensureWorkspaceHook(workspacePath, 'conv-ca');
+
+    const allowlistPath = path.join(workspacePath, '.agents', 'rally-conversations.json');
+    const hooksJsonPath = path.join(workspacePath, '.agents', 'hooks.json');
+    // 写入畸形的非 JSON 内容模拟 allowlist 文件损坏
+    fs.writeFileSync(allowlistPath, '<<<MALFORMED JSON CONTENT>>>', 'utf8');
+
+    // 移出项目 A
+    const req = makeMockRequest({ expected_binding_revision: 1 });
+    const res = makeMockResponse();
+    await handleProjectRemovalRequest({
+      req,
+      res,
+      bindingId: 'proj-corrupt-a',
+      registry,
+      workspaceHookManager: hookMgr
+    });
+
+    assert.equal(res.statusCode, 200);
+
+    // Rally Hook 完好保留
+    const hooksData = JSON.parse(fs.readFileSync(hooksJsonPath, 'utf8'));
+    assert.ok(hooksData['rally-ide-stop-hook']);
+
+    // 白名单恢复为合法的 JSON，并以 active registry 为准记录 conv-cb
+    const allowlist = JSON.parse(fs.readFileSync(allowlistPath, 'utf8'));
+    assert.deepEqual(allowlist.conversations, ['conv-cb']);
+  } finally {
+    cleanup();
+  }
+});
+
+test('Seam 3.7: 存在第三方 hooks 时，移出完全孤立的工作区仅删除 Rally Hook，严格保留第三方 hooks', async () => {
+  const { workspacePath, cleanup } = createTempWorkspace();
+  try {
+    const registry = createProjectRegistry();
+    const binding = createBinding({
+      binding_id: 'proj-third-party',
+      binding_revision: 1,
+      browser: { provider: 'chatgpt', conversation_id: 'b-conv-tp', branch: 'main' },
+      ide_endpoints: [{
+        endpoint_id: 'ide-1',
+        endpoint_revision: 1,
+        conversation_id: 'conv-tp',
+        workspace_identity: workspacePath,
+        repository_identity: 'repo-tp'
+      }]
+    });
+    registry.registerProject({ binding });
+
+    const hookMgr = new WorkspaceHookManager();
+    hookMgr.ensureWorkspaceHook(workspacePath, 'conv-tp');
+
+    const hooksJsonPath = path.join(workspacePath, '.agents', 'hooks.json');
+    // 在 hooks.json 中添加第三方 hook
+    const hooksData = JSON.parse(fs.readFileSync(hooksJsonPath, 'utf8'));
+    hooksData['third-party-linter-hook'] = {
+      Stop: [{ type: 'command', command: 'run-linter.sh' }]
+    };
+    fs.writeFileSync(hooksJsonPath, JSON.stringify(hooksData, null, 2), 'utf8');
+
+    // 移出该项目
+    const req = makeMockRequest({ expected_binding_revision: 1 });
+    const res = makeMockResponse();
+    await handleProjectRemovalRequest({
+      req,
+      res,
+      bindingId: 'proj-third-party',
+      registry,
+      workspaceHookManager: hookMgr
+    });
+
+    assert.equal(res.statusCode, 200);
+
+    // hooks.json 仍然存在，第三方 hook 严格保留，rally hook 被删除
+    assert.equal(fs.existsSync(hooksJsonPath), true);
+    const updatedHooks = JSON.parse(fs.readFileSync(hooksJsonPath, 'utf8'));
+    assert.equal(updatedHooks['rally-ide-stop-hook'], undefined);
+    assert.ok(updatedHooks['third-party-linter-hook']);
   } finally {
     cleanup();
   }

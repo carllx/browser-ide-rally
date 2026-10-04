@@ -537,8 +537,10 @@ export const LIVE_REFRESH_CLIENT_JS = `
           var isTopologyMatch = checkStructuralTopologyMatches(document, data.projects);
           if (!isTopologyMatch) {
             setSurfaceStaleStatus(document, { isStale: true, reason: '检测到项目或端点结构拓扑变更，正在自动重新加载...' });
-            if (typeof window !== 'undefined' && window.location && typeof window.location.reload === 'function') {
-              window.location.reload();
+            if (typeof window.__onTopologyMismatchReload === 'function') {
+              window.__onTopologyMismatchReload();
+            } else if (typeof window !== 'undefined' && window.location && typeof window.location.reload === 'function') {
+              try { window.location.reload(); } catch (_) {}
             }
             return;
           }

@@ -56,13 +56,19 @@ export const PROJECT_REMOVAL_CLIENT_JS = `
 
         if (resp.ok && data.success) {
           if (typeof window.__showToast === 'function') {
-            window.__showToast(data.message || '项目已移出活跃工作区');
+            window.__showToast(data.message || '只从 Rally 项目列表中移出，不会删除对话或代码仓库');
           }
           await triggerRefreshOrReload();
         } else {
-          const reason = data.reason || '移出操作未能完成，请刷新后重试';
+          var userMessage = '移出操作未能完成，请刷新后重试';
+          var rawReason = String(data.reason || '');
+          if (resp.status === 409 || rawReason.indexOf('STALE_OR_MISSING_BINDING_REVISION') !== -1 || rawReason.indexOf('revision') !== -1) {
+            userMessage = '项目状态已变化，请刷新后重试';
+          } else if (resp.status === 404) {
+            userMessage = '项目未在当前列表中，请刷新后查看';
+          }
           if (typeof window.__showToast === 'function') {
-            window.__showToast(reason, true);
+            window.__showToast(userMessage, true);
           }
           btn.disabled = false;
           btn.textContent = originalText;

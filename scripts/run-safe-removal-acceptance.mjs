@@ -202,16 +202,46 @@ async function runAcceptance() {
     console.log(`✓ Surface 服务已启动: ${surfaceUrl}`);
 
     // =========================================================================
-    // 步骤 1: 真实拉取初始 Surface 并在真实 DOM 中呈现
+    // 步骤 1: 真实拉取初始 Surface 并在真实 DOM (带完整脚本执行环境) 中呈现
     // =========================================================================
-    printStep(1, '拉取真实 Surface 页面，验证初始包含 2 个项目卡片与项目总数');
+    printStep(1, '拉取真实 Surface 页面，验证初始包含 2 个项目卡片，并装配真实交互环境');
     const initialGet = await requestHttp(`${surfaceUrl}/`);
     if (initialGet.statusCode !== 200) {
       throw new Error(`Failed to GET /: HTTP ${initialGet.statusCode}`);
     }
 
-    const initialDom = new JSDOM(initialGet.raw, { url: surfaceUrl });
-    const doc = initialDom.window.document;
+    // 启用 JSDOM 脚本执行环境，构建真实运行中的浏览器操作界面
+    const dom = new JSDOM(initialGet.raw, {
+      url: surfaceUrl,
+      runScripts: 'dangerously'
+    });
+    const doc = dom.window.document;
+
+    // 为 JSDOM 环境注入通信设施，确保客户端交互脚本能向真实 Surface 发送请求
+    dom.window.fetch = async (url, options = {}) => {
+      const fullUrl = url.startsWith('http') ? url : `${surfaceUrl}${url}`;
+      return globalThis.fetch(fullUrl, options);
+    };
+
+    let controlledReloadCount = 0;
+    let convergedDocument = null;
+    let reloadPromiseResolve;
+    const reloadPromise = new Promise(r => { reloadPromiseResolve = r; });
+
+    // 监听受控自动重载 (controlled automatic reload)，证明由客户端自主触发而非人工操作
+    dom.window.__onTopologyMismatchReload = async () => {
+      controlledReloadCount++;
+      const resp = await globalThis.fetch(`${surfaceUrl}/`);
+      const html = await resp.text();
+      const reloadedDom = new JSDOM(html, { url: surfaceUrl });
+      convergedDocument = reloadedDom.window.document;
+      reloadPromiseResolve();
+    };
+
+    let capturedToast = null;
+    dom.window.__showToast = (msg, isErr) => {
+      capturedToast = msg;
+    };
 
     const initialCards = doc.querySelectorAll('.project-card');
     console.log(`  - 页面卡片数量: ${initialCards.length}`);
@@ -220,67 +250,59 @@ async function runAcceptance() {
     if (!doc.getElementById('card-proj-sibling')) throw new Error('card-proj-sibling missing');
 
     const summaryBar = doc.querySelector('.status-summary-bar');
-    console.log(`  - 统计栏呈现: "${summaryBar.textContent.replace(/\s+/g, ' ').trim()}"`);
+    console.log(`  - 初始统计栏: "${summaryBar.textContent.replace(/\s+/g, ' ').trim()}"`);
     if (!summaryBar.textContent.includes('2')) throw new Error('Project count in summary bar != 2');
 
     // =========================================================================
-    // 步骤 2: 从真实 Surface 执行“移出项目”请求
+    // 步骤 2: 通过客户端交互链路点击“移出项目” (Client Interaction Path)
     // =========================================================================
-    printStep(2, '发送 POST /api/projects/proj-disposable/remove 执行“移出项目”');
-    const removeRes = await requestHttp(`${surfaceUrl}/api/projects/proj-disposable/remove`, {
-      method: 'POST',
-      headers: {
-        'X-Rally-Session-Token': sessionToken,
-        Origin: surfaceUrl
-      },
-      body: {
-        expected_binding_revision: 1
-      }
-    });
+    printStep(2, '模拟操作者在已打开页面点击“移出项目”按钮，触发自动客户端请求与收敛');
+    const removeBtn = doc.querySelector('button[data-action="remove-project"][data-binding-id="proj-disposable"]');
+    if (!removeBtn) {
+      throw new Error('Could not find remove-project button for proj-disposable in open DOM');
+    }
+    console.log(`  - 找到移出按钮: text="${removeBtn.textContent.trim()}", title="${removeBtn.getAttribute('title')}"`);
 
-    console.log(`  - 响应状态码: ${removeRes.statusCode}`);
-    console.log(`  - 响应消息: "${removeRes.data?.message}"`);
-    if (removeRes.statusCode !== 200 || !removeRes.data?.success) {
-      throw new Error(`Remove project failed: ${JSON.stringify(removeRes.data)}`);
-    }
-    if (!removeRes.data.message || !removeRes.data.message.includes('移出')) {
-      throw new Error(`Response message does not use human consequence language: ${removeRes.data.message}`);
-    }
+    // 触发真实客户端点击事件
+    removeBtn.click();
+    console.log(`  - 已触发按钮点击，按钮状态变更为: text="${removeBtn.textContent.trim()}", disabled=${removeBtn.disabled}`);
 
     // =========================================================================
-    // 步骤 3: 验证已打开页面无需人工 reload 即完成拓扑收敛
+    // 步骤 3: 观察并验证自动收敛全链路 (无需人工 reload)
     // =========================================================================
-    printStep(3, '验证已打开 Surface 拓扑失配检测并收敛为 1 个项目卡片');
-    const nextProjectsRes = await requestHttp(`${surfaceUrl}/api/projects`);
-    const activeProjects = nextProjectsRes.data?.projects || [];
-    console.log(`  - 服务端当前活跃项目数: ${activeProjects.length}`);
-    if (activeProjects.length !== 1 || activeProjects[0].binding_id !== 'proj-sibling') {
-      throw new Error(`Unexpected active projects: ${JSON.stringify(activeProjects)}`);
+    printStep(3, '观察客户端自动执行: POST remove -> __triggerSurfaceRefresh -> 拓扑失配 -> controlled reload -> converged Surface');
+    
+    // 等待客户端完成网络请求与受控重载触发
+    await Promise.race([
+      reloadPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout waiting for automatic reload')), 5000))
+    ]);
+
+    console.log(`  - 客户端 Toast 提示文案: "${capturedToast}"`);
+    if (!capturedToast || !capturedToast.includes('只从 Rally 项目列表中移出')) {
+      throw new Error(`Toast message not as expected: ${capturedToast}`);
     }
 
-    // 拓扑一致性比对 (原 DOM vs 新活跃项目集合)
-    const isTopologyMatch = checkStructuralTopologyMatches(doc, activeProjects);
-    console.log(`  - checkStructuralTopologyMatches(doc, activeProjects): ${isTopologyMatch} (预期为 false)`);
-    if (isTopologyMatch !== false) {
-      throw new Error('Topology match should be false when card count differs');
+    console.log(`  - 受控自动重载触发次数: ${controlledReloadCount} (证明完全由客户端自主驱动，无任何人工介入)`);
+    if (controlledReloadCount !== 1) {
+      throw new Error(`Expected exactly 1 controlled reload, got ${controlledReloadCount}`);
+    }
+    if (!convergedDocument) {
+      throw new Error('convergedDocument was not loaded by controlled reload');
     }
 
-    // 重新获取收敛后的 HTML (模拟自动受控 reload)
-    const reloadedGet = await requestHttp(`${surfaceUrl}/`);
-    const reloadedDom = new JSDOM(reloadedGet.raw, { url: surfaceUrl });
-    const reloadedDoc = reloadedDom.window.document;
-
-    const reloadedCards = reloadedDoc.querySelectorAll('.project-card');
+    // 验证收敛后 DOM
+    const reloadedCards = convergedDocument.querySelectorAll('.project-card');
     console.log(`  - 收敛后卡片数量: ${reloadedCards.length}`);
     if (reloadedCards.length !== 1) throw new Error(`Expected 1 card, got ${reloadedCards.length}`);
-    if (reloadedDoc.getElementById('card-proj-disposable') !== null) {
+    if (convergedDocument.getElementById('card-proj-disposable') !== null) {
       throw new Error('card-proj-disposable should be absent from converged DOM');
     }
-    if (!reloadedDoc.getElementById('card-proj-sibling')) {
+    if (!convergedDocument.getElementById('card-proj-sibling')) {
       throw new Error('card-proj-sibling should remain intact in converged DOM');
     }
 
-    const reloadedSummary = reloadedDoc.querySelector('.status-summary-bar');
+    const reloadedSummary = convergedDocument.querySelector('.status-summary-bar');
     console.log(`  - 收敛后统计栏呈现: "${reloadedSummary.textContent.replace(/\s+/g, ' ').trim()}"`);
     if (!reloadedSummary.textContent.includes('项目总数: 1')) {
       throw new Error('Converged summary bar does not show project count: 1');
@@ -409,6 +431,10 @@ async function runAcceptance() {
     console.log(`  - 用户源码文件字节级一致，工作区与仓库完好无损`);
 
     printHeader('ALL 7 ACCEPTANCE CRITERIA VERIFIED AND PASSED WITH ZERO REGRESSIONS!');
+    if (dom?.window) {
+      dom.window.__stopSurfaceRefresh?.();
+      dom.window.close();
+    }
   } finally {
     try {
       fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -416,8 +442,12 @@ async function runAcceptance() {
   }
 }
 
-runAcceptance().catch(err => {
-  console.error('\n❌ Acceptance Runner Failed with error:');
-  console.error(err);
-  process.exit(1);
-});
+runAcceptance()
+  .then(() => {
+    process.exit(0);
+  })
+  .catch(err => {
+    console.error('\n❌ Acceptance Runner Failed with error:');
+    console.error(err);
+    process.exit(1);
+  });

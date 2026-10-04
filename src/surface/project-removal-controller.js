@@ -43,11 +43,17 @@ export async function handleProjectRemovalRequest({
     return sendJson(res, 404, { success: false, reason: `Project "${bindingId}" not found in active registry` });
   }
 
-  // 前置提取该项目 IDE 端点信息，用于移出后的 Hook 清理
+  // 前置提取该项目 IDE 端点信息与受影响工作区集合，用于移出后的 Hook 权威对齐 (Blocker 2)
   let ideEndpointsToClean = [];
+  const affectedWorkspaces = new Set();
   try {
     const snap = registry.getProject(bindingId).getSnapshot();
     ideEndpointsToClean = snap.binding?.ide_endpoints || [];
+    for (const ep of ideEndpointsToClean) {
+      if (ep.workspace_identity) {
+        affectedWorkspaces.add(ep.workspace_identity);
+      }
+    }
   } catch (_) {}
 
   // 1. 执行注册表原子移出（严格锁 revision，写盘失败自动回滚）
@@ -59,29 +65,31 @@ export async function handleProjectRemovalRequest({
     return handleControlError(res, err);
   }
 
-  // 2. 注册表提交后，执行本地 Hook 订阅清理 (Seam 3)
+  // 2. 注册表提交后，以移出后的 active registry 权威真值对齐 Hook 订阅 (Blocker 2)
   // 遵循契约：Hook 清理异常为 fail-visible，绝不回滚或损坏 active registry
   const hookMgr = workspaceHookManager || observationCoordinator?.workspaceHookManager;
-  if (hookMgr && typeof hookMgr.removeWorkspaceHook === 'function') {
-    for (const ep of ideEndpointsToClean) {
-      const ws = ep.workspace_identity;
-      const convId = ep.conversation_id;
-      if (ws && convId) {
-        try {
-          hookMgr.removeWorkspaceHook(ws, convId);
-        } catch (cleanupErr) {
-          logger?.warn?.(
-            `[ProjectRemovalController] Failed to cleanup workspace hook for ${ws} conv ${convId}: ${cleanupErr.message}`
-          );
+  if (hookMgr) {
+    try {
+      if (typeof hookMgr.reconcileWorkspacesAfterRemoval === 'function') {
+        hookMgr.reconcileWorkspacesAfterRemoval(registry, Array.from(affectedWorkspaces));
+      } else if (typeof hookMgr.removeWorkspaceHook === 'function') {
+        for (const ep of ideEndpointsToClean) {
+          if (ep.workspace_identity && ep.conversation_id) {
+            hookMgr.removeWorkspaceHook(ep.workspace_identity, ep.conversation_id);
+          }
         }
       }
+    } catch (cleanupErr) {
+      logger?.warn?.(
+        `[ProjectRemovalController] Failed to reconcile workspace hooks after removal of ${bindingId}: ${cleanupErr.message}`
+      );
     }
   }
 
-  // 3. 响应操作者，使用明确的人类后果语言
+  // 3. 响应操作者，使用面向普通用户的人类后果语言 (Blocker 3)
   return sendJson(res, 200, {
     success: true,
-    message: '项目已从活跃工作区移出，已留存历史事实且未修改外部会话或代码仓库',
+    message: '只从 Rally 项目列表中移出，不会删除对话或代码仓库',
     binding_id: bindingId
   });
 }

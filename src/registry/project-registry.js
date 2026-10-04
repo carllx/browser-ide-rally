@@ -52,6 +52,10 @@ export class ProjectRegistry {
       throw new Error(`Project binding_id "${binding.binding_id}" is already registered`);
     }
 
+    if (this._removedProjects.has(binding.binding_id)) {
+      throw new Error(`Cannot register project: binding_id "${binding.binding_id}" is already present in retained evidence`);
+    }
+
     // 唯一性守卫：排查 display_name、browser conversation 与 ide conversations
     const newDisplayName = binding.display_name ? binding.display_name.trim().toLowerCase() : null;
     const newBrowserConvId = binding.browser?.conversation_id ? binding.browser.conversation_id.trim() : null;
@@ -513,6 +517,7 @@ export class ProjectRegistry {
     }
 
     const nextRemovedProjects = new Map();
+    const seenRemovedBindingIds = new Set();
     if (parsed.removed_projects !== undefined && parsed.removed_projects !== null) {
       if (typeof parsed.removed_projects !== 'object' || Array.isArray(parsed.removed_projects)) {
         throw new Error('Invalid registry storage format: "removed_projects" must be an object');
@@ -527,6 +532,13 @@ export class ProjectRegistry {
             `Durable removed project key mismatch: outer key "${bindingId}" does not match internal binding_id "${internalId}"`
           );
         }
+        if (seenBindingIds.has(internalId)) {
+          throw new Error(`Durable binding_id collision: "${internalId}" exists in both active and removed projects`);
+        }
+        if (seenRemovedBindingIds.has(internalId)) {
+          throw new Error(`Duplicate removed binding_id "${internalId}" detected in durable storage`);
+        }
+        seenRemovedBindingIds.add(internalId);
         nextRemovedProjects.set(bindingId, retainedData);
       }
     }

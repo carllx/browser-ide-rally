@@ -224,3 +224,53 @@ test('Seam 1.6: 活跃会话唯一性校验不再受已移出项目阻塞', () =
   });
   assert.equal(registry.hasProject('proj-new'), true);
 });
+
+test('Seam 1.7: 已移出的 binding_id 严禁被重新注册，防止历史留存证据被静默覆盖', () => {
+  const registry = new ProjectRegistry();
+  const binding = makeSampleBinding('proj-unique-id');
+  registry.registerProject({ binding });
+
+  registry.removeProject('proj-unique-id', { expected_binding_revision: 1 });
+  assert.equal(registry.hasRemovedProject('proj-unique-id'), true);
+
+  // 尝试重新注册完全相同的 binding_id => 必须拒绝，防止覆盖 retained evidence
+  const duplicateBinding = makeSampleBinding('proj-unique-id', { displayName: '不同名称' });
+  assert.throws(
+    () => registry.registerProject({ binding: duplicateBinding }),
+    /already present in retained evidence/i
+  );
+});
+
+test('Seam 1.8: durable storage 中同时存在相同活跃与移出 binding_id 时 loader 必须 Fail Closed', () => {
+  const { storagePath, cleanup } = createTempStorage();
+  try {
+    const maliciousPayload = {
+      schema_version: CURRENT_SCHEMA_VERSION,
+      saved_at: new Date().toISOString(),
+      projects: {
+        'proj-conflict': {
+          binding: makeSampleBinding('proj-conflict'),
+          endpoints: {},
+          retired_generations: []
+        }
+      },
+      removed_projects: {
+        'proj-conflict': {
+          binding: makeSampleBinding('proj-conflict'),
+          endpoints: {},
+          retired_generations: [],
+          removed_at: new Date().toISOString()
+        }
+      }
+    };
+    fs.writeFileSync(storagePath, JSON.stringify(maliciousPayload, null, 2), 'utf8');
+
+    const registry = new ProjectRegistry();
+    assert.throws(
+      () => registry.loadFromFile(storagePath),
+      /collision/i
+    );
+  } finally {
+    cleanup();
+  }
+});

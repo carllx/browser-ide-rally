@@ -467,4 +467,102 @@ export class WorkspaceHookManager {
 
     return { cleanedWorkspaces: count };
   }
+
+  /**
+   * 项目安全移出后以权威 Active Registry 对齐受影响工作区的 Hook 与白名单 (Blocker 2)
+   * 遵循契约：
+   * 1. 移出后的 active registry 为唯一真值权威；
+   * 2. 如果工作区仍有活跃会话，确保 Rally Hook 与白名单完整保留或自动修复；
+   * 3. 如果工作区不再有活跃会话，彻底清理 orphaned Rally Hook 与白名单；
+   * 4. 严格保留所有第三方 hooks；
+   * 5. 损坏或畸形的 local allowlist 绝不导致活跃 sibling 的 Hook 被误删。
+   * @param {import('../registry/project-registry.js').ProjectRegistry} registry
+   * @param {string[]} affectedWorkspaces
+   * @returns {{ reconciledWorkspaces: number, errors: string[] }}
+   */
+  reconcileWorkspacesAfterRemoval(registry, affectedWorkspaces = []) {
+    if (!registry || typeof registry.listProjects !== 'function') {
+      return { reconciledWorkspaces: 0, errors: ['invalid_registry'] };
+    }
+
+    const errors = [];
+    let count = 0;
+    const activeWorkspaceMap = this._extractActiveWorkspaces(registry);
+
+    for (const rawWs of affectedWorkspaces) {
+      if (!rawWs || typeof rawWs !== 'string') continue;
+      const ws = path.resolve(rawWs);
+      if (!fs.existsSync(ws)) continue;
+
+      const activeConvs = activeWorkspaceMap.get(ws) || new Set();
+
+      // 安全性预检：如果 tracked by git 或 hooks.json 畸形，跳过并记录 fail-visible 错误
+      const safety = this._validateWorkspaceSafety(ws);
+      if (!safety.success) {
+        this._logger?.warn?.(
+          `[WorkspaceHookManager] Preflight failed for workspace ${ws}: ${safety.reason}. Skipping post-removal Hook mutation.`
+        );
+        errors.push(`Workspace ${ws}: ${safety.reason}`);
+        continue;
+      }
+
+      if (activeConvs.size > 0) {
+        // A. 仍有活跃端点需要该工作区：确保 Hook 存在，白名单强制修复对齐为 activeConvs
+        try {
+          for (const convId of activeConvs) {
+            this.ensureWorkspaceHook(ws, convId);
+          }
+
+          const agentsDir = path.join(ws, '.agents');
+          const allowlistPath = path.join(agentsDir, 'rally-conversations.json');
+          const allowlistData = {
+            conversations: Array.from(activeConvs),
+            updated_at: new Date().toISOString()
+          };
+          fs.writeFileSync(allowlistPath, JSON.stringify(allowlistData, null, 2) + '\n', 'utf8');
+          count++;
+        } catch (err) {
+          errors.push(`Workspace ${ws}: ${err.message}`);
+        }
+      } else {
+        // B. 没有任何活跃端点再需要该工作区：彻底清理孤立 Rally Hook 与白名单
+        try {
+          const agentsDir = path.join(ws, '.agents');
+          const allowlistPath = path.join(agentsDir, 'rally-conversations.json');
+          if (fs.existsSync(allowlistPath)) {
+            try { fs.unlinkSync(allowlistPath); } catch (_) {}
+          }
+
+          const hooksJsonPath = path.join(agentsDir, 'hooks.json');
+          if (fs.existsSync(hooksJsonPath)) {
+            try {
+              const raw = fs.readFileSync(hooksJsonPath, 'utf8');
+              const hooksData = JSON.parse(raw);
+              if (hooksData[HOOK_KEY]) {
+                delete hooksData[HOOK_KEY];
+                if (Object.keys(hooksData).length === 0) {
+                  fs.unlinkSync(hooksJsonPath);
+                } else {
+                  fs.writeFileSync(hooksJsonPath, JSON.stringify(hooksData, null, 2) + '\n', 'utf8');
+                }
+              }
+            } catch (_) {}
+          }
+
+          if (fs.existsSync(agentsDir)) {
+            try {
+              if (fs.readdirSync(agentsDir).length === 0) {
+                fs.rmdirSync(agentsDir);
+              }
+            } catch (_) {}
+          }
+          count++;
+        } catch (err) {
+          errors.push(`Workspace ${ws}: ${err.message}`);
+        }
+      }
+    }
+
+    return { reconciledWorkspaces: count, errors };
+  }
 }
